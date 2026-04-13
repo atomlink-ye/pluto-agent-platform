@@ -1,4 +1,2 @@
-export const SERVER_SCAFFOLD = {
-  package: "@pluto-agent-platform/server",
-  purpose: "forked Paseo kernel integration surface",
-} as const
+export { createApp } from "./api/app.js"
+export type { AppDeps } from "./api/app.js"

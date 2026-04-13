@@ -1,11 +1,9 @@
 /**
- * Paseo AgentManager types — local interfaces matching the Paseo API
- * so the control plane does not directly depend on the Paseo server package.
+ * Local Paseo-facing types.
+ *
+ * The control plane defines its own interfaces instead of importing Paseo
+ * directly so runtime integration stays behind a stable boundary.
  */
-
-// ---------------------------------------------------------------------------
-// Agent providers and basic types
-// ---------------------------------------------------------------------------
 
 export type AgentProvider = string
 
@@ -33,27 +31,36 @@ export interface AgentPermissionResponse {
 
 export interface AgentTimelineItem {
   type: string
+  name?: string
+  toolName?: string
+  input?: Record<string, unknown>
+  arguments?: Record<string, unknown>
+  args?: Record<string, unknown>
+  params?: Record<string, unknown>
+  metadata?: Record<string, unknown>
   [key: string]: unknown
 }
 
-// ---------------------------------------------------------------------------
-// Agent stream events
-// ---------------------------------------------------------------------------
-
 export type AgentStreamEvent =
-  | { type: "thread_started"; sessionId: string; provider: AgentProvider }
-  | { type: "turn_started"; provider: AgentProvider; turnId?: string }
+  | {
+      type: "thread_started"
+      sessionId: string
+      provider: AgentProvider
+    }
+  | {
+      type: "turn_started"
+      provider: AgentProvider
+      turnId?: string
+      phase?: string
+      stageId?: string
+    }
   | {
       type: "turn_completed"
       provider: AgentProvider
       usage?: AgentUsage
       turnId?: string
-    }
-  | {
-      type: "usage_updated"
-      provider: AgentProvider
-      usage: AgentUsage
-      turnId?: string
+      phase?: string
+      stageId?: string
     }
   | {
       type: "turn_failed"
@@ -62,18 +69,17 @@ export type AgentStreamEvent =
       code?: string
       diagnostic?: string
       turnId?: string
+      phase?: string
+      stageId?: string
+      severity?: "stage" | "run" | "fatal"
     }
   | {
       type: "turn_canceled"
       provider: AgentProvider
-      reason: string
+      reason?: string
       turnId?: string
-    }
-  | {
-      type: "timeline"
-      item: AgentTimelineItem
-      provider: AgentProvider
-      turnId?: string
+      phase?: string
+      stageId?: string
     }
   | {
       type: "permission_requested"
@@ -93,11 +99,14 @@ export type AgentStreamEvent =
       provider: AgentProvider
       reason: "finished" | "error" | "permission"
       timestamp: string
+      error?: string
     }
-
-// ---------------------------------------------------------------------------
-// Agent manager events
-// ---------------------------------------------------------------------------
+  | {
+      type: "timeline"
+      item: AgentTimelineItem
+      provider: AgentProvider
+      turnId?: string
+    }
 
 export type AgentManagerEvent =
   | { type: "agent_state"; agent: ManagedAgent }
@@ -116,10 +125,6 @@ export interface SubscribeOptions {
   replayState?: boolean
 }
 
-// ---------------------------------------------------------------------------
-// Agent session config
-// ---------------------------------------------------------------------------
-
 export interface McpServerConfig {
   command: string
   args?: string[]
@@ -132,6 +137,7 @@ export interface AgentSessionConfig {
   systemPrompt?: string
   modeId?: string
   model?: string
+  mcpServers?: Record<string, McpServerConfig>
   thinkingOptionId?: string
   featureValues?: Record<string, unknown>
   title?: string | null
@@ -139,13 +145,8 @@ export interface AgentSessionConfig {
   sandboxMode?: string
   networkAccess?: boolean
   webSearch?: boolean
-  mcpServers?: Record<string, McpServerConfig>
   internal?: boolean
 }
-
-// ---------------------------------------------------------------------------
-// Agent persistence handle
-// ---------------------------------------------------------------------------
 
 export interface AgentPersistenceHandle {
   provider: AgentProvider
@@ -153,10 +154,6 @@ export interface AgentPersistenceHandle {
   nativeHandle?: string
   metadata?: Record<string, unknown>
 }
-
-// ---------------------------------------------------------------------------
-// Managed agent lifecycle
-// ---------------------------------------------------------------------------
 
 export type AgentLifecycle = "initializing" | "idle" | "running" | "error" | "closed"
 
@@ -172,10 +169,6 @@ export interface ManagedAgent {
   lastError?: string
   labels: Record<string, string>
 }
-
-// ---------------------------------------------------------------------------
-// Agent prompt and run types
-// ---------------------------------------------------------------------------
 
 export type AgentPromptContentBlock =
   | { type: "text"; text: string }
@@ -197,10 +190,6 @@ export interface AgentRunResult {
   canceled?: boolean
 }
 
-// ---------------------------------------------------------------------------
-// Agent Manager interface
-// ---------------------------------------------------------------------------
-
 export interface AgentManager {
   subscribe(callback: AgentSubscriber, options?: SubscribeOptions): () => void
   createAgent(
@@ -213,6 +202,6 @@ export interface AgentManager {
     prompt: AgentPromptInput,
     options?: AgentRunOptions,
   ): Promise<AgentRunResult>
-  getAgent(agentId: string): ManagedAgent | undefined
-  listAgents(): ManagedAgent[]
+  getAgent?(agentId: string): ManagedAgent | undefined
+  listAgents?(): ManagedAgent[]
 }

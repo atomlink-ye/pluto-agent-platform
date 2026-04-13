@@ -1,17 +1,14 @@
-/**
- * Fake AgentManager for testing — implements the AgentManager interface
- * with controllable behavior for unit and integration tests.
- */
 import { randomUUID } from "node:crypto"
+
 import type {
   AgentManager,
   AgentManagerEvent,
-  AgentStreamEvent,
-  AgentSubscriber,
-  AgentSessionConfig,
   AgentPromptInput,
   AgentRunOptions,
   AgentRunResult,
+  AgentSessionConfig,
+  AgentStreamEvent,
+  AgentSubscriber,
   ManagedAgent,
   SubscribeOptions,
 } from "./types.js"
@@ -23,14 +20,16 @@ export interface RunAgentCall {
 }
 
 export class FakeAgentManager implements AgentManager {
-  private subscribers: Set<AgentSubscriber> = new Set()
-  private agents: Map<string, ManagedAgent> = new Map()
-  public runAgentCalls: RunAgentCall[] = []
+  private readonly subscribers = new Set<AgentSubscriber>()
+  private readonly agents = new Map<string, ManagedAgent>()
+
+  public readonly runAgentCalls: RunAgentCall[] = []
   public shouldFailCreateAgent = false
   public shouldFailRunAgent = false
 
   subscribe(callback: AgentSubscriber, _options?: SubscribeOptions): () => void {
     this.subscribers.add(callback)
+
     return () => {
       this.subscribers.delete(callback)
     }
@@ -57,7 +56,9 @@ export class FakeAgentManager implements AgentManager {
       updatedAt: new Date(),
       labels: options?.labels ?? {},
     }
+
     this.agents.set(id, agent)
+
     return agent
   }
 
@@ -79,25 +80,7 @@ export class FakeAgentManager implements AgentManager {
     }
   }
 
-  getAgent(agentId: string): ManagedAgent | undefined {
-    return this.agents.get(agentId)
-  }
-
-  listAgents(): ManagedAgent[] {
-    return Array.from(this.agents.values())
-  }
-
-  // -----------------------------------------------------------------------
-  // Test helpers
-  // -----------------------------------------------------------------------
-
-  /** Emit an event to all subscribers */
-  emit(
-    agentId: string,
-    event: AgentStreamEvent,
-    seq?: number,
-    epoch?: string,
-  ): void {
+  emit(agentId: string, event: AgentStreamEvent, seq?: number, epoch?: string): void {
     const managerEvent: AgentManagerEvent = {
       type: "agent_stream",
       agentId,
@@ -105,25 +88,23 @@ export class FakeAgentManager implements AgentManager {
       seq,
       epoch,
     }
-    for (const sub of this.subscribers) {
-      sub(managerEvent)
+
+    for (const subscriber of this.subscribers) {
+      subscriber(managerEvent)
     }
   }
 
-  /** Emit an agent_state event */
   emitAgentState(agent: ManagedAgent): void {
-    const event: AgentManagerEvent = { type: "agent_state", agent }
-    for (const sub of this.subscribers) {
-      sub(event)
+    for (const subscriber of this.subscribers) {
+      subscriber({ type: "agent_state", agent })
     }
   }
 
-  /** Reset all state */
-  reset(): void {
-    this.subscribers.clear()
-    this.agents.clear()
-    this.runAgentCalls = []
-    this.shouldFailCreateAgent = false
-    this.shouldFailRunAgent = false
+  getAgent(agentId: string): ManagedAgent | undefined {
+    return this.agents.get(agentId)
+  }
+
+  listAgents(): ManagedAgent[] {
+    return Array.from(this.agents.values())
   }
 }

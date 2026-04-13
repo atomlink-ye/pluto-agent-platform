@@ -59,7 +59,7 @@ export class RecoveryService {
     // Step 1: Find all non-terminal runs
     // Since we don't have a listByStatus method, we'll need to check all runs
     // In production, this would be a filtered query
-    const allAgents = this.deps.agentManager.listAgents()
+    const allAgents = this.deps.agentManager.listAgents?.() ?? []
     const agentIds = new Set(allAgents.map((a) => a.id))
 
     // Get all run sessions to find active runs
@@ -117,7 +117,7 @@ export class RecoveryService {
     }
 
     const agentId = activeSession.session_id
-    const agent = this.deps.agentManager.getAgent(agentId)
+    const agent = this.deps.agentManager.getAgent?.(agentId)
 
     if (agent) {
       // Step 4: Agent exists — rebind
