@@ -21,5 +21,6 @@ export default defineConfig({
   test: {
     include: ["packages/**/src/**/*.test.ts"],
     exclude: [".local/**", "**/node_modules/**"],
+    fileParallelism: false,
   },
 })
