@@ -7,6 +7,7 @@
 import {
   InMemoryPlaybookRepository,
   InMemoryHarnessRepository,
+  InMemoryRoleSpecRepository,
   InMemoryRunRepository,
   InMemoryRunEventRepository,
   InMemoryRunPlanRepository,
@@ -16,6 +17,7 @@ import {
   InMemoryRunSessionRepository,
   PlaybookService,
   HarnessService,
+  RoleService,
   RunService,
   ApprovalService,
   ArtifactService,
@@ -29,6 +31,7 @@ const PORT = Number(process.env.PORT ?? 4000)
 // Repositories
 const playbookRepo = new InMemoryPlaybookRepository()
 const harnessRepo = new InMemoryHarnessRepository()
+const roleRepo = new InMemoryRoleSpecRepository()
 const runRepo = new InMemoryRunRepository()
 const runEventRepo = new InMemoryRunEventRepository()
 const runPlanRepo = new InMemoryRunPlanRepository()
@@ -40,6 +43,7 @@ const runSessionRepo = new InMemoryRunSessionRepository()
 // Services
 const playbookService = new PlaybookService(playbookRepo)
 const harnessService = new HarnessService(harnessRepo, playbookRepo)
+const roleService = new RoleService(roleRepo)
 const artifactService = new ArtifactService(artifactRepo, runRepo, playbookRepo, runEventRepo)
 const runService = new RunService(
   playbookRepo,
@@ -56,11 +60,13 @@ const approvalService = new ApprovalService(approvalRepo, runService, runEventRe
 const app = createApp({
   playbookService,
   harnessService,
+  roleService,
   runService,
   approvalService,
   artifactService,
   playbookRepository: playbookRepo,
   harnessRepository: harnessRepo,
+  roleRepository: roleRepo,
   runRepository: runRepo,
   runEventRepository: runEventRepo,
   approvalRepository: approvalRepo,

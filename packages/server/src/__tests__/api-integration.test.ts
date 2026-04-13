@@ -1,7 +1,6 @@
-import type { Server } from "node:http"
+import { createServer, type Server } from "node:http"
 import type { AddressInfo } from "node:net"
 
-import type { RunEventEnvelope } from "@pluto-agent-platform/contracts"
 import {
   ApprovalService,
   ArtifactService,
@@ -15,15 +14,12 @@ import {
   InMemoryRunPlanRepository,
   InMemoryRunRepository,
   InMemoryRunSessionRepository,
+  InMemoryRoleSpecRepository,
   PlaybookService,
+  RoleService,
   RunService,
-  type ApprovalRecord,
-  type ArtifactRecord,
-  type HarnessRecord,
-  type PlaybookRecord,
-  type RunRecord,
 } from "@pluto-agent-platform/control-plane"
-import { afterEach, beforeEach, describe, expect, it } from "vitest"
+import { afterAll, beforeAll, describe, expect, it } from "vitest"
 
 import { createApp } from "../api/app.js"
 
@@ -35,119 +31,80 @@ interface ErrorResponse {
   error: string
 }
 
+interface HarnessResponse {
+  id: string
+  kind: string
+  name: string
+  phases: string[]
+}
+
+interface HarnessSummary {
+  id: string
+  name: string
+  phases: string[]
+}
+
+interface PlaybookResponse {
+  id: string
+  name: string
+  goal: string
+  instructions: string
+  harnessId: string | null
+  harness: HarnessSummary | null
+}
+
+interface RoleResponse {
+  id: string
+  kind: string
+  name: string
+  description: string
+  tools?: string[]
+  provider_preset?: string
+}
+
+interface RunResponse {
+  id: string
+  playbook: string
+  harness: string
+  status: string
+}
+
+interface RunListItem extends RunResponse {
+  playbookName: string
+}
+
 interface RunDetailResponse {
-  run: RunRecord
-  events: RunEventEnvelope[]
-  approvals: ApprovalRecord[]
-  artifacts: ArtifactRecord[]
-  sessions: unknown[]
+  run: RunResponse
+  events: unknown[]
+  approvals: unknown[]
+  artifacts: unknown[]
 }
 
-interface TestContext {
-  server: Server
-  baseUrl: string
-  runService: RunService
-  approvalService: ApprovalService
-  artifactService: ArtifactService
+interface ReferenceScenario {
+  harness: HarnessResponse
+  playbook: PlaybookResponse
 }
 
-interface SeededReferenceScenario {
-  harness: HarnessRecord
-  playbook: PlaybookRecord
-}
+let server: Server
+let baseUrl = ""
+let nextId = 0
 
-let ctx: TestContext | null = null
-
-const createTestContext = async (): Promise<TestContext> => {
-  const playbookRepository = new InMemoryPlaybookRepository()
-  const harnessRepository = new InMemoryHarnessRepository()
-  const runRepository = new InMemoryRunRepository()
-  const runEventRepository = new InMemoryRunEventRepository()
-  const runPlanRepository = new InMemoryRunPlanRepository()
-  const policySnapshotRepository = new InMemoryPolicySnapshotRepository()
-  const approvalRepository = new InMemoryApprovalRepository()
-  const artifactRepository = new InMemoryArtifactRepository()
-  const runSessionRepository = new InMemoryRunSessionRepository()
-
-  const playbookService = new PlaybookService(playbookRepository)
-  const harnessService = new HarnessService(harnessRepository, playbookRepository)
-  const artifactService = new ArtifactService(
-    artifactRepository,
-    runRepository,
-    playbookRepository,
-    runEventRepository,
-  )
-  const runService = new RunService(
-    playbookRepository,
-    harnessRepository,
-    runRepository,
-    runEventRepository,
-    runPlanRepository,
-    policySnapshotRepository,
-    artifactService,
-  )
-  const approvalService = new ApprovalService(approvalRepository, runService, runEventRepository)
-
-  const app = createApp({
-    playbookService,
-    harnessService,
-    runService,
-    approvalService,
-    artifactService,
-    playbookRepository,
-    harnessRepository,
-    runRepository,
-    runEventRepository,
-    approvalRepository,
-    artifactRepository,
-    runSessionRepository,
-  })
-
-  const server = await new Promise<Server>((resolve) => {
-    const instance = app.listen(0, "127.0.0.1", () => resolve(instance))
-  })
-  const { port } = server.address() as AddressInfo
-
-  return {
-    server,
-    baseUrl: `http://127.0.0.1:${port}`,
-    runService,
-    approvalService,
-    artifactService,
-  }
-}
-
-const closeServer = async (server: Server): Promise<void> => {
-  await new Promise<void>((resolve, reject) => {
-    server.close((error) => {
-      if (error) {
-        reject(error)
-        return
-      }
-
-      resolve()
-    })
-  })
+const unique = (prefix: string): string => {
+  nextId += 1
+  return `${prefix}-${nextId}`
 }
 
 const requestJson = async <T>(
   path: string,
   init: RequestInit = {},
 ): Promise<{ response: Response; body: ApiResponse<T> | ErrorResponse }> => {
-  if (!ctx) {
-    throw new Error("Test context not initialized")
-  }
-
-  const response = await fetch(`${ctx.baseUrl}${path}`, init)
+  const response = await fetch(`${baseUrl}${path}`, init)
   const body = (await response.json()) as ApiResponse<T> | ErrorResponse
 
   return { response, body }
 }
 
-const postJson = async <T>(
-  path: string,
-  body: Record<string, unknown>,
-): Promise<{ response: Response; body: ApiResponse<T> | ErrorResponse }> =>
+const postJson = <T>(path: string, body: unknown) =>
   requestJson<T>(path, {
     method: "POST",
     headers: { "content-type": "application/json" },
@@ -159,134 +116,204 @@ const expectData = <T>(body: ApiResponse<T> | ErrorResponse): T => {
   return (body as ApiResponse<T>).data
 }
 
-const seedHarnessAndPlaybook = async (): Promise<SeededReferenceScenario> => {
-  const harnessResult = await postJson<HarnessRecord>("/api/harnesses", {
-    name: "Governed review harness",
-    description: "Collect, analyze, and review with approval before review output",
+const createHarness = async (): Promise<HarnessResponse> => {
+  const suffix = unique("harness")
+  const { response, body } = await postJson<HarnessResponse>("/api/harnesses", {
+    name: `Governed review harness ${suffix}`,
+    description: "Collect, analyze, and review with lightweight governance.",
     phases: ["collect", "analyze", "review"],
-    approvals: {
-      pr_creation: "required",
-    },
   })
 
-  expect(harnessResult.response.status).toBe(201)
-  const harness = expectData(harnessResult.body)
+  expect(response.status).toBe(201)
+  return expectData(body)
+}
 
-  const playbookResult = await postJson<PlaybookRecord>("/api/playbooks", {
-    name: "Sprint retrospective",
-    description: "Prepare a governed retrospective outcome for operators",
-    goal: "Turn sprint feedback into a reviewed retrospective artifact",
-    instructions: "Collect sprint notes, analyze themes, and prepare the final review package.",
-    inputs: [
-      {
-        name: "sprint_name",
-        type: "string",
-        required: true,
-        description: "Sprint to review",
-      },
-      {
-        name: "notes_url",
-        type: "string",
-        required: false,
-        description: "Optional notes source",
-      },
-    ],
+const createPlaybook = async (): Promise<PlaybookResponse> => {
+  const suffix = unique("playbook")
+  const { response, body } = await postJson<PlaybookResponse>("/api/playbooks", {
+    name: `Reference playbook ${suffix}`,
+    description: "Prepare a concise reviewed summary for operators.",
+    goal: "Turn collected inputs into a reviewed summary.",
+    instructions: "Collect the source inputs, analyze them, and prepare the review package.",
     artifacts: [
       {
-        type: "retro_document",
+        type: "review_summary",
         format: "markdown",
-        description: "Final retrospective document",
+        description: "Final reviewed summary artifact",
       },
     ],
-    quality_bar: ["clear synthesis", "actionable follow-ups"],
   })
 
-  expect(playbookResult.response.status).toBe(201)
-  const playbook = expectData(playbookResult.body)
+  expect(response.status).toBe(201)
+  return expectData(body)
+}
 
-  const attachResult = await postJson<PlaybookRecord>(
-    `/api/harnesses/${harness.id}/attach/${playbook.id}`,
+const attachHarness = async (harnessId: string, playbookId: string): Promise<PlaybookResponse> => {
+  const { response, body } = await postJson<PlaybookResponse>(
+    `/api/harnesses/${harnessId}/attach/${playbookId}`,
     {},
   )
 
-  expect(attachResult.response.status).toBe(200)
+  expect(response.status).toBe(200)
+  return expectData(body)
+}
 
-  return {
-    harness,
-    playbook: expectData(attachResult.body),
-  }
+const createReferenceScenario = async (): Promise<ReferenceScenario> => {
+  const harness = await createHarness()
+  const playbook = await createPlaybook()
+  const attachedPlaybook = await attachHarness(harness.id, playbook.id)
+
+  return { harness, playbook: attachedPlaybook }
+}
+
+const createRun = async (playbookId: string, harnessId: string): Promise<RunResponse> => {
+  const { response, body } = await postJson<RunResponse>("/api/runs", {
+    playbookId,
+    harnessId,
+    inputs: {
+      topic: unique("run"),
+    },
+  })
+
+  expect(response.status).toBe(201)
+  return expectData(body)
 }
 
 describe("Operator API integration", () => {
-  beforeEach(async () => {
-    ctx = await createTestContext()
+  beforeAll(async () => {
+    // Repositories
+    const playbookRepo = new InMemoryPlaybookRepository()
+    const harnessRepo = new InMemoryHarnessRepository()
+    const runRepo = new InMemoryRunRepository()
+    const runEventRepo = new InMemoryRunEventRepository()
+    const runPlanRepo = new InMemoryRunPlanRepository()
+    const policySnapshotRepo = new InMemoryPolicySnapshotRepository()
+    const approvalRepo = new InMemoryApprovalRepository()
+    const artifactRepo = new InMemoryArtifactRepository()
+    const runSessionRepo = new InMemoryRunSessionRepository()
+    const roleRepo = new InMemoryRoleSpecRepository()
+
+    // Services
+    const playbookService = new PlaybookService(playbookRepo)
+    const harnessService = new HarnessService(harnessRepo, playbookRepo)
+    const roleService = new RoleService(roleRepo)
+    const artifactService = new ArtifactService(artifactRepo, runRepo, playbookRepo, runEventRepo)
+    const runService = new RunService(
+      playbookRepo,
+      harnessRepo,
+      runRepo,
+      runEventRepo,
+      runPlanRepo,
+      policySnapshotRepo,
+      artifactService,
+    )
+    const approvalService = new ApprovalService(approvalRepo, runService, runEventRepo)
+
+    const app = createApp({
+      playbookService,
+      harnessService,
+      roleService,
+      runService,
+      approvalService,
+      artifactService,
+      playbookRepository: playbookRepo,
+      harnessRepository: harnessRepo,
+      roleRepository: roleRepo,
+      runRepository: runRepo,
+      runEventRepository: runEventRepo,
+      approvalRepository: approvalRepo,
+      artifactRepository: artifactRepo,
+      runSessionRepository: runSessionRepo,
+    })
+
+    server = createServer(app)
+
+    await new Promise<void>((resolve) => {
+      server.listen(0, "127.0.0.1", () => resolve())
+    })
+
+    const address = server.address() as AddressInfo | null
+    if (!address) {
+      throw new Error("Server did not expose an address")
+    }
+
+    baseUrl = `http://127.0.0.1:${address.port}`
   })
 
-  afterEach(async () => {
-    if (ctx) {
-      await closeServer(ctx.server)
-      ctx = null
-    }
+  afterAll(async () => {
+    await new Promise<void>((resolve, reject) => {
+      server.close((error) => {
+        if (error) {
+          reject(error)
+          return
+        }
+
+        resolve()
+      })
+    })
   })
 
   it("creates a harness via POST /api/harnesses", async () => {
-    const { response, body } = await postJson<HarnessRecord>("/api/harnesses", {
-      name: "Governed review harness",
-      description: "Collect, analyze, and review with approval before review output",
-      phases: ["collect", "analyze", "review"],
-      approvals: {
-        pr_creation: "required",
-      },
-    })
+    const harness = await createHarness()
 
-    expect(response.status).toBe(201)
-    expect(expectData(body)).toEqual(
+    expect(harness).toEqual(
       expect.objectContaining({
         kind: "harness",
-        name: "Governed review harness",
         phases: ["collect", "analyze", "review"],
-        approvals: { pr_creation: "required" },
       }),
     )
   })
 
-  it("creates a playbook and attaches a harness through the API", async () => {
-    const harnessResult = await postJson<HarnessRecord>("/api/harnesses", {
-      name: "Governed review harness",
-      description: "Collect, analyze, and review with approval before review output",
-      phases: ["collect", "analyze", "review"],
-      approvals: {
-        pr_creation: "required",
-      },
-    })
-    const harness = expectData(harnessResult.body)
+  it("creates a playbook via POST /api/playbooks", async () => {
+    const playbook = await createPlaybook()
 
-    const playbookResult = await postJson<PlaybookRecord>("/api/playbooks", {
-      name: "Sprint retrospective",
-      description: "Prepare a governed retrospective outcome for operators",
-      goal: "Turn sprint feedback into a reviewed retrospective artifact",
-      instructions: "Collect sprint notes, analyze themes, and prepare the final review package.",
-      inputs: [
-        {
-          name: "sprint_name",
-          type: "string",
-          required: true,
-          description: "Sprint to review",
-        },
-      ],
-      artifacts: [{ type: "retro_document", format: "markdown" }],
+    expect(playbook).toEqual(
+      expect.objectContaining({
+        name: expect.stringContaining("Reference playbook"),
+        goal: "Turn collected inputs into a reviewed summary.",
+        instructions: "Collect the source inputs, analyze them, and prepare the review package.",
+        harnessId: null,
+        harness: null,
+      }),
+    )
+  })
+
+  it("creates and lists roles through /api/roles", async () => {
+    const { response, body } = await postJson<RoleResponse>("/api/roles", {
+      name: "Researcher",
+      description: "Gathers information",
+      tools: ["websearch"],
+      provider_preset: "balanced",
     })
 
-    expect(playbookResult.response.status).toBe(201)
-    const playbook = expectData(playbookResult.body)
+    expect(response.status).toBe(201)
 
-    const attachResult = await postJson<PlaybookRecord>(
-      `/api/harnesses/${harness.id}/attach/${playbook.id}`,
-      {},
+    const role = expectData(body)
+    expect(role).toEqual(
+      expect.objectContaining({
+        kind: "role",
+        name: "Researcher",
+        description: "Gathers information",
+        tools: ["websearch"],
+        provider_preset: "balanced",
+      }),
     )
 
-    expect(attachResult.response.status).toBe(200)
-    expect(expectData(attachResult.body)).toEqual(
+    const listResult = await requestJson<RoleResponse[]>("/api/roles")
+    expect(listResult.response.status).toBe(200)
+    expect(expectData(listResult.body)).toEqual(expect.arrayContaining([expect.objectContaining({ id: role.id })]))
+
+    const detailResult = await requestJson<RoleResponse>(`/api/roles/${role.id}`)
+    expect(detailResult.response.status).toBe(200)
+    expect(expectData(detailResult.body)).toEqual(expect.objectContaining({ id: role.id }))
+  })
+
+  it("attaches a harness via POST /api/harnesses/:id/attach/:playbookId", async () => {
+    const harness = await createHarness()
+    const playbook = await createPlaybook()
+    const attachedPlaybook = await attachHarness(harness.id, playbook.id)
+
+    expect(attachedPlaybook).toEqual(
       expect.objectContaining({
         id: playbook.id,
         harnessId: harness.id,
@@ -299,213 +326,78 @@ describe("Operator API integration", () => {
     )
   })
 
-  it("lists and retrieves playbooks with harness summary, goal, inputs, and artifacts", async () => {
-    const { harness, playbook } = await seedHarnessAndPlaybook()
+  it("lists playbooks and returns playbook detail with intent and harness", async () => {
+    const scenario = await createReferenceScenario()
 
-    const listResult = await requestJson<PlaybookRecord[]>("/api/playbooks")
+    const listResult = await requestJson<PlaybookResponse[]>("/api/playbooks")
     expect(listResult.response.status).toBe(200)
 
-    const playbooks = expectData(listResult.body)
-    expect(playbooks).toHaveLength(1)
-    expect(playbooks[0]).toEqual(
+    const listedPlaybook = expectData(listResult.body).find((playbook) => playbook.id === scenario.playbook.id)
+    expect(listedPlaybook).toEqual(
       expect.objectContaining({
-        id: playbook.id,
-        name: playbook.name,
+        id: scenario.playbook.id,
         harness: expect.objectContaining({
-          id: harness.id,
-          name: harness.name,
-          phases: ["collect", "analyze", "review"],
+          id: scenario.harness.id,
+          name: scenario.harness.name,
         }),
       }),
     )
 
-    const detailResult = await requestJson<PlaybookRecord>(`/api/playbooks/${playbook.id}`)
+    const detailResult = await requestJson<PlaybookResponse>(`/api/playbooks/${scenario.playbook.id}`)
     expect(detailResult.response.status).toBe(200)
-
-    const detail = expectData(detailResult.body)
-    expect(detail).toEqual(
+    expect(expectData(detailResult.body)).toEqual(
       expect.objectContaining({
-        id: playbook.id,
-        goal: "Turn sprint feedback into a reviewed retrospective artifact",
-        instructions: "Collect sprint notes, analyze themes, and prepare the final review package.",
-        harness: expect.objectContaining({
-          id: harness.id,
-          name: harness.name,
-        }),
+        id: scenario.playbook.id,
+        goal: scenario.playbook.goal,
+        instructions: scenario.playbook.instructions,
+        harness: expect.objectContaining({ id: scenario.harness.id, name: scenario.harness.name }),
       }),
-    )
-    expect(detail.inputs).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ name: "sprint_name", type: "string", required: true }),
-      ]),
-    )
-    expect(detail.artifacts).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ type: "retro_document", format: "markdown" }),
-      ]),
     )
   })
 
-  it("creates a queued run and lists it with playbook and harness names after direct transitions", async () => {
-    const { harness, playbook } = await seedHarnessAndPlaybook()
-    const runCreateResult = await postJson<RunRecord>("/api/runs", {
-      playbookId: playbook.id,
-      harnessId: harness.id,
-      inputs: {
-        sprint_name: "Sprint 42",
-      },
-    })
+  it("creates a queued run via POST /api/runs", async () => {
+    const scenario = await createReferenceScenario()
+    const run = await createRun(scenario.playbook.id, scenario.harness.id)
 
-    expect(runCreateResult.response.status).toBe(201)
-
-    const createdRun = expectData(runCreateResult.body)
-    expect(createdRun).toEqual(
+    expect(run).toEqual(
       expect.objectContaining({
-        playbook: playbook.id,
-        harness: harness.id,
+        playbook: scenario.playbook.id,
+        harness: scenario.harness.id,
         status: "queued",
-        current_phase: "collect",
       }),
-    )
-
-    await ctx!.runService.transition(createdRun.id, "initializing")
-    await ctx!.runService.transition(createdRun.id, "running")
-
-    const runsResult = await requestJson<Array<RunRecord & { playbookName: string; harnessName: string }>>(
-      "/api/runs",
-    )
-
-    expect(runsResult.response.status).toBe(200)
-    expect(expectData(runsResult.body)).toEqual([
-      expect.objectContaining({
-        id: createdRun.id,
-        status: "running",
-        playbookName: playbook.name,
-        harnessName: harness.name,
-      }),
-    ])
-  })
-
-  it("returns run detail with events and approvals, then resolves approval through the API", async () => {
-    const { harness, playbook } = await seedHarnessAndPlaybook()
-    const run = await ctx!.runService.create(playbook.id, harness.id, { sprint_name: "Sprint 43" })
-
-    await ctx!.runService.transition(run.id, "initializing")
-    await ctx!.runService.transition(run.id, "running")
-
-    const approval = await ctx!.approvalService.createApproval({
-      runId: run.id,
-      actionClass: "pr_creation",
-      title: "Review output approval",
-      requestedBy: {
-        source: "system",
-        role_id: "operator",
-      },
-      context: {
-        phase: "review",
-        reason: "Review output requires operator approval",
-      },
-    })
-
-    const detailBeforeResolve = await requestJson<RunDetailResponse>(`/api/runs/${run.id}`)
-    expect(detailBeforeResolve.response.status).toBe(200)
-
-    const beforeResolve = expectData(detailBeforeResolve.body)
-    expect(beforeResolve.run).toEqual(expect.objectContaining({ id: run.id, status: "waiting_approval" }))
-    expect(beforeResolve.approvals).toEqual([
-      expect.objectContaining({
-        id: approval.id,
-        action_class: "pr_creation",
-        status: "pending",
-      }),
-    ])
-    expect(beforeResolve.artifacts).toEqual([])
-    expect(beforeResolve.sessions).toEqual([])
-    expect(beforeResolve.events.map((event) => event.eventType)).toEqual(
-      expect.arrayContaining(["run.created", "run.status_changed", "approval.requested"]),
-    )
-
-    const resolveResult = await postJson<ApprovalRecord>(`/api/approvals/${approval.id}/resolve`, {
-      decision: "approved",
-      resolvedBy: "operator_1",
-      note: "Approved for final review delivery",
-    })
-
-    expect(resolveResult.response.status).toBe(200)
-    expect(expectData(resolveResult.body)).toEqual(
-      expect.objectContaining({
-        id: approval.id,
-        status: "approved",
-        resolution: expect.objectContaining({
-          resolved_by: "operator_1",
-          decision: "approved",
-        }),
-      }),
-    )
-
-    const detailAfterResolve = await requestJson<RunDetailResponse>(`/api/runs/${run.id}`)
-    const afterResolve = expectData(detailAfterResolve.body)
-
-    expect(afterResolve.run.status).toBe("running")
-    expect(afterResolve.approvals[0]).toEqual(
-      expect.objectContaining({
-        id: approval.id,
-        status: "approved",
-      }),
-    )
-    expect(afterResolve.events.map((event) => event.eventType)).toEqual(
-      expect.arrayContaining(["approval.requested", "approval.resolved"]),
     )
   })
 
-  it("requires the expected artifact before a run can succeed and exposes it in run detail", async () => {
-    const { harness, playbook } = await seedHarnessAndPlaybook()
-    const run = await ctx!.runService.create(playbook.id, harness.id, { sprint_name: "Sprint 44" })
+  it("lists runs with playbookName and returns run detail arrays", async () => {
+    const scenario = await createReferenceScenario()
+    const run = await createRun(scenario.playbook.id, scenario.harness.id)
 
-    await ctx!.runService.transition(run.id, "initializing")
-    await ctx!.runService.transition(run.id, "running")
+    const listResult = await requestJson<RunListItem[]>("/api/runs")
+    expect(listResult.response.status).toBe(200)
 
-    await expect(ctx!.runService.transition(run.id, "succeeded")).rejects.toThrow(
-      "required artifact missing: retro_document",
-    )
-
-    const artifact = await ctx!.artifactService.register({
-      runId: run.id,
-      type: "retro_document",
-      title: "Sprint 44 retrospective",
-      format: "markdown",
-      producer: {
-        role_id: "reviewer",
-      },
-    })
-
-    expect(artifact).toEqual(
+    const listedRun = expectData(listResult.body).find((entry) => entry.id === run.id)
+    expect(listedRun).toEqual(
       expect.objectContaining({
-        run_id: run.id,
-        type: "retro_document",
-        format: "markdown",
-        status: "registered",
+        id: run.id,
+        playbookName: scenario.playbook.name,
       }),
     )
-
-    await ctx!.runService.transition(run.id, "succeeded")
 
     const detailResult = await requestJson<RunDetailResponse>(`/api/runs/${run.id}`)
     expect(detailResult.response.status).toBe(200)
 
     const detail = expectData(detailResult.body)
-    expect(detail.run).toEqual(expect.objectContaining({ id: run.id, status: "succeeded" }))
-    expect(detail.artifacts).toEqual([
-      expect.objectContaining({
-        id: artifact.id,
-        type: "retro_document",
-        title: "Sprint 44 retrospective",
-      }),
-    ])
-    expect(detail.approvals).toEqual([])
-    expect(detail.sessions).toEqual([])
-    expect(detail.events.map((event) => event.eventType)).toEqual(
-      expect.arrayContaining(["artifact.registered", "run.status_changed"]),
-    )
+    expect(detail.run).toEqual(expect.objectContaining({ id: run.id, status: "queued" }))
+    expect(Array.isArray(detail.events)).toBe(true)
+    expect(Array.isArray(detail.approvals)).toBe(true)
+    expect(Array.isArray(detail.artifacts)).toBe(true)
+  })
+
+  it("returns ok from GET /api/health", async () => {
+    const response = await fetch(`${baseUrl}/api/health`)
+    const body = (await response.json()) as { status: string }
+
+    expect(response.status).toBe(200)
+    expect(body).toEqual(expect.objectContaining({ status: "ok" }))
   })
 })

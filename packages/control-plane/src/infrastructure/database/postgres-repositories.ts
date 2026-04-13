@@ -4,6 +4,7 @@ import type {
   Harness,
   Playbook,
   PolicySnapshot,
+  RoleSpec,
   Run,
   RunEventEnvelope,
   RunPlan,
@@ -23,6 +24,8 @@ import type {
   PlaybookRecord,
   PlaybookRepository,
   PolicySnapshotRepository,
+  RoleSpecRecord,
+  RoleSpecRepository,
   RunEventRepository,
   RunPlanRepository,
   RunRecord,
@@ -36,6 +39,7 @@ import {
   harnesses,
   playbooks,
   policySnapshots,
+  roles,
   runEvents,
   runPlans,
   runs,
@@ -48,6 +52,7 @@ export type PostgresDatabase = PostgresJsDatabase<typeof schema>
 
 type HarnessRow = typeof harnesses.$inferSelect
 type PlaybookRow = typeof playbooks.$inferSelect
+type RoleRow = typeof roles.$inferSelect
 type RunRow = typeof runs.$inferSelect
 type RunPlanRow = typeof runPlans.$inferSelect
 type RunEventRow = typeof runEvents.$inferSelect
@@ -133,6 +138,24 @@ const toHarnessRecord = (row: HarnessRow): HarnessRecord =>
     requirements: row.requirements ?? undefined,
     observability: row.observability ?? undefined,
     escalation: row.escalation ?? undefined,
+    metadata: row.metadata ?? undefined,
+  })
+
+const toRoleSpecRecord = (row: RoleRow): RoleSpecRecord =>
+  clone({
+    id: row.publicId,
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt,
+    kind: row.kind,
+    name: row.name,
+    description: row.description,
+    system_prompt: row.systemPrompt ?? undefined,
+    tools: row.tools ?? undefined,
+    provider_preset: row.providerPreset ?? undefined,
+    memory_scope: row.memoryScope ?? undefined,
+    isolation: row.isolation ?? undefined,
+    background: row.background ?? undefined,
+    hooks: row.hooks ?? undefined,
     metadata: row.metadata ?? undefined,
   })
 
@@ -489,6 +512,101 @@ export class PostgresHarnessRepository extends PostgresRepositoryBase implements
     const rows = await this.db.select().from(harnesses).orderBy(asc(harnesses.createdAt))
 
     return rows.map((row) => toHarnessRecord(row))
+  }
+}
+
+export class PostgresRoleSpecRepository extends PostgresRepositoryBase implements RoleSpecRepository {
+  async save(role: RoleSpecRecord): Promise<RoleSpecRecord> {
+    await this.db
+      .insert(roles)
+      .values({
+        publicId: role.id,
+        createdAt: role.createdAt,
+        updatedAt: role.updatedAt,
+        kind: role.kind,
+        name: role.name,
+        description: role.description,
+        systemPrompt: role.system_prompt,
+        tools: role.tools,
+        providerPreset: role.provider_preset,
+        memoryScope: role.memory_scope,
+        isolation: role.isolation,
+        background: role.background,
+        hooks: role.hooks,
+        metadata: role.metadata,
+      })
+      .onConflictDoUpdate({
+        target: roles.publicId,
+        set: {
+          createdAt: role.createdAt,
+          updatedAt: role.updatedAt,
+          kind: role.kind,
+          name: role.name,
+          description: role.description,
+          systemPrompt: role.system_prompt,
+          tools: role.tools,
+          providerPreset: role.provider_preset,
+          memoryScope: role.memory_scope,
+          isolation: role.isolation,
+          background: role.background,
+          hooks: role.hooks,
+          metadata: role.metadata,
+        },
+      })
+
+    const saved = await this.getById(role.id)
+
+    if (!saved) {
+      throw new Error(`RoleSpec not found: ${role.id}`)
+    }
+
+    return saved
+  }
+
+  async getById(id: string): Promise<RoleSpecRecord | null> {
+    const [row] = await this.db.select().from(roles).where(eq(roles.publicId, id)).limit(1)
+
+    return row ? toRoleSpecRecord(row) : null
+  }
+
+  async list(): Promise<RoleSpecRecord[]> {
+    const rows = await this.db.select().from(roles).orderBy(asc(roles.createdAt))
+
+    return rows.map((row) => toRoleSpecRecord(row))
+  }
+
+  async update(role: RoleSpecRecord): Promise<RoleSpecRecord> {
+    const [updated] = await this.db
+      .update(roles)
+      .set({
+        createdAt: role.createdAt,
+        updatedAt: role.updatedAt,
+        kind: role.kind,
+        name: role.name,
+        description: role.description,
+        systemPrompt: role.system_prompt,
+        tools: role.tools,
+        providerPreset: role.provider_preset,
+        memoryScope: role.memory_scope,
+        isolation: role.isolation,
+        background: role.background,
+        hooks: role.hooks,
+        metadata: role.metadata,
+      })
+      .where(eq(roles.publicId, role.id))
+      .returning({ id: roles.id })
+
+    if (!updated) {
+      throw new Error(`RoleSpec not found: ${role.id}`)
+    }
+
+    const saved = await this.getById(role.id)
+
+    if (!saved) {
+      throw new Error(`RoleSpec not found: ${role.id}`)
+    }
+
+    return saved
   }
 }
 

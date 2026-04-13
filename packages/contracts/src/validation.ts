@@ -106,12 +106,24 @@ const ObservabilityPolicySchema = z
   })
   .strict()
 
+const HooksSchema = z.array(z.record(z.string(), z.unknown()))
+
 const rejectField = (field: string, owner: "Harness" | "Playbook") =>
   z.unknown().optional().superRefine((value, ctx) => {
     if (value !== undefined) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         message: `${field} belongs to ${owner}`,
+      })
+    }
+  })
+
+const rejectRoleGovernanceField = (field: string) =>
+  z.unknown().optional().superRefine((value, ctx) => {
+    if (value !== undefined) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: `${field} belongs to Harness or higher-level policy, not RoleSpec`,
       })
     }
   })
@@ -190,5 +202,32 @@ export const HarnessCreateSchema = z
   })
   .strict()
 
+export const RoleSpecCreateSchema = z
+  .object({
+    name: NonEmptyStringSchema,
+    description: NonEmptyStringSchema,
+    system_prompt: z.string().optional(),
+    tools: StringArraySchema.optional(),
+    provider_preset: z.string().optional(),
+    memory_scope: z.string().optional(),
+    isolation: z.string().optional(),
+    background: z.boolean().optional(),
+    hooks: HooksSchema.optional(),
+    metadata: z.record(z.string(), z.unknown()).optional(),
+    approval_policy: rejectRoleGovernanceField("approval_policy"),
+    approvals: rejectRoleGovernanceField("approvals"),
+    timeout: rejectRoleGovernanceField("timeout"),
+    timeouts: rejectRoleGovernanceField("timeouts"),
+    retry: rejectRoleGovernanceField("retry"),
+    retries: rejectRoleGovernanceField("retries"),
+    requirements: rejectRoleGovernanceField("requirements"),
+    phases: rejectRoleGovernanceField("phases"),
+    status_model: rejectRoleGovernanceField("status_model"),
+    observability: rejectRoleGovernanceField("observability"),
+    escalation: rejectRoleGovernanceField("escalation"),
+  })
+  .strict()
+
 export type PlaybookCreateInput = z.infer<typeof PlaybookCreateSchema>
 export type HarnessCreateInput = z.infer<typeof HarnessCreateSchema>
+export type RoleSpecCreateInput = z.infer<typeof RoleSpecCreateSchema>

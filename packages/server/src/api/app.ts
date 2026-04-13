@@ -14,6 +14,7 @@ function param(req: Request, name: string): string {
 import type {
   PlaybookRepository,
   HarnessRepository,
+  RoleSpecRepository,
   RunRepository,
   RunEventRepository,
   ApprovalRepository,
@@ -22,6 +23,7 @@ import type {
 } from "@pluto-agent-platform/control-plane"
 import type { PlaybookService } from "@pluto-agent-platform/control-plane"
 import type { HarnessService } from "@pluto-agent-platform/control-plane"
+import type { RoleService } from "@pluto-agent-platform/control-plane"
 import type { RunService } from "@pluto-agent-platform/control-plane"
 import type { ApprovalService } from "@pluto-agent-platform/control-plane"
 import type { ArtifactService } from "@pluto-agent-platform/control-plane"
@@ -29,11 +31,13 @@ import type { ArtifactService } from "@pluto-agent-platform/control-plane"
 export interface AppDeps {
   playbookService: PlaybookService
   harnessService: HarnessService
+  roleService: RoleService
   runService: RunService
   approvalService: ApprovalService
   artifactService: ArtifactService
   playbookRepository: PlaybookRepository
   harnessRepository: HarnessRepository
+  roleRepository: RoleSpecRepository
   runRepository: RunRepository
   runEventRepository: RunEventRepository
   approvalRepository: ApprovalRepository
@@ -67,6 +71,33 @@ export function createApp(deps: AppDeps): express.Express {
     try {
       const playbook = await deps.playbookService.create(req.body)
       res.status(201).json({ data: playbook })
+    } catch (err) {
+      res.status(400).json({ error: err instanceof Error ? err.message : "Invalid input" })
+    }
+  })
+
+  // -----------------------------------------------------------------------
+  // Roles
+  // -----------------------------------------------------------------------
+
+  app.get("/api/roles", async (_req: Request, res: Response) => {
+    const roles = await deps.roleService.list()
+    res.json({ data: roles })
+  })
+
+  app.get("/api/roles/:id", async (req: Request, res: Response) => {
+    const role = await deps.roleService.getById(param(req, "id"))
+    if (!role) {
+      res.status(404).json({ error: "Role not found" })
+      return
+    }
+    res.json({ data: role })
+  })
+
+  app.post("/api/roles", async (req: Request, res: Response) => {
+    try {
+      const role = await deps.roleService.create(req.body)
+      res.status(201).json({ data: role })
     } catch (err) {
       res.status(400).json({ error: err instanceof Error ? err.message : "Invalid input" })
     }

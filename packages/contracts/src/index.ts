@@ -250,9 +250,9 @@ export interface RoleSpec {
   description: string
   system_prompt?: string
   tools?: string[]
-  provider_preset?: string | null
-  memory_scope?: "run" | "team" | "project" | "org" | string
-  isolation?: "shared" | "worktree" | string
+  provider_preset?: string
+  memory_scope?: string
+  isolation?: string
   background?: boolean
   hooks?: Record<string, unknown>[]
   metadata?: Record<string, unknown>

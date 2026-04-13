@@ -4,12 +4,13 @@ import type {
   Harness,
   Playbook,
   PolicySnapshot,
+  RoleSpec,
   RunEventEnvelope,
   RunPlan,
   RunSession,
 } from "@pluto-agent-platform/contracts"
 
-import { index, jsonb, pgTable, text, timestamp, uniqueIndex, uuid } from "drizzle-orm/pg-core"
+import { boolean, index, jsonb, pgTable, text, timestamp, uniqueIndex, uuid } from "drizzle-orm/pg-core"
 
 const auditColumns = {
   id: uuid("id").defaultRandom().primaryKey(),
@@ -66,6 +67,27 @@ export const playbooks = pgTable(
     metadata: jsonb("metadata").$type<Playbook["metadata"]>(),
   },
   (table) => [uniqueIndex("playbooks_public_id_idx").on(table.publicId)],
+)
+
+export const roles = pgTable(
+  "roles",
+  {
+    ...auditColumns,
+    tenantId: text("tenant_id"),
+    publicId: text("public_id").notNull(),
+    kind: text("kind").$type<RoleSpec["kind"]>().notNull(),
+    name: text("name").notNull(),
+    description: text("description").notNull(),
+    systemPrompt: text("system_prompt"),
+    tools: jsonb("tools").$type<RoleSpec["tools"]>(),
+    providerPreset: text("provider_preset"),
+    memoryScope: text("memory_scope"),
+    isolation: text("isolation"),
+    background: boolean("background"),
+    hooks: jsonb("hooks").$type<RoleSpec["hooks"]>(),
+    metadata: jsonb("metadata").$type<RoleSpec["metadata"]>(),
+  },
+  (table) => [uniqueIndex("roles_public_id_idx").on(table.publicId)],
 )
 
 export const runs = pgTable(

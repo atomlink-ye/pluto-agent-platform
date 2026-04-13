@@ -10,6 +10,8 @@ import type {
   PlaybookRecord,
   PlaybookRepository,
   PolicySnapshotRepository,
+  RoleSpecRecord,
+  RoleSpecRepository,
   RunEventRepository,
   RunPlanRepository,
   RunRecord,
@@ -77,6 +79,42 @@ export class InMemoryHarnessRepository implements HarnessRepository {
     return Array.from(this.records.values())
       .sort((left, right) => left.createdAt.localeCompare(right.createdAt))
       .map((record) => cloneRecord(record))
+  }
+}
+
+export class InMemoryRoleSpecRepository implements RoleSpecRepository {
+  private readonly records = new Map<string, RoleSpecRecord>()
+
+  async save(role: RoleSpecRecord): Promise<RoleSpecRecord> {
+    const stored = cloneRecord(role)
+
+    this.records.set(role.id, stored)
+
+    return cloneRecord(stored)
+  }
+
+  async getById(id: string): Promise<RoleSpecRecord | null> {
+    const role = this.records.get(id)
+
+    return role ? cloneRecord(role) : null
+  }
+
+  async list(): Promise<RoleSpecRecord[]> {
+    return Array.from(this.records.values())
+      .sort((left, right) => left.createdAt.localeCompare(right.createdAt))
+      .map((record) => cloneRecord(record))
+  }
+
+  async update(role: RoleSpecRecord): Promise<RoleSpecRecord> {
+    if (!this.records.has(role.id)) {
+      throw new Error(`RoleSpec not found: ${role.id}`)
+    }
+
+    const stored = cloneRecord(role)
+
+    this.records.set(role.id, stored)
+
+    return cloneRecord(stored)
   }
 }
 
