@@ -25,7 +25,8 @@ type TimelineToolCall =
 export class RuntimeAdapter implements RuntimeAdapterRegistry {
   private readonly trackedRunByAgentId = new Map<string, string>()
   private readonly trackedAgentIdByRunId = new Map<string, string>()
-  private readonly seenEventKeys = new Set<string>()
+  private readonly seenEventKeysByRunId = new Map<string, Set<string>>()
+  private readonly processingEventKeysByRunId = new Map<string, Set<string>>()
   private unsubscribe?: () => void
 
   constructor(
@@ -38,9 +39,14 @@ export class RuntimeAdapter implements RuntimeAdapterRegistry {
 
   trackRun(runId: string, agentId: string): void {
     const previousAgentId = this.trackedAgentIdByRunId.get(runId)
+    const previousRunId = this.trackedRunByAgentId.get(agentId)
 
     if (previousAgentId && previousAgentId !== agentId) {
       this.trackedRunByAgentId.delete(previousAgentId)
+    }
+
+    if (previousRunId && previousRunId !== runId) {
+      this.trackedAgentIdByRunId.delete(previousRunId)
     }
 
     this.trackedRunByAgentId.set(agentId, runId)
@@ -50,11 +56,13 @@ export class RuntimeAdapter implements RuntimeAdapterRegistry {
   untrackRun(runId: string): void {
     const agentId = this.trackedAgentIdByRunId.get(runId)
 
-    if (agentId) {
+    if (agentId && this.trackedRunByAgentId.get(agentId) === runId) {
       this.trackedRunByAgentId.delete(agentId)
     }
 
     this.trackedAgentIdByRunId.delete(runId)
+    this.seenEventKeysByRunId.delete(runId)
+    this.processingEventKeysByRunId.delete(runId)
   }
 
   isTracked(agentId: string): boolean {
@@ -94,16 +102,34 @@ export class RuntimeAdapter implements RuntimeAdapterRegistry {
     }
 
     const dedupeKey = this.buildDedupeKey(event.agentId, event.seq, event.epoch)
+    const processingKeys = this.getProcessingEventKeys(runId)
 
     if (dedupeKey) {
-      if (this.seenEventKeys.has(dedupeKey)) {
+      if (this.getSeenEventKeys(runId).has(dedupeKey) || processingKeys.has(dedupeKey)) {
         return
       }
 
-      this.seenEventKeys.add(dedupeKey)
+      processingKeys.add(dedupeKey)
+
+      if (await this.hasPersistedDedupeKey(runId, dedupeKey)) {
+        this.getSeenEventKeys(runId).add(dedupeKey)
+        processingKeys.delete(dedupeKey)
+
+        return
+      }
     }
 
-    await this.handleStreamEvent(runId, event.agentId, event.event)
+    try {
+      await this.handleStreamEvent(runId, event.agentId, event.event, dedupeKey)
+
+      if (dedupeKey) {
+        this.getSeenEventKeys(runId).add(dedupeKey)
+      }
+    } finally {
+      if (dedupeKey) {
+        processingKeys.delete(dedupeKey)
+      }
+    }
   }
 
   private buildDedupeKey(agentId: string, seq?: number, epoch?: string): string | null {
@@ -114,20 +140,36 @@ export class RuntimeAdapter implements RuntimeAdapterRegistry {
     return `${agentId}:${epoch}:${seq}`
   }
 
+  private async hasPersistedDedupeKey(runId: string, dedupeKey: string): Promise<boolean> {
+    const events = await this.runEventRepo.listByRunId(runId)
+
+    return events.some((event) => event.correlationId === dedupeKey)
+  }
+
+  private getSeenEventKeys(runId: string): Set<string> {
+    return getOrCreateSet(this.seenEventKeysByRunId, runId)
+  }
+
+  private getProcessingEventKeys(runId: string): Set<string> {
+    return getOrCreateSet(this.processingEventKeysByRunId, runId)
+  }
+
   private async handleStreamEvent(
     runId: string,
     agentId: string,
     event: AgentStreamEvent,
+    correlationId?: string | null,
   ): Promise<void> {
     switch (event.type) {
       case "thread_started":
-        await this.handleThreadStarted(runId, agentId, event)
+        await this.handleThreadStarted(runId, agentId, event, correlationId)
         return
       case "turn_started":
         await this.appendRunEvent({
           runId,
           eventType: "stage.started",
           source: "session",
+          correlationId: correlationId ?? undefined,
           phase: event.phase ?? null,
           stageId: event.stageId ?? null,
           payload: {
@@ -141,6 +183,7 @@ export class RuntimeAdapter implements RuntimeAdapterRegistry {
           runId,
           eventType: "stage.completed",
           source: "session",
+          correlationId: correlationId ?? undefined,
           phase: event.phase ?? null,
           stageId: event.stageId ?? null,
           payload: {
@@ -151,21 +194,21 @@ export class RuntimeAdapter implements RuntimeAdapterRegistry {
         })
         return
       case "turn_failed":
-        await this.handleTurnFailed(runId, event)
+        await this.handleTurnFailed(runId, event, correlationId)
         return
       case "turn_canceled":
         return
       case "permission_requested":
-        await this.handlePermissionRequested(runId, event)
+        await this.handlePermissionRequested(runId, event, correlationId)
         return
       case "permission_resolved":
-        await this.handlePermissionResolved(runId, event)
+        await this.handlePermissionResolved(runId, event, correlationId)
         return
       case "attention_required":
-        await this.handleAttentionRequired(runId, event)
+        await this.handleAttentionRequired(runId, event, correlationId)
         return
       case "timeline":
-        await this.handleTimelineEvent(runId, event)
+        await this.handleTimelineEvent(runId, event, correlationId)
         return
     }
   }
@@ -174,6 +217,7 @@ export class RuntimeAdapter implements RuntimeAdapterRegistry {
     runId: string,
     agentId: string,
     event: Extract<AgentStreamEvent, { type: "thread_started" }>,
+    correlationId?: string | null,
   ): Promise<void> {
     await this.upsertRunSession(runId, agentId, event.provider)
 
@@ -181,6 +225,7 @@ export class RuntimeAdapter implements RuntimeAdapterRegistry {
       runId,
       eventType: "session.created",
       source: "session",
+      correlationId: correlationId ?? undefined,
       sessionId: event.sessionId,
       payload: {
         runtimeSessionId: event.sessionId,
@@ -223,6 +268,7 @@ export class RuntimeAdapter implements RuntimeAdapterRegistry {
   private async handleTurnFailed(
     runId: string,
     event: Extract<AgentStreamEvent, { type: "turn_failed" }>,
+    correlationId?: string | null,
   ): Promise<void> {
     const isRunFailure = event.severity === "run" || event.severity === "fatal"
 
@@ -230,6 +276,7 @@ export class RuntimeAdapter implements RuntimeAdapterRegistry {
       runId,
       eventType: isRunFailure ? "run.failed" : "stage.failed",
       source: "session",
+      correlationId: correlationId ?? undefined,
       phase: event.phase ?? null,
       stageId: event.stageId ?? null,
       payload: {
@@ -252,6 +299,7 @@ export class RuntimeAdapter implements RuntimeAdapterRegistry {
   private async handlePermissionRequested(
     runId: string,
     event: Extract<AgentStreamEvent, { type: "permission_requested" }>,
+    correlationId?: string | null,
   ): Promise<void> {
     const timestamp = new Date().toISOString()
     const approval: ApprovalRecord = {
@@ -283,6 +331,7 @@ export class RuntimeAdapter implements RuntimeAdapterRegistry {
       runId,
       eventType: "approval.requested",
       source: "session",
+      correlationId: correlationId ?? undefined,
       payload: {
         approvalId: savedApproval.id,
         permissionRequestId: event.request.id,
@@ -298,6 +347,7 @@ export class RuntimeAdapter implements RuntimeAdapterRegistry {
   private async handlePermissionResolved(
     runId: string,
     event: Extract<AgentStreamEvent, { type: "permission_resolved" }>,
+    correlationId?: string | null,
   ): Promise<void> {
     const approval = await this.findApprovalByPermissionRequestId(runId, event.requestId)
     const decision: ApprovalDecision = event.resolution.allowed ? "approved" : "denied"
@@ -321,6 +371,7 @@ export class RuntimeAdapter implements RuntimeAdapterRegistry {
       runId,
       eventType: "approval.resolved",
       source: "operator",
+      correlationId: correlationId ?? undefined,
       payload: {
         approvalId: approval?.id,
         requestId: event.requestId,
@@ -356,19 +407,38 @@ export class RuntimeAdapter implements RuntimeAdapterRegistry {
   private async handleAttentionRequired(
     runId: string,
     event: Extract<AgentStreamEvent, { type: "attention_required" }>,
+    correlationId?: string | null,
   ): Promise<void> {
     if (event.reason === "finished") {
       await this.appendRunEvent({
         runId,
         eventType: "run.completed",
         source: "session",
+        correlationId: correlationId ?? undefined,
         occurredAt: event.timestamp,
         payload: {
           reason: event.reason,
         },
       })
 
-      await this.tryTransition(runId, "succeeded")
+      try {
+        await this.runService.transition(runId, "succeeded")
+      } catch (error) {
+        if (error instanceof Error && error.message.startsWith("required artifact missing")) {
+          await this.tryTransition(runId, "failed", {
+            failureReason: error.message,
+          })
+
+          return
+        }
+
+        if (error instanceof Error && error.message.startsWith("Invalid run status transition")) {
+          return
+        }
+
+        throw error
+      }
+
       return
     }
 
@@ -377,6 +447,7 @@ export class RuntimeAdapter implements RuntimeAdapterRegistry {
         runId,
         eventType: "run.failed",
         source: "session",
+        correlationId: correlationId ?? undefined,
         occurredAt: event.timestamp,
         payload: {
           reason: event.reason,
@@ -387,12 +458,19 @@ export class RuntimeAdapter implements RuntimeAdapterRegistry {
       await this.tryTransition(runId, "failed", {
         failureReason: event.error ?? "agent attention required: error",
       })
+
+      return
+    }
+
+    if (event.reason === "permission") {
+      await this.tryTransition(runId, "waiting_approval")
     }
   }
 
   private async handleTimelineEvent(
     runId: string,
     event: Extract<AgentStreamEvent, { type: "timeline" }>,
+    correlationId?: string | null,
   ): Promise<void> {
     const toolCall = extractTimelineToolCall(event.item)
 
@@ -405,6 +483,7 @@ export class RuntimeAdapter implements RuntimeAdapterRegistry {
         runId,
         eventType: "phase.entered",
         source: "session",
+        correlationId: correlationId ?? undefined,
         phase: toolCall.phase,
         payload: {
           phase: toolCall.phase,
@@ -419,6 +498,7 @@ export class RuntimeAdapter implements RuntimeAdapterRegistry {
       runId,
       eventType: "artifact.created",
       source: "session",
+      correlationId: correlationId ?? undefined,
       payload: toolCall.artifact,
     })
   }
@@ -449,6 +529,7 @@ export class RuntimeAdapter implements RuntimeAdapterRegistry {
     source: RunEventEnvelope["source"]
     payload: unknown
     occurredAt?: string
+    correlationId?: string
     phase?: string | null
     stageId?: string | null
     sessionId?: string | null
@@ -465,6 +546,7 @@ export class RuntimeAdapter implements RuntimeAdapterRegistry {
       sessionId: input.sessionId,
       roleId: input.roleId,
       payload: input.payload,
+      correlationId: input.correlationId,
     })
   }
 }
@@ -482,6 +564,10 @@ function mapPermissionKindToActionClass(kind: string): ApprovalRecord["action_cl
 }
 
 function extractTimelineToolCall(item: AgentTimelineItem): TimelineToolCall | null {
+  if (!isSuccessfulTimelineItem(item)) {
+    return null
+  }
+
   const name = getTimelineToolName(item)
   const input = getTimelineToolInput(item)
 
@@ -543,4 +629,25 @@ function getTimelineToolInput(item: AgentTimelineItem): Record<string, unknown> 
   }
 
   return {}
+}
+
+function isSuccessfulTimelineItem(item: AgentTimelineItem): boolean {
+  if (typeof item.status !== "string") {
+    return true
+  }
+
+  return ["success", "succeeded", "completed", "ok"].includes(item.status)
+}
+
+function getOrCreateSet(store: Map<string, Set<string>>, key: string): Set<string> {
+  const existing = store.get(key)
+
+  if (existing) {
+    return existing
+  }
+
+  const created = new Set<string>()
+  store.set(key, created)
+
+  return created
 }

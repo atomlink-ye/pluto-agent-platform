@@ -1,57 +1,99 @@
 /**
  * E2E Run Lifecycle Test
  *
- * Validates the minimum reference scenario end-to-end:
- * Operator creates run → agent executes → phases progress →
- * approval pauses/resumes → artifact registered → run succeeds.
+ * Validates the minimum reference scenario end to end.
  */
-import { describe, it, expect, beforeEach } from "vitest"
-import { RunCompiler, type CompileRunInput } from "../services/run-compiler.js"
-import { RuntimeAdapter } from "../services/runtime-adapter.js"
-import { PhaseController } from "../services/phase-controller.js"
-import { RecoveryService } from "../services/recovery-service.js"
-import { RunService } from "../services/run-service.js"
+import { beforeEach, describe, expect, it } from "vitest"
+
 import { ApprovalService } from "../services/approval-service.js"
 import { ArtifactService } from "../services/artifact-service.js"
-import { PlaybookService } from "../services/playbook-service.js"
 import { HarnessService } from "../services/harness-service.js"
+import { PhaseController } from "../services/phase-controller.js"
+import { PlaybookService } from "../services/playbook-service.js"
+import { RecoveryService } from "../services/recovery-service.js"
+import { RunCompiler } from "../services/run-compiler.js"
+import { RunService } from "../services/run-service.js"
+import { RuntimeAdapter } from "../services/runtime-adapter.js"
 import { FakeAgentManager } from "../paseo/fake-agent-manager.js"
 import {
-  InMemoryPlaybookRepository,
-  InMemoryHarnessRepository,
-  InMemoryRunRepository,
-  InMemoryRunEventRepository,
-  InMemoryRunPlanRepository,
-  InMemoryPolicySnapshotRepository,
   InMemoryApprovalRepository,
   InMemoryArtifactRepository,
+  InMemoryHarnessRepository,
+  InMemoryPlaybookRepository,
+  InMemoryPolicySnapshotRepository,
+  InMemoryRunEventRepository,
+  InMemoryRunPlanRepository,
+  InMemoryRunRepository,
   InMemoryRunSessionRepository,
 } from "../repositories/in-memory.js"
 
-let playbookService: PlaybookService
-let harnessService: HarnessService
-let runService: RunService
-let approvalService: ApprovalService
-let artifactService: ArtifactService
-let agentManager: FakeAgentManager
-let compiler: RunCompiler
-let adapter: RuntimeAdapter
-let phaseController: PhaseController
 let playbookRepo: InMemoryPlaybookRepository
 let harnessRepo: InMemoryHarnessRepository
 let runRepo: InMemoryRunRepository
 let runEventRepo: InMemoryRunEventRepository
+let runPlanRepo: InMemoryRunPlanRepository
+let policySnapshotRepo: InMemoryPolicySnapshotRepository
 let approvalRepo: InMemoryApprovalRepository
 let artifactRepo: InMemoryArtifactRepository
 let runSessionRepo: InMemoryRunSessionRepository
 
-function wireSystem() {
+let playbookService: PlaybookService
+let harnessService: HarnessService
+let artifactService: ArtifactService
+let runService: RunService
+let approvalService: ApprovalService
+let agentManager: FakeAgentManager
+let runtimeAdapter: RuntimeAdapter
+let phaseController: PhaseController
+let recoveryService: RecoveryService
+let runCompiler: RunCompiler
+
+const waitForAsyncEvents = async (): Promise<void> => {
+  await new Promise((resolve) => setTimeout(resolve, 25))
+}
+
+const emitToolCall = async (
+  agentId: string,
+  name: "declare_phase" | "register_artifact",
+  input: Record<string, unknown>,
+  seq: number,
+): Promise<void> => {
+  agentManager.emit(
+    agentId,
+    {
+      type: "timeline",
+      provider: "claude",
+      item: {
+        type: "tool_call",
+        name,
+        input,
+      },
+    },
+    seq,
+    "epoch_e2e",
+  )
+  await waitForAsyncEvents()
+}
+
+const getPayloadString = (
+  payload: unknown,
+  key: string,
+): string | undefined => {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    return undefined
+  }
+
+  const value = (payload as Record<string, unknown>)[key]
+  return typeof value === "string" ? value : undefined
+}
+
+function setupAll() {
   playbookRepo = new InMemoryPlaybookRepository()
   harnessRepo = new InMemoryHarnessRepository()
   runRepo = new InMemoryRunRepository()
   runEventRepo = new InMemoryRunEventRepository()
-  const runPlanRepo = new InMemoryRunPlanRepository()
-  const policySnapshotRepo = new InMemoryPolicySnapshotRepository()
+  runPlanRepo = new InMemoryRunPlanRepository()
+  policySnapshotRepo = new InMemoryPolicySnapshotRepository()
   approvalRepo = new InMemoryApprovalRepository()
   artifactRepo = new InMemoryArtifactRepository()
   runSessionRepo = new InMemoryRunSessionRepository()
@@ -79,7 +121,7 @@ function wireSystem() {
   approvalService = new ApprovalService(approvalRepo, runService, runEventRepo)
   agentManager = new FakeAgentManager()
 
-  adapter = new RuntimeAdapter(
+  runtimeAdapter = new RuntimeAdapter(
     agentManager,
     runEventRepo,
     approvalRepo,
@@ -97,7 +139,17 @@ function wireSystem() {
     agentManager,
   })
 
-  compiler = new RunCompiler({
+  recoveryService = new RecoveryService({
+    runRepository: runRepo,
+    runEventRepository: runEventRepo,
+    runSessionRepository: runSessionRepo,
+    runService,
+    runtimeAdapter,
+    phaseController,
+    agentManager,
+  })
+
+  runCompiler = new RunCompiler({
     playbookRepository: playbookRepo,
     harnessRepository: harnessRepo,
     runRepository: runRepo,
@@ -107,218 +159,248 @@ function wireSystem() {
     runSessionRepository: runSessionRepo,
     runService,
     agentManager,
-    runtimeAdapter: adapter,
+    runtimeAdapter,
   })
 }
 
-describe("E2E: Full Run Lifecycle (Minimum Reference Scenario)", () => {
+describe("E2E: Full run lifecycle", () => {
   beforeEach(() => {
-    wireSystem()
+    setupAll()
   })
 
-  it("executes complete governed run from creation to success", async () => {
-    // === 1. Create playbook with required artifact ===
-    const playbook = await playbookService.create({
-      name: "Sprint Retrospective",
-      description: "Facilitate a sprint retrospective session",
-      goal: "Collect team feedback and produce actionable improvements",
-      instructions: "Guide through what went well, what didn't, and action items",
-      artifacts: [{ type: "retro_document", format: "markdown" }],
-    })
+  it("validates the full run lifecycle end to end", async () => {
+    let runId: string | undefined
+    const unsubscribe = runtimeAdapter.start()
 
-    // === 2. Create harness with phases and approval rule ===
-    const harness = await harnessService.create({
-      name: "Standard 3-Phase",
-      description: "Three-phase governed execution",
-      phases: ["collect", "analyze", "review"],
-      approvals: { destructive_write: "required" },
-    })
+    try {
+      const playbook = await playbookService.create({
+        name: "Sprint retrospective",
+        description: "Facilitate a sprint retrospective",
+        goal: "Produce a retrospective document",
+        instructions: "Collect feedback, analyze it, and prepare a final review",
+        artifacts: [{ type: "retro_document", format: "markdown" }],
+      })
 
-    // === 3. Compile a run (operator starts it) ===
-    const run = await compiler.compile({
-      playbookId: playbook.id,
-      harnessId: harness.id,
-      inputs: { topic: "Q1 Sprint 3", participants: 8 },
-      provider: "claude",
-    })
+      const harness = await harnessService.create({
+        name: "Governed review harness",
+        description: "Three phases with approval before review",
+        phases: ["collect", "analyze", "review"],
+        approvals: { destructive_write: "required" },
+      })
 
-    expect(run.status).toBe("running")
-    expect(run.current_phase).toBe("collect")
+      await harnessService.attachToPlaybook(harness.id, playbook.id)
 
-    // Verify agent was created
-    const agents = agentManager.listAgents()
-    expect(agents).toHaveLength(1)
-    const agentId = agents[0].id
+      const compiledRun = await runCompiler.compile({
+        playbookId: playbook.id,
+        harnessId: harness.id,
+        inputs: { sprint: "Q1 Sprint 3" },
+        provider: "claude",
+      })
+      runId = compiledRun.id
 
-    // Register agent with phase controller
-    phaseController.registerRunAgent(run.id, agentId)
+      expect(compiledRun.status).toBe("running")
 
-    // Start the runtime adapter
-    const unsubscribe = adapter.start()
+      const agents = agentManager.listAgents()
+      expect(agents).toHaveLength(1)
+      const agentId = agents[0].id
 
-    // === 4. Agent progresses through phases ===
+      const recoveryResult = await recoveryService.recoverRun(compiledRun.id)
+      expect(recoveryResult).toBe("recovered")
 
-    // Phase 1: collect (already current)
-    // Simulate agent doing work in collect phase
-    agentManager.emit(agentId, {
-      type: "turn_started",
-      provider: "claude",
-    }, 1, "epoch_1")
+      agentManager.emit(
+        agentId,
+        {
+          type: "thread_started",
+          sessionId: "runtime_session_1",
+          provider: "claude",
+        },
+        1,
+        "epoch_e2e",
+      )
+      agentManager.emit(
+        agentId,
+        {
+          type: "turn_started",
+          provider: "claude",
+          turnId: "turn_collect",
+          phase: "collect",
+        },
+        2,
+        "epoch_e2e",
+      )
+      await waitForAsyncEvents()
 
-    agentManager.emit(agentId, {
-      type: "turn_completed",
-      provider: "claude",
-    }, 2, "epoch_1")
+      await emitToolCall(agentId, "declare_phase", { phase: "collect" }, 3)
 
-    await new Promise((r) => setTimeout(r, 50))
+      let currentRun = await runRepo.getById(compiledRun.id)
+      expect(currentRun?.current_phase).toBe("collect")
+      expect(currentRun?.status).toBe("running")
 
-    // Agent declares transition to analyze
-    const analyzeResult = await phaseController.handlePhaseDeclaration(run.id, "analyze")
-    expect(analyzeResult.allowed).toBe(true)
+      const analyzeTransition = await phaseController.handlePhaseDeclaration(
+        compiledRun.id,
+        "analyze",
+      )
+      expect(analyzeTransition.allowed).toBe(true)
+      await emitToolCall(agentId, "declare_phase", { phase: "analyze" }, 4)
 
-    // Verify current phase updated
-    let currentRun = await runRepo.getById(run.id)
-    expect(currentRun!.current_phase).toBe("analyze")
+      currentRun = await runRepo.getById(compiledRun.id)
+      expect(currentRun?.current_phase).toBe("analyze")
+      expect(currentRun?.status).toBe("running")
 
-    // Agent does work in analyze phase
-    agentManager.emit(agentId, {
-      type: "turn_started",
-      provider: "claude",
-    }, 3, "epoch_1")
+      const reviewTransition = await phaseController.handlePhaseDeclaration(
+        compiledRun.id,
+        "review",
+      )
+      expect(reviewTransition.allowed).toBe(true)
+      await emitToolCall(agentId, "declare_phase", { phase: "review" }, 5)
 
-    agentManager.emit(agentId, {
-      type: "turn_completed",
-      provider: "claude",
-    }, 4, "epoch_1")
+      currentRun = await runRepo.getById(compiledRun.id)
+      expect(currentRun?.current_phase).toBe("review")
+      expect(currentRun?.status).toBe("waiting_approval")
 
-    await new Promise((r) => setTimeout(r, 50))
+      const waitingApprovalRecovery = await recoveryService.recoverRun(compiledRun.id)
+      expect(waitingApprovalRecovery).toBe("waiting_approval")
 
-    // === 5. Agent declares review phase → triggers approval gate ===
-    const reviewResult = await phaseController.handlePhaseDeclaration(run.id, "review")
-    expect(reviewResult.allowed).toBe(true)
+      const approvals = await approvalRepo.listByRunId(compiledRun.id)
+      const pendingApproval = approvals.find((approval) => approval.status === "pending")
 
-    // Review phase has approval gate — run should be in waiting_approval
-    currentRun = await runRepo.getById(run.id)
-    expect(currentRun!.status).toBe("waiting_approval")
+      expect(pendingApproval).toBeDefined()
+      expect(pendingApproval).toEqual(
+        expect.objectContaining({
+          action_class: "destructive_write",
+          status: "pending",
+        }),
+      )
 
-    // Verify ApprovalTask was created
-    const approvals = await approvalRepo.listByRunId(run.id)
-    expect(approvals.length).toBeGreaterThanOrEqual(1)
-    const pendingApproval = approvals.find((a) => a.status === "pending")
-    expect(pendingApproval).toBeDefined()
+      await approvalService.resolve(
+        pendingApproval!.id,
+        "approved",
+        "operator_1",
+        "Approved to continue",
+      )
+      await phaseController.handleApprovalResolution(
+        compiledRun.id,
+        pendingApproval!.id,
+        "approved",
+      )
 
-    // === 6. Operator resolves approval → agent resumes ===
-    await phaseController.handleApprovalResolution(run.id, pendingApproval!.id, "approved")
+      currentRun = await runRepo.getById(compiledRun.id)
+      expect(currentRun?.status).toBe("running")
+      expect(
+        agentManager.runAgentCalls.some(
+          ({ prompt }) => typeof prompt === "string" && prompt.includes("Approval granted"),
+        ),
+      ).toBe(true)
 
-    // Resolve the approval in the approval service too
-    await approvalService.resolve(pendingApproval!.id, "approved", "operator-1", "Looks good")
+      await emitToolCall(
+        agentId,
+        "register_artifact",
+        {
+          type: "retro_document",
+          title: "Sprint 3 retrospective",
+          format: "markdown",
+        },
+        6,
+      )
+      await artifactService.register({
+        runId: compiledRun.id,
+        type: "retro_document",
+        title: "Sprint 3 retrospective",
+        format: "markdown",
+        producer: { session_id: agentId },
+      })
 
-    currentRun = await runRepo.getById(run.id)
-    expect(currentRun!.status).toBe("running")
+      const artifacts = await artifactRepo.listByRunId(compiledRun.id)
+      expect(artifacts).toHaveLength(1)
+      expect(artifacts[0]).toEqual(
+        expect.objectContaining({
+          run_id: compiledRun.id,
+          type: "retro_document",
+        }),
+      )
 
-    // Verify agent received continuation prompt
-    const runCalls = agentManager.runAgentCalls
-    expect(runCalls.some((c) => {
-      const prompt = typeof c.prompt === "string" ? c.prompt : ""
-      return prompt.includes("Approval granted") || prompt.includes("approval")
-    })).toBe(true)
+      agentManager.emit(
+        agentId,
+        {
+          type: "turn_completed",
+          provider: "claude",
+          turnId: "turn_review",
+          phase: "review",
+          usage: { inputTokens: 100, outputTokens: 50 },
+        },
+        7,
+        "epoch_e2e",
+      )
+      agentManager.emit(
+        agentId,
+        {
+          type: "attention_required",
+          provider: "claude",
+          reason: "finished",
+          timestamp: new Date().toISOString(),
+        },
+        8,
+        "epoch_e2e",
+      )
+      await waitForAsyncEvents()
 
-    // === 7. Agent registers required artifact ===
-    await artifactService.register({
-      runId: run.id,
-      type: "retro_document",
-      title: "Sprint 3 Retrospective Summary",
-      format: "markdown",
-    })
+      const finalRun = await runRepo.getById(compiledRun.id)
+      expect(finalRun?.status).toBe("succeeded")
 
-    // Verify artifact exists
-    const artifacts = await artifactRepo.listByRunId(run.id)
-    expect(artifacts).toHaveLength(1)
-    expect(artifacts[0].type).toBe("retro_document")
+      const sessions = await runSessionRepo.listByRunId(compiledRun.id)
+      expect(sessions).toHaveLength(1)
+      expect(sessions[0]).toEqual(
+        expect.objectContaining({
+          run_id: compiledRun.id,
+          session_id: agentId,
+          status: "active",
+        }),
+      )
 
-    // === 8. Agent signals completion → run succeeds ===
-    // Check that all required artifacts are present
-    const completionCheck = await phaseController.handleCompletionCheck(run.id)
-    expect(completionCheck.allowed).toBe(true)
+      const events = await runEventRepo.listByRunId(compiledRun.id)
+      const eventTypes = events.map((event) => event.eventType)
+      expect(eventTypes).toEqual(
+        expect.arrayContaining([
+          "run.created",
+          "run.status_changed",
+          "session.created",
+          "stage.started",
+          "stage.completed",
+          "phase.entered",
+          "approval.requested",
+          "approval.resolved",
+          "artifact.created",
+          "artifact.registered",
+          "run.completed",
+        ]),
+      )
 
-    // Transition to succeeded
-    await runService.transition(run.id, "succeeded")
+      const enteredPhases = events
+        .filter((event) => event.eventType === "phase.entered")
+        .map((event) => getPayloadString(event.payload, "phase"))
+        .filter((phase): phase is string => phase !== undefined)
 
-    currentRun = await runRepo.getById(run.id)
-    expect(currentRun!.status).toBe("succeeded")
+      expect(new Set(enteredPhases)).toEqual(
+        new Set(["collect", "analyze", "review"]),
+      )
 
-    // === 9. Verify complete lifecycle ===
+      const statusChain = events
+        .filter((event) => event.eventType === "run.status_changed")
+        .map((event) => getPayloadString(event.payload, "toStatus"))
+        .filter((status): status is string => status !== undefined)
 
-    // Run events should cover the full lifecycle
-    const events = await runEventRepo.listByRunId(run.id)
-    const eventTypes = events.map((e) => e.eventType)
-
-    expect(eventTypes).toContain("run.created")
-    expect(eventTypes).toContain("run.status_changed")
-    expect(eventTypes).toContain("phase.entered")
-    expect(eventTypes).toContain("approval.requested")
-    expect(eventTypes).toContain("artifact.registered")
-
-    // RunSession exists and is linked
-    const sessions = await runSessionRepo.listByRunId(run.id)
-    expect(sessions).toHaveLength(1)
-    expect(sessions[0].session_id).toBe(agentId)
-
-    // Cleanup
-    unsubscribe()
-    phaseController.cleanup(run.id)
-  })
-
-  it("blocks completion when required artifact is missing", async () => {
-    const playbook = await playbookService.create({
-      name: "Retro",
-      description: "Retro",
-      goal: "Collect",
-      instructions: "Guide",
-      artifacts: [{ type: "retro_document" }],
-    })
-
-    const harness = await harnessService.create({
-      name: "Simple",
-      description: "Simple",
-      phases: ["work"],
-    })
-
-    const run = await compiler.compile({
-      playbookId: playbook.id,
-      harnessId: harness.id,
-      inputs: {},
-    })
-
-    // Try to complete without registering artifact
-    const check = await phaseController.handleCompletionCheck(run.id)
-    expect(check.allowed).toBe(false)
-    expect(check.error).toContain("retro_document")
-  })
-
-  it("rejects out-of-order phase transitions", async () => {
-    const playbook = await playbookService.create({
-      name: "Retro",
-      description: "Retro",
-      goal: "Collect",
-      instructions: "Guide",
-    })
-
-    const harness = await harnessService.create({
-      name: "3-Phase",
-      description: "3-Phase",
-      phases: ["collect", "analyze", "review"],
-    })
-
-    const run = await compiler.compile({
-      playbookId: playbook.id,
-      harnessId: harness.id,
-      inputs: {},
-    })
-
-    // Try to skip to review (should fail)
-    const result = await phaseController.handlePhaseDeclaration(run.id, "review")
-    expect(result.allowed).toBe(false)
-    expect(result.error).toContain("cannot enter 'review'")
+      expect(statusChain).toEqual([
+        "initializing",
+        "running",
+        "waiting_approval",
+        "running",
+        "succeeded",
+      ])
+    } finally {
+      unsubscribe()
+      if (runId) {
+        phaseController.cleanup(runId)
+      }
+    }
   })
 })

@@ -33,6 +33,7 @@ export interface AgentTimelineItem {
   type: string
   name?: string
   toolName?: string
+  status?: string
   input?: Record<string, unknown>
   arguments?: Record<string, unknown>
   args?: Record<string, unknown>

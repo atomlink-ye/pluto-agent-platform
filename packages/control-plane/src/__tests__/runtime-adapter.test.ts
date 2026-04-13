@@ -220,6 +220,56 @@ describe("RuntimeAdapter", () => {
     expect(events.filter((candidate) => candidate.eventType === "session.created")).toHaveLength(1)
   })
 
+  it("deduplicates persisted seq+epoch events across adapter instances", async () => {
+    const run = await createRunningRun()
+
+    adapter.trackRun(run.id, "agent-1")
+    let stop = adapter.start()
+
+    agentManager.emit(
+      "agent-1",
+      {
+        type: "thread_started",
+        sessionId: "sess_runtime_1",
+        provider: "claude",
+      },
+      8,
+      "epoch-persisted",
+    )
+
+    await flush()
+    stop()
+
+    adapter = new RuntimeAdapter(
+      agentManager,
+      runEventRepo,
+      approvalRepo,
+      runService,
+      runSessionRepo,
+    )
+
+    adapter.trackRun(run.id, "agent-1")
+    stop = adapter.start()
+
+    agentManager.emit(
+      "agent-1",
+      {
+        type: "thread_started",
+        sessionId: "sess_runtime_1",
+        provider: "claude",
+      },
+      8,
+      "epoch-persisted",
+    )
+
+    await flush()
+    stop()
+
+    const events = await runEventRepo.listByRunId(run.id)
+
+    expect(events.filter((candidate) => candidate.eventType === "session.created")).toHaveLength(1)
+  })
+
   it("scenario 2.4: events for untracked agents are ignored", async () => {
     const run = await createRunningRun()
 
@@ -288,5 +338,31 @@ describe("RuntimeAdapter", () => {
       ]),
     )
     expect(updatedRun?.current_phase).toBe("analyze")
+  })
+
+  it("moves the run to waiting_approval on attention_required(permission)", async () => {
+    const run = await createRunningRun()
+
+    adapter.trackRun(run.id, "agent-1")
+    const stop = adapter.start()
+
+    agentManager.emit(
+      "agent-1",
+      {
+        type: "attention_required",
+        provider: "claude",
+        reason: "permission",
+        timestamp: new Date().toISOString(),
+      },
+      4,
+      "epoch-1",
+    )
+
+    await flush()
+    stop()
+
+    const updatedRun = await runRepo.getById(run.id)
+
+    expect(updatedRun?.status).toBe("waiting_approval")
   })
 })
