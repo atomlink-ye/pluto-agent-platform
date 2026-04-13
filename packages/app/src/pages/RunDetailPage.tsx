@@ -190,7 +190,43 @@ export function RunDetailPage() {
           Operator
         </h3>
 
-        {/* Sessions */}
+        {/* Team summary */}
+        {run.resolved_team && (
+          <div className="mb-4">
+            <h4 className="text-xs font-medium text-gray-500 mb-2">Team</h4>
+            <div className="border border-gray-200 rounded p-3">
+              <div className="flex items-center gap-2 mb-1">
+                <span className="text-sm font-medium">{run.resolved_team.name}</span>
+                {run.resolved_team.lead_role && (
+                  <span className="text-xs bg-blue-100 text-blue-700 px-2 py-0.5 rounded">
+                    Lead: {run.resolved_team.lead_role}
+                  </span>
+                )}
+              </div>
+              {run.resolved_team.description && (
+                <p className="text-xs text-gray-500">{run.resolved_team.description}</p>
+              )}
+              {run.resolved_team.roles?.length > 0 && (
+                <div className="flex gap-1.5 mt-2">
+                  {run.resolved_team.roles.map((role: string) => (
+                    <span
+                      key={role}
+                      className={`text-xs px-2 py-0.5 rounded ${
+                        role === run.resolved_team.lead_role
+                          ? "bg-blue-50 text-blue-700 font-medium"
+                          : "bg-gray-100 text-gray-600"
+                      }`}
+                    >
+                      {role}
+                    </span>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* Sessions grouped by role */}
         {sessions && sessions.length > 0 && (
           <div className="mb-4">
             <h4 className="text-xs font-medium text-gray-500 mb-2">Sessions</h4>
@@ -198,6 +234,11 @@ export function RunDetailPage() {
               {sessions.map((s: any) => (
                 <div key={s.id} className="text-xs flex items-center gap-2">
                   <StatusBadge status={s.status} />
+                  {s.role_id && (
+                    <span className="bg-gray-100 text-gray-600 px-1.5 py-0.5 rounded text-xs">
+                      {s.role_id}
+                    </span>
+                  )}
                   <span className="font-mono text-gray-500">{s.session_id ?? s.id.slice(0, 8)}</span>
                   {s.provider && <span className="text-gray-400">{s.provider}</span>}
                 </div>
@@ -212,12 +253,25 @@ export function RunDetailPage() {
           {events && events.length > 0 ? (
             <div className="space-y-1 max-h-80 overflow-y-auto">
               {events.map((e: any, i: number) => (
-                <div key={e.id ?? i} className="text-xs flex items-start gap-2 py-1">
+                <div
+                  key={e.id ?? i}
+                  className={`text-xs flex items-start gap-2 py-1 ${
+                    e.eventType?.startsWith("handoff.")
+                      ? "bg-purple-50 rounded px-1 -mx-1"
+                      : ""
+                  }`}
+                >
                   <span className="text-gray-400 whitespace-nowrap font-mono">
                     {new Date(e.occurredAt).toLocaleTimeString()}
                   </span>
                   <span className="font-medium text-gray-700">{e.eventType}</span>
                   {e.phase && <span className="text-gray-500">[{e.phase}]</span>}
+                  {e.roleId && <span className="text-purple-600">{e.roleId}</span>}
+                  {e.payload?.from_role && e.payload?.to_role && (
+                    <span className="text-purple-500">
+                      {e.payload.from_role} → {e.payload.to_role}
+                    </span>
+                  )}
                   <span className="text-gray-400">{e.source}</span>
                 </div>
               ))}

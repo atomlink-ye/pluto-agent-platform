@@ -101,6 +101,21 @@ A RoleSpec is a durable Postgres record matching `role-and-team-contract.md`. Ro
 - **When:** the role list is requested
 - **Then:** all three are returned
 
+### Implementation notes
+
+- RoleService in `packages/control-plane/src/services/role-service.ts`
+- Validation via Zod schema in contracts; governance fields rejected with "belongs to Harness" message
+- In-memory repository in `packages/control-plane/src/repositories/in-memory.ts`
+- REST API endpoints: GET/POST `/api/roles`, GET `/api/roles/:id`
+- 5 tests covering scenarios 1.1–1.3 plus getById and update
+
+### Checklist
+
+- [x] implementation complete (domain layer + API)
+- [x] test scenarios passing (5 tests)
+- [x] deliverable standard verified
+- [x] contract shape matches `role-and-team-contract.md`
+
 ---
 
 ## Feature 2: TeamSpec Records and Run-time Resolution
@@ -139,6 +154,23 @@ Playbook does **not** gain a Harness-style attached TeamSummary in this phase. P
 - **Given:** a team references roles `researcher` and `reviewer`
 - **When:** the team declares `lead_role = analyst`
 - **Then:** creation fails explaining that the lead role must be included in `roles`
+
+### Implementation notes
+
+- TeamService in `packages/control-plane/src/services/team-service.ts`
+- Validates all role IDs exist via RoleSpecRepository lookup
+- Validates lead_role is a member of roles
+- Coordination mode defaults to supervisor-led; other modes rejected
+- In-memory repository in `packages/control-plane/src/repositories/in-memory.ts`
+- REST API endpoints: GET/POST `/api/teams`, GET `/api/teams/:id`
+- 7 tests covering scenarios 2.1–2.3 plus additional validation
+
+### Checklist
+
+- [x] implementation complete (domain layer + API)
+- [x] test scenarios passing (7 tests)
+- [x] deliverable standard verified
+- [x] contract shape matches `role-and-team-contract.md`
 
 ---
 
