@@ -223,9 +223,25 @@ export function createApp(deps: AppDeps): express.Express {
       deps.runSessionRepository.listByRunId(run.id),
     ])
 
+    // Resolve team data for the UI
+    let resolved_team = null
+    if (run.team) {
+      const teamSpec = await deps.teamRepository.getById(run.team)
+      if (teamSpec) {
+        resolved_team = {
+          id: teamSpec.id,
+          name: teamSpec.name,
+          description: teamSpec.description,
+          lead_role: teamSpec.lead_role,
+          roles: teamSpec.roles,
+          coordination: teamSpec.coordination,
+        }
+      }
+    }
+
     res.json({
       data: {
-        run,
+        run: { ...run, resolved_team },
         events,
         approvals,
         artifacts,
