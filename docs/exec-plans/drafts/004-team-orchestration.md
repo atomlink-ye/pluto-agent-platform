@@ -211,6 +211,24 @@ When a run is created with a resolved TeamSpec, the Run Compiler:
 - **When:** the lead creates a handoff to role `researcher` and it is accepted
 - **Then:** a worker RunSession is created for `researcher`, and the RunPlan shows the delegated stage assignment
 
+### Implementation notes
+
+- `CompileRunInput` gains optional `teamId` field
+- `RunCompilerDeps` gains optional `roleSpecRepository` and `teamSpecRepository`
+- `resolveTeam()` validates team exists, has lead_role, and coordination mode is supervisor-led
+- Run record gets `team` field set after creation
+- RunPlan stages get `role` assigned to lead role for team runs
+- Lead RunSession gets `role_id` set
+- System prompt includes Team section, Delegation section, and handoff MCP tool docs for team runs
+- 7 tests: team run plan generation, prompt context, title, backward compatibility, 3 validation error paths
+
+### Checklist
+
+- [x] implementation complete (RunCompiler team-aware compilation)
+- [x] test scenarios passing (7 tests)
+- [x] deliverable standard verified
+- [x] backward compatibility confirmed (existing 8 tests unchanged)
+
 ---
 
 ## Feature 4: Contract-aligned Handoff Events and Plan Mutation
@@ -250,6 +268,23 @@ Phase 2 uses only these handoff events:
 - **When:** the worker rejects it
 - **Then:** a `handoff.rejected` event is recorded and no orphan worker session or active delegated stage remains
 
+### Implementation notes
+
+- HandoffService in `packages/control-plane/src/services/handoff-service.ts`
+- `create_handoff` and `reject_handoff` MCP tool definitions added to MCP tools index
+- Handoff auto-accepts in Phase 2 (supervisor-led); rejection tested via validation path
+- Accepted handoff: records `handoff.created` + `handoff.accepted` events, mutates RunPlan with delegated stage, spawns worker session with role-specific prompt
+- Worker RunSession tagged with `role_id`
+- MCP handler integration tested via `handleCreateHandoff` / `handleRejectHandoff`
+- 7 tests: handoff creation + events + worker session, worker prompt, rejection, non-team validation, role validation, MCP handler delegation, MCP handler without service
+
+### Checklist
+
+- [x] implementation complete (HandoffService + MCP tools)
+- [x] test scenarios passing (7 tests)
+- [x] deliverable standard verified
+- [x] handoff events follow run-event-contract.md
+
 ---
 
 ## Feature 5: Minimal Operator Visibility for Team Runs
@@ -273,6 +308,21 @@ This phase does not add a dedicated Team view or role-scoped artifact surface.
 1. Run detail shows the resolved team and lead role
 2. Active sessions are grouped by role
 3. Handoff events appear in the event timeline with from/to role labels
+
+### Implementation notes
+
+- Run detail API endpoint (`GET /api/runs/:id`) resolves TeamSpec when `run.team` is set
+- Returns `resolved_team` with id, name, description, lead_role, roles, coordination
+- Frontend RunDetailPage already contains team summary, role-tagged sessions, and handoff-highlighted event timeline from previous scaffolding
+- No new frontend changes needed — the UI code was pre-built in F1/F2 phase
+
+### Checklist
+
+- [x] implementation complete (API team resolution)
+- [x] frontend team summary renders resolved_team
+- [x] sessions display role_id badges
+- [x] handoff events highlighted in timeline with from→to labels
+- [x] deliverable standard verified
 
 ---
 
