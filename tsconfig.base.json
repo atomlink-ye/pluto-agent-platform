@@ -1,0 +1,28 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "lib": ["ES2022"],
+    "strict": true,
+    "declaration": true,
+    "declarationMap": true,
+    "sourceMap": true,
+    "composite": true,
+    "baseUrl": ".",
+    "paths": {
+      "@pluto-agent-platform/contracts": ["packages/contracts/src/index.ts"],
+      "@pluto-agent-platform/control-plane": ["packages/control-plane/src/index.ts"],
+      "@pluto-agent-platform/server": ["packages/server/src/index.ts"],
+      "@pluto-agent-platform/app": ["packages/app/src/index.ts"],
+      "@pluto-agent-platform/cli": ["packages/cli/src/index.ts"]
+    },
+    "noEmitOnError": true,
+    "skipLibCheck": true,
+    "esModuleInterop": true,
+    "forceConsistentCasingInFileNames": true,
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "types": ["node"]
+  }
+}
