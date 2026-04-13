@@ -85,9 +85,15 @@ async function main() {
   await seedDevData({
     playbookService,
     harnessService,
+    roleService,
+    teamService,
     runService,
     approvalService,
     artifactService,
+    runRepository: runRepo,
+    runEventRepository: runEventRepo,
+    runPlanRepository: runPlanRepo,
+    runSessionRepository: runSessionRepo,
   })
 
   app.listen(PORT, () => {

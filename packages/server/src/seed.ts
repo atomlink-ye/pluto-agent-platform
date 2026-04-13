@@ -7,17 +7,29 @@
 import type {
   PlaybookService,
   HarnessService,
+  RoleService,
+  TeamService,
   RunService,
   ApprovalService,
   ArtifactService,
+  RunRepository,
+  RunEventRepository,
+  RunPlanRepository,
+  RunSessionRepository,
 } from "@pluto-agent-platform/control-plane"
 
 export interface SeedDeps {
   playbookService: PlaybookService
   harnessService: HarnessService
+  roleService?: RoleService
+  teamService?: TeamService
   runService: RunService
   approvalService: ApprovalService
   artifactService: ArtifactService
+  runRepository?: RunRepository
+  runEventRepository?: RunEventRepository
+  runPlanRepository?: RunPlanRepository
+  runSessionRepository?: RunSessionRepository
 }
 
 export async function seedDevData(deps: SeedDeps): Promise<void> {
@@ -147,6 +159,119 @@ export async function seedDevData(deps: SeedDeps): Promise<void> {
   await runService.transition(run4.id, "failed", {
     failureReason: "Agent process crashed unexpectedly",
   })
+
+  // --- Team Orchestration Seed ---
+  if (deps.roleService && deps.teamService && deps.runRepository && deps.runEventRepository && deps.runPlanRepository && deps.runSessionRepository) {
+    const researcherRole = await deps.roleService.create({
+      name: "Researcher",
+      description: "Gathers information from Linear, Slack, and documents",
+      system_prompt: "You are a research specialist. Focus on gathering comprehensive data.",
+    })
+    const analystRole = await deps.roleService.create({
+      name: "Analyst",
+      description: "Analyzes gathered data and identifies themes",
+      system_prompt: "You are an analytical specialist. Identify patterns and themes.",
+    })
+    const writerRole = await deps.roleService.create({
+      name: "Writer",
+      description: "Drafts documents based on analysis results",
+    })
+
+    const retroTeam = await deps.teamService.create({
+      name: "Sprint Retro Team",
+      description: "Specialized team for retrospective facilitation",
+      lead_role: analystRole.id,
+      roles: [researcherRole.id, analystRole.id, writerRole.id],
+      coordination: { mode: "supervisor-led" },
+    })
+
+    // Run 5: team run with handoff events (simulated)
+    const run5 = await runService.create(retroPlaybook.id, harness.id, {
+      sprint_name: "Sprint 44 (Team Run)",
+    })
+    await deps.runRepository.update({
+      ...run5,
+      team: retroTeam.id,
+      updatedAt: new Date().toISOString(),
+    })
+    await runService.transition(run5.id, "initializing")
+    await runService.transition(run5.id, "running")
+
+    // Add lead session with role
+    const leadSessionId = `sess_lead_${run5.id.slice(4, 12)}`
+    await deps.runSessionRepository.save({
+      kind: "run_session",
+      id: leadSessionId,
+      run_id: run5.id,
+      session_id: `paseo_lead_${run5.id.slice(4, 12)}`,
+      role_id: analystRole.id,
+      provider: "claude",
+      status: "active",
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    })
+
+    // Add worker session
+    const workerSessionId = `sess_worker_${run5.id.slice(4, 12)}`
+    await deps.runSessionRepository.save({
+      kind: "run_session",
+      id: workerSessionId,
+      run_id: run5.id,
+      session_id: `paseo_worker_${run5.id.slice(4, 12)}`,
+      role_id: researcherRole.id,
+      provider: "claude",
+      status: "active",
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    })
+
+    // Add handoff events
+    const now = new Date().toISOString()
+    await deps.runEventRepository.append({
+      id: `evt_hoff_created_${run5.id.slice(4, 12)}`,
+      runId: run5.id,
+      eventType: "handoff.created",
+      occurredAt: now,
+      source: "orchestrator",
+      payload: {
+        fromRole: analystRole.id,
+        toRole: researcherRole.id,
+        summary: "Collect Linear issues and Slack threads for Sprint 44",
+      },
+    })
+    await deps.runEventRepository.append({
+      id: `evt_hoff_accepted_${run5.id.slice(4, 12)}`,
+      runId: run5.id,
+      eventType: "handoff.accepted",
+      occurredAt: now,
+      source: "orchestrator",
+      payload: {
+        fromRole: analystRole.id,
+        toRole: researcherRole.id,
+      },
+    })
+
+    // Update RunPlan with role assignments
+    const plan5 = await deps.runPlanRepository.getByRunId(run5.id)
+    if (plan5) {
+      await deps.runPlanRepository.save({
+        ...plan5,
+        stages: [
+          ...plan5.stages.map((s) => ({ ...s, role: analystRole.id })),
+          {
+            id: `stage_handoff_researcher`,
+            phase: plan5.current_phase ?? "collect",
+            role: researcherRole.id,
+            status: "running",
+          },
+        ],
+      })
+    }
+
+    console.log(`  Roles: Researcher, Analyst, Writer`)
+    console.log(`  Teams: Sprint Retro Team`)
+    console.log(`  Team Run: Sprint 44 with handoff (analyst → researcher)`)
+  }
 
   console.log("Seed data created:")
   console.log(`  Playbooks: Sprint Retro, Code Review, Data Migration`)
