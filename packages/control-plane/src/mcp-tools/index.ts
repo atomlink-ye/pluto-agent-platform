@@ -9,6 +9,11 @@ import type {
   PhaseController,
   PhaseTransitionResult,
 } from "../services/phase-controller.js"
+import type {
+  HandoffService,
+  HandoffRecord,
+  HandoffResult,
+} from "../services/handoff-service.js"
 
 export interface JsonSchemaString {
   type: "string"
@@ -128,14 +133,93 @@ export const registerArtifactToolDefinition = {
   },
 } satisfies ControlPlaneMcpToolDefinition<"register_artifact">
 
+export interface CreateHandoffInput {
+  runId: string
+  fromRole: string
+  toRole: string
+  summary: string
+  context?: string
+}
+
+export interface RejectHandoffInput {
+  handoffId: string
+  reason: string
+}
+
+export const createHandoffToolDefinition = {
+  name: "create_handoff",
+  description:
+    "Delegates work to another team role. A worker session is spawned when the handoff is accepted.",
+  inputSchema: {
+    type: "object",
+    description: "Input for creating a handoff delegation to another team role.",
+    properties: {
+      runId: {
+        type: "string",
+        description: "Owning run identifier.",
+        minLength: 1,
+      },
+      fromRole: {
+        type: "string",
+        description: "Role ID of the delegating agent.",
+        minLength: 1,
+      },
+      toRole: {
+        type: "string",
+        description: "Role ID of the target worker agent.",
+        minLength: 1,
+      },
+      summary: {
+        type: "string",
+        description: "Summary of the work to be delegated.",
+        minLength: 1,
+      },
+      context: {
+        type: "string",
+        description: "Optional additional context for the worker.",
+        minLength: 1,
+      },
+    },
+    required: ["runId", "fromRole", "toRole", "summary"],
+    additionalProperties: false,
+  },
+} satisfies ControlPlaneMcpToolDefinition<"create_handoff">
+
+export const rejectHandoffToolDefinition = {
+  name: "reject_handoff",
+  description:
+    "Rejects a pending handoff request so that no worker session is created.",
+  inputSchema: {
+    type: "object",
+    description: "Input for rejecting a pending handoff.",
+    properties: {
+      handoffId: {
+        type: "string",
+        description: "Handoff identifier to reject.",
+        minLength: 1,
+      },
+      reason: {
+        type: "string",
+        description: "Reason for rejecting the handoff.",
+        minLength: 1,
+      },
+    },
+    required: ["handoffId", "reason"],
+    additionalProperties: false,
+  },
+} satisfies ControlPlaneMcpToolDefinition<"reject_handoff">
+
 export const controlPlaneMcpToolDefinitions = [
   declarePhaseToolDefinition,
   registerArtifactToolDefinition,
+  createHandoffToolDefinition,
+  rejectHandoffToolDefinition,
 ] as const
 
 export interface CreateControlPlaneMcpToolsDeps {
   phaseController: Pick<PhaseController, "handlePhaseDeclaration">
   artifactService: Pick<ArtifactService, "register">
+  handoffService?: Pick<HandoffService, "createHandoff" | "rejectHandoff">
 }
 
 export interface ControlPlaneMcpTools {
@@ -143,10 +227,14 @@ export interface ControlPlaneMcpTools {
   handlers: {
     declare_phase: (input: unknown) => Promise<PhaseTransitionResult>
     register_artifact: (input: unknown) => Promise<ArtifactRecord>
+    create_handoff: (input: unknown) => Promise<HandoffResult>
+    reject_handoff: (input: unknown) => Promise<HandoffRecord>
   }
   tools: readonly [
     ControlPlaneMcpTool<"declare_phase", PhaseTransitionResult>,
     ControlPlaneMcpTool<"register_artifact", ArtifactRecord>,
+    ControlPlaneMcpTool<"create_handoff", HandoffResult>,
+    ControlPlaneMcpTool<"reject_handoff", HandoffRecord>,
   ]
 }
 
@@ -166,12 +254,36 @@ export async function handleRegisterArtifact(
   return deps.artifactService.register(parsed)
 }
 
+export async function handleCreateHandoff(
+  input: unknown,
+  deps: CreateControlPlaneMcpToolsDeps,
+): Promise<HandoffResult> {
+  if (!deps.handoffService) {
+    throw new Error("create_handoff requires handoffService (team runs only)")
+  }
+  const parsed = parseCreateHandoffInput(input)
+  return deps.handoffService.createHandoff(parsed)
+}
+
+export async function handleRejectHandoff(
+  input: unknown,
+  deps: CreateControlPlaneMcpToolsDeps,
+): Promise<HandoffRecord> {
+  if (!deps.handoffService) {
+    throw new Error("reject_handoff requires handoffService (team runs only)")
+  }
+  const parsed = parseRejectHandoffInput(input)
+  return deps.handoffService.rejectHandoff(parsed.handoffId, parsed.reason)
+}
+
 export function createControlPlaneMcpTools(
   deps: CreateControlPlaneMcpToolsDeps,
 ): ControlPlaneMcpTools {
   const handlers = {
     declare_phase: (input: unknown) => handleDeclarePhase(input, deps),
     register_artifact: (input: unknown) => handleRegisterArtifact(input, deps),
+    create_handoff: (input: unknown) => handleCreateHandoff(input, deps),
+    reject_handoff: (input: unknown) => handleRejectHandoff(input, deps),
   }
 
   return {
@@ -185,6 +297,14 @@ export function createControlPlaneMcpTools(
       {
         ...registerArtifactToolDefinition,
         handler: handlers.register_artifact,
+      },
+      {
+        ...createHandoffToolDefinition,
+        handler: handlers.create_handoff,
+      },
+      {
+        ...rejectHandoffToolDefinition,
+        handler: handlers.reject_handoff,
       },
     ],
   }
@@ -254,6 +374,43 @@ function parseArtifactProducer(input: unknown): ArtifactProducer | undefined {
   return {
     ...(role_id ? { role_id } : {}),
     ...(session_id ? { session_id } : {}),
+  }
+}
+
+function parseCreateHandoffInput(input: unknown): CreateHandoffInput {
+  const value = expectObject(input, createHandoffToolDefinition.name)
+  assertAllowedKeys(
+    value,
+    ["runId", "fromRole", "toRole", "summary", "context"],
+    createHandoffToolDefinition.name,
+  )
+
+  const context = optionalNonEmptyString(
+    value,
+    "context",
+    createHandoffToolDefinition.name,
+  )
+
+  return {
+    runId: requireNonEmptyString(value, "runId", createHandoffToolDefinition.name),
+    fromRole: requireNonEmptyString(value, "fromRole", createHandoffToolDefinition.name),
+    toRole: requireNonEmptyString(value, "toRole", createHandoffToolDefinition.name),
+    summary: requireNonEmptyString(value, "summary", createHandoffToolDefinition.name),
+    ...(context ? { context } : {}),
+  }
+}
+
+function parseRejectHandoffInput(input: unknown): RejectHandoffInput {
+  const value = expectObject(input, rejectHandoffToolDefinition.name)
+  assertAllowedKeys(
+    value,
+    ["handoffId", "reason"],
+    rejectHandoffToolDefinition.name,
+  )
+
+  return {
+    handoffId: requireNonEmptyString(value, "handoffId", rejectHandoffToolDefinition.name),
+    reason: requireNonEmptyString(value, "reason", rejectHandoffToolDefinition.name),
   }
 }
 
