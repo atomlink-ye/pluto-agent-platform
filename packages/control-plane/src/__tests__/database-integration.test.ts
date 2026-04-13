@@ -256,8 +256,8 @@ describe("Database Foundation (Plan 003 F1)", () => {
     it("list playbooks returns all in created order", async () => {
       const h = buildHarnessRecord()
       await harnessRepo.save(h)
-      const p1 = buildPlaybookRecord({ name: "First" })
-      const p2 = buildPlaybookRecord({ name: "Second" })
+      const p1 = buildPlaybookRecord({ name: "First", createdAt: "2024-01-01T00:00:00Z" })
+      const p2 = buildPlaybookRecord({ name: "Second", createdAt: "2024-01-01T00:00:01Z" })
       await playbookRepo.save(p1)
       await playbookRepo.save(p2)
       const list = await playbookRepo.list()

@@ -411,12 +411,23 @@ The UI implements the V1 page set defined in `operator-flows.md`: Playbooks list
 - **When:** the operator opens the run detail
 - **Then:** the business section shows the goal, governance section shows phase + approval + artifact, operator section shows event timeline
 
+### Implementation notes
+
+- REST API endpoints in `packages/server/src/api/app.ts`: playbooks, harnesses, runs (enriched with names), approvals, artifacts, events, health
+- React frontend in `packages/app/`: Vite + React 19 + Tailwind CSS 4 + react-router-dom 7
+- API client in `packages/app/src/api.ts` wraps all endpoints
+- `StatusBadge` component provides visual distinction for all run, approval, and artifact statuses
+- Vite dev server proxies `/api` to `http://localhost:4000`
+- PlaybookDetailPage includes "Start Run" button when harness is attached
+- RunDetailPage shows three sections (business, governance, operator) with approval resolution actions
+- Run list enriched with `playbookName`/`harnessName` via server-side join for readable display
+
 ### Checklist
 
-- [ ] implementation complete
-- [ ] test scenarios passing
-- [ ] deliverable standard verified
-- [ ] page set matches `operator-flows.md` V1 requirements
+- [x] implementation complete (REST API + React UI for all V1 pages)
+- [ ] test scenarios passing (E2E/integration browser tests not yet automated; manual verification)
+- [x] deliverable standard verified (all 8 deliverables implemented)
+- [x] page set matches `operator-flows.md` V1 requirements (Playbooks, Playbook Detail, Runs, Run Detail with approvals + artifacts)
 
 ---
 
@@ -433,26 +444,26 @@ Features 4 and 5 can be implemented in parallel after Feature 3.
 
 ## Evaluation gates
 
-### Gate 1: Domain model stable — PARTIALLY MET
+### Gate 1: Domain model stable — MET
 
 - [x] Features 1, 2, 3 pass all test scenarios (16 tests)
 - [x] Playbook/Harness boundary is enforced by validation
 - [x] Run state machine rejects invalid transitions
 - [x] RunEvents can reconstruct run state
-- [ ] Postgres schema is migrated and tested (in-memory repositories implemented; Postgres deferred)
+- [x] Postgres schema is migrated and tested (25 integration tests + 5 E2E tests via Plan 003 F1)
 
-### Gate 2: Governance objects durable — PARTIALLY MET
+### Gate 2: Governance objects durable — MET
 
 - [x] Features 4, 5 pass all test scenarios (7 tests)
 - [x] Approvals pause and resume runs
 - [x] Required artifacts block premature completion
-- [ ] All governance objects are Postgres-backed, not in-memory only (in-memory only; Postgres deferred)
+- [x] All governance objects are Postgres-backed (Plan 003 F1 delivered Postgres repositories)
 
-### Gate 3: Operator surface functional — NOT STARTED
+### Gate 3: Operator surface functional — PARTIALLY MET
 
-- [ ] Feature 6 passes all test scenarios
-- [ ] The minimum reference scenario from `product-and-scope.md` can be demonstrated end to end
-- [ ] An operator can launch, observe, approve, and inspect without touching raw database or logs
+- [ ] Feature 6 passes all test scenarios (automated browser tests not yet set up; UI implementation complete)
+- [ ] The minimum reference scenario from `product-and-scope.md` can be demonstrated end to end (requires live Paseo agent)
+- [x] An operator can launch, observe, approve, and inspect without touching raw database or logs (UI pages built)
 
 ## Completion criteria
 

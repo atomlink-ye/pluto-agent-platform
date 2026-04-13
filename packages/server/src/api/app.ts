@@ -115,6 +115,27 @@ export function createApp(deps: AppDeps): express.Express {
   // Runs
   // -----------------------------------------------------------------------
 
+  app.get("/api/runs", async (_req: Request, res: Response) => {
+    const runs = await deps.runRepository.list()
+
+    // Enrich with playbook and harness names for display
+    const enriched = await Promise.all(
+      runs.map(async (run) => {
+        const [pb, hs] = await Promise.all([
+          deps.playbookRepository.getById(run.playbook),
+          deps.harnessRepository.getById(run.harness),
+        ])
+        return {
+          ...run,
+          playbookName: pb?.name ?? run.playbook,
+          harnessName: hs?.name ?? run.harness,
+        }
+      }),
+    )
+
+    res.json({ data: enriched })
+  })
+
   app.post("/api/runs", async (req: Request, res: Response) => {
     try {
       const { playbookId, harnessId, inputs } = req.body

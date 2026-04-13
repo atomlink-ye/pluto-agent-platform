@@ -562,6 +562,21 @@ export class PostgresRunRepository extends PostgresRepositoryBase implements Run
     return toRunRecord(selection.run, selection.playbookPublicId, selection.harnessPublicId)
   }
 
+  async list(): Promise<RunRecord[]> {
+    const selections = await this.db
+      .select({
+        run: runs,
+        playbookPublicId: playbooks.publicId,
+        harnessPublicId: harnesses.publicId,
+      })
+      .from(runs)
+      .innerJoin(playbooks, eq(runs.playbookId, playbooks.id))
+      .innerJoin(harnesses, eq(runs.harnessId, harnesses.id))
+      .orderBy(asc(runs.createdAt))
+
+    return selections.map((s) => toRunRecord(s.run, s.playbookPublicId, s.harnessPublicId))
+  }
+
   async update(run: RunRecord): Promise<RunRecord> {
     const [playbookRow, harnessRow] = await Promise.all([
       this.requirePlaybookRow(run.playbook),

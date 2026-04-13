@@ -52,6 +52,7 @@ export interface HarnessRepository {
 export interface RunRepository {
   save(run: RunRecord): Promise<RunRecord>
   getById(id: string): Promise<RunRecord | null>
+  list(): Promise<RunRecord[]>
   update(run: RunRecord): Promise<RunRecord>
 }
 

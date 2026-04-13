@@ -97,6 +97,12 @@ export class InMemoryRunRepository implements RunRepository {
     return run ? cloneRecord(run) : null
   }
 
+  async list(): Promise<RunRecord[]> {
+    return Array.from(this.records.values())
+      .sort((left, right) => left.createdAt.localeCompare(right.createdAt))
+      .map((record) => cloneRecord(record))
+  }
+
   async update(run: RunRecord): Promise<RunRecord> {
     if (!this.records.has(run.id)) {
       throw new Error(`Run not found: ${run.id}`)

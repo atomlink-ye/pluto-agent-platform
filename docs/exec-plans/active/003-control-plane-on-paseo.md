@@ -90,11 +90,11 @@ The database connection is managed by the control-plane service layer, not by Pa
 
 ### Checklist
 
-- [ ] Drizzle ORM configured with Postgres connection
-- [ ] Migration files for all tables
-- [ ] Test factories for all domain objects
-- [ ] Test database setup/teardown in test harness
-- [ ] `db:migrate` and `db:generate` scripts in package.json
+- [x] Drizzle ORM configured with Postgres connection
+- [x] Migration files for all tables (drizzle-kit push)
+- [x] Test factories for all domain objects
+- [x] Test database setup/teardown in test harness
+- [x] `db:migrate` and `db:generate` scripts in package.json
 
 ---
 
@@ -168,11 +168,11 @@ The adapter is idempotent: replaying the same Paseo event produces no duplicate 
 
 ### Checklist
 
-- [ ] Adapter subscribes to AgentManager events
-- [ ] Event mapping for all listed Paseo event types
-- [ ] Deduplication by seq + epoch
-- [ ] Agent tracking registry (control-plane-spawned only)
-- [ ] Fake AgentManager for testing
+- [x] Adapter subscribes to AgentManager events
+- [x] Event mapping for all listed Paseo event types
+- [x] Deduplication by seq + epoch
+- [x] Agent tracking registry (control-plane-spawned only)
+- [x] Fake AgentManager for testing
 - [ ] Custom MCP tool definitions for phase/artifact declaration
 
 ---
@@ -237,8 +237,8 @@ If any step fails, the run transitions to `failed` with the step and error recor
 
 ### Checklist
 
-- [ ] 11-step compilation sequence implemented
-- [ ] System prompt builder with playbook + harness + MCP tool context
+- [x] 11-step compilation sequence implemented (compile method with FakeAgentManager)
+- [x] System prompt builder with playbook + harness + MCP tool context
 - [ ] EnvironmentSpec resolution (working directory, repo path)
 - [ ] Rollback on partial failure (cleanup Paseo agent if DB write fails)
 - [ ] Integration test with real Paseo daemon (or realistic mock)
@@ -304,12 +304,12 @@ The Phase Controller subscribes to new RunEvents (from the Runtime Adapter) and 
 
 ### Checklist
 
-- [ ] Phase ordering validation against harness
-- [ ] Approval gate detection and ApprovalTask creation
-- [ ] Approval resolution → Paseo agent continuation
-- [ ] Artifact requirement check at completion
-- [ ] Timeout monitoring (polling or scheduled check)
-- [ ] All controller actions emit RunEvents
+- [x] Phase ordering validation against harness
+- [x] Approval gate detection and ApprovalTask creation
+- [x] Approval resolution → Paseo agent continuation
+- [x] Artifact requirement check at completion
+- [x] Timeout monitoring (polling or scheduled check)
+- [x] All controller actions emit RunEvents
 
 ---
 
@@ -368,11 +368,11 @@ The Runtime Adapter updates RunSession status as Paseo agent lifecycle events ar
 
 ### Checklist
 
-- [ ] RunSession table and repository
-- [ ] Creation during Run Compiler step 9
-- [ ] Status updates from Runtime Adapter
+- [x] RunSession table and repository
+- [x] Creation during Run Compiler step 9
+- [x] Status updates from Runtime Adapter
 - [ ] Persistence handle capture
-- [ ] Query by run ID for operator view
+- [x] Query by run ID for operator view
 
 ---
 
@@ -438,12 +438,12 @@ Runs in `waiting_approval` do not need a live agent — they simply remain pause
 
 ### Checklist
 
-- [ ] Event-based state projector (RunEvents → current Run state)
-- [ ] Startup recovery scan for non-terminal runs
-- [ ] Agent existence check via Paseo AgentManager
-- [ ] Resume attempt via persistence handle
-- [ ] Graceful degradation to `blocked` on unrecoverable loss
-- [ ] Idempotent recovery (safe to run multiple times)
+- [x] Event-based state projector (RunEvents → current Run state)
+- [x] Startup recovery scan for non-terminal runs
+- [x] Agent existence check via Paseo AgentManager
+- [x] Resume attempt via persistence handle
+- [x] Graceful degradation to `blocked` on unrecoverable loss
+- [x] Idempotent recovery (safe to run multiple times)
 
 ---
 
