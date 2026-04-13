@@ -25,6 +25,8 @@ export type ApprovalStatus =
   | "expired"
   | "canceled"
 
+export type ApprovalDecision = "approved" | "denied"
+
 export type ApprovalActionClass =
   | "destructive_write"
   | "external_publish"
@@ -148,6 +150,8 @@ export interface Run {
   input: Record<string, unknown>
   status: RunStatus
   current_phase?: string
+  failureReason?: string
+  blockerReason?: string
 }
 
 export interface RunStage {
@@ -213,7 +217,7 @@ export interface Approval {
   resolution?: {
     resolved_at: string
     resolved_by: string
-    decision: Exclude<ApprovalStatus, "pending">
+    decision: ApprovalDecision
     note?: string
   } | null
   metadata?: Record<string, unknown>
@@ -284,3 +288,5 @@ export interface RunEventEnvelope<TPayload = unknown> {
   traceId?: string
   correlationId?: string
 }
+
+export * from "./validation.js"

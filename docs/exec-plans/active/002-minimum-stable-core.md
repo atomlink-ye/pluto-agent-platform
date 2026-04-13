@@ -2,48 +2,428 @@
 
 ## Purpose
 
-Define the first implementation slice that is large enough to validate the product model but small enough to stay governable.
+Deliver the first implementation slice that validates the product model: a governed run can be created from a playbook, observed by an operator, paused by approval, and completed with durable artifacts. This plan proves the playbook / harness / run model works end to end before expanding scope.
 
 ## Scope
 
-Phase 1 should deliver:
-
-- Playbook records and listing
-- Harness attachment and summary
-- Run creation and lifecycle state
-- EnvironmentSpec and RunSession boundaries sufficient for recovery and operator visibility
-- effective policy snapshot or equivalent governed policy record
-- Run list and run detail views
-- durable approvals
-- durable artifact registration
-- Postgres-backed durable product state
+- Playbook CRUD and listing
+- Harness CRUD and attachment to playbook
+- Run creation, lifecycle state machine, and durable persistence
+- Run Plan compilation from playbook + harness
+- Run Event append-only log
+- EnvironmentSpec and RunSession boundaries sufficient for recovery
+- Effective policy snapshot at run creation
+- Durable approval tasks linked to runs
+- Durable artifact registration linked to runs
+- Postgres-backed storage for all product objects
+- Operator-facing playbook list, run list, and run detail views
 
 ## Non-goals
 
-- broad enterprise administration
-- full graph authoring
-- advanced analytics
-- wide surface parity
+- Broad enterprise administration or RBAC
+- Full DAG/BPM graph authoring
+- Advanced analytics beyond basic operator visibility
+- Multi-surface parity
+- Rich team orchestration modes (supervisor-led, shared-room)
+- Trigger/webhook system
 
-## Suggested implementation order
+## Authority references
 
-1. contracts and core domain model
-2. Postgres-backed durable records
-3. run lifecycle, EnvironmentSpec, RunSession, and policy snapshot records
-4. approval / artifact linkage and runtime projection boundary
-5. operator-facing playbook and run views
+- `ARCHITECTURE.md` — module layout, source-of-truth rules, execution authority boundary
+- `docs/product-specs/product-and-scope.md` — minimum reference scenario, product invariants
+- `docs/product-specs/core-domain-model.md` — all object definitions and boundaries
+- `docs/product-specs/operator-flows.md` — V1 page set and flow expectations
+- `docs/contracts/*.md` — field-level contracts for each domain object
+- `docs/design-docs/execution-model.md` — playbook/harness/run relationship
+
+## Actors
+
+| Actor | Description | Authority |
+|---|---|---|
+| Operator | Engineer managing agent runs through the platform UI | Create playbooks, start runs, resolve approvals, inspect artifacts |
+| System (control plane) | The platform's run lifecycle engine | Compile run plans, enforce harness rules, register events, project state |
+| Runtime (Paseo kernel) | The underlying agent execution runtime | Execute agent sessions, emit timeline events, request permissions |
+
+---
+
+## Feature 1: Playbook Records
+
+### User story
+
+> As an operator, I want to create and browse playbooks, so that I can define reusable task intent before starting any run.
+
+### Specification
+
+A playbook is a durable record in Postgres containing task intent fields defined in `core-domain-model.md` section 1. Playbooks must not contain harness concerns (approval policy, timeout, retry). Schema validation rejects harness-scoped fields.
+
+- Input: playbook data with name, description, goal, instructions, inputs, artifact expectations, quality bar
+- Output: persisted playbook record with generated ID and timestamps
+- Error: validation failure returns structured error explaining which fields are invalid or which harness-scoped fields were present
+
+### Deliverable standard
+
+1. Playbook can be created with minimum required fields
+2. Playbook with missing required fields is rejected with an explainable error
+3. Playbook containing harness-scoped fields (approval, timeout, retry) is rejected
+4. Playbooks are listed with name, description, and creation time
+5. Single playbook can be retrieved by ID
+
+### Test scenarios
+
+#### Scenario 1.1: Create a valid playbook
+
+- **Given:** a playbook payload with all required fields
+- **When:** the playbook is submitted
+- **Then:** a persisted record exists in Postgres with a generated ID, and all fields match the input
+
+#### Scenario 1.2: Reject a playbook missing required fields
+
+- **Given:** a playbook payload missing the `goal` field
+- **When:** the playbook is submitted
+- **Then:** creation fails with a validation error naming the missing field
+
+#### Scenario 1.3: Reject harness-scoped fields in playbook
+
+- **Given:** a playbook payload that includes an `approval_policy` field
+- **When:** the playbook is submitted
+- **Then:** creation fails with an error explaining that approval policy belongs to Harness
+
+#### Scenario 1.4: List playbooks
+
+- **Given:** three playbooks exist
+- **When:** the playbook list is requested
+- **Then:** all three are returned with name, description, and created timestamp
+
+### Checklist
+
+- [ ] implementation complete
+- [ ] test scenarios passing
+- [ ] deliverable standard verified
+- [ ] playbook contract doc consistent
+
+---
+
+## Feature 2: Harness Records and Attachment
+
+### User story
+
+> As an operator, I want to attach a governance harness to a playbook, so that runs created from it are constrained by approval rules, phase structure, and timeout expectations.
+
+### Specification
+
+A harness is a durable record in Postgres containing governance fields defined in `core-domain-model.md` section 2. A harness must not contain business task intent. A harness defines a phase skeleton (ordered, named phases), approval rules, timeout, retry, and evidence requirements. A harness can be attached to a playbook (many-to-one: one harness can serve multiple playbooks).
+
+### Deliverable standard
+
+1. Harness can be created with a phase skeleton and approval rules
+2. Harness containing task-intent fields (goal, instructions) is rejected
+3. Phase names within a harness are unique and ordered
+4. A harness can be attached to an existing playbook
+5. Playbook detail view shows the attached harness summary
+
+### Test scenarios
+
+#### Scenario 2.1: Create a valid harness
+
+- **Given:** a harness payload with phases `[collect, analyze, review]` and an approval rule for the `review` phase
+- **When:** the harness is submitted
+- **Then:** a persisted record exists with the correct phase order and approval rules
+
+#### Scenario 2.2: Reject duplicate phase names
+
+- **Given:** a harness payload with phases `[collect, collect, review]`
+- **When:** the harness is submitted
+- **Then:** creation fails with an error naming the duplicate phase
+
+#### Scenario 2.3: Reject task-intent fields in harness
+
+- **Given:** a harness payload that includes a `goal` field
+- **When:** the harness is submitted
+- **Then:** creation fails explaining that goal belongs to Playbook
+
+#### Scenario 2.4: Attach harness to playbook
+
+- **Given:** an existing playbook and an existing harness
+- **When:** the harness is attached to the playbook
+- **Then:** retrieving the playbook includes the harness summary
+
+### Checklist
+
+- [ ] implementation complete
+- [ ] test scenarios passing
+- [ ] deliverable standard verified
+- [ ] harness contract doc consistent
+
+---
+
+## Feature 3: Run Creation and Lifecycle
+
+### User story
+
+> As an operator, I want to start a governed run from a playbook, so that I can observe its progress through defined phases and know when it is blocked, waiting approval, or complete.
+
+### Specification
+
+A run is created from one playbook + one harness + concrete inputs. On creation, the system compiles an initial Run Plan from the harness phase skeleton and records an effective policy snapshot. The run transitions through lifecycle states defined in `core-domain-model.md` section 3. Only valid state transitions are allowed. Each transition appends a RunEvent to the durable event log.
+
+Valid state transitions:
+
+```
+queued → initializing → running → waiting_approval → running → succeeded
+                                                   → failed
+                      → blocked → running
+                      → failed
+         → canceled (from any non-terminal state)
+```
+
+### Deliverable standard
+
+1. Run is created from playbook + harness + inputs and starts in `queued`
+2. Initial Run Plan is compiled with phases from the harness
+3. Effective policy snapshot is recorded at creation time
+4. Each state transition appends a durable RunEvent
+5. Invalid state transitions are rejected (e.g., `succeeded` → `running`)
+6. Run carries `failureReason` when failed and `blockerReason` when blocked
+7. `EnvironmentSpec` and `RunSession` linkage is recorded when runtime sessions are established
+
+### Test scenarios
+
+#### Scenario 3.1: Create a run from playbook + harness
+
+- **Given:** a playbook with harness attached and valid inputs
+- **When:** a run is created
+- **Then:** run exists in Postgres with status `queued`, linked to the playbook and harness, with an initial RunPlan and a policy snapshot
+
+#### Scenario 3.2: Valid state transitions
+
+- **Given:** a run in `running` state
+- **When:** `waiting_approval` transition is triggered
+- **Then:** run status is `waiting_approval` and a `run.status_changed` event is appended
+
+#### Scenario 3.3: Invalid state transition rejected
+
+- **Given:** a run in `succeeded` state
+- **When:** a transition to `running` is attempted
+- **Then:** the transition is rejected with an error explaining the invalid transition
+
+#### Scenario 3.4: Run records failure reason
+
+- **Given:** a run in `running` state
+- **When:** the run transitions to `failed` with reason "required artifact missing"
+- **Then:** run status is `failed` and `failureReason` is "required artifact missing"
+
+#### Scenario 3.5: Event-driven state reconstruction
+
+- **Given:** a sequence of RunEvents for a run: `created → started → phase.entered(collect) → approval.requested → approval.resolved → succeeded`
+- **When:** run state is projected from events only
+- **Then:** the projected state matches: status `succeeded`, all phases complete, approval resolved
+
+### Checklist
+
+- [ ] implementation complete
+- [ ] test scenarios passing
+- [ ] deliverable standard verified
+- [ ] run contract doc consistent
+- [ ] run-event contract doc consistent
+
+---
+
+## Feature 4: Durable Approvals
+
+### User story
+
+> As an operator, I want approvals to be durable and visible, so that I can review what was requested, decide, and have the run continue governed by my decision.
+
+### Specification
+
+When a run reaches an approval gate (defined by the harness), an ApprovalTask is created as a durable Postgres record linked to the run. The run transitions to `waiting_approval`. The approval task contains the action under review, severity, and run context. Resolution (approved/denied) is recorded durably and triggers a RunEvent. On approval, the run resumes. On denial, the run transitions to `failed` or `blocked` depending on harness rules.
+
+### Deliverable standard
+
+1. Approval task is created as a durable record when a run reaches an approval gate
+2. Run transitions to `waiting_approval` when an approval is pending
+3. Approval task is visible in the run detail view
+4. Resolving an approval records the decision and resolver metadata
+5. Approved → run resumes `running`; denied → run transitions to `failed` or `blocked`
+6. Approval events are appended to the run event log
+
+### Test scenarios
+
+#### Scenario 4.1: Approval pauses run
+
+- **Given:** a run in `running` state entering a phase with an approval rule
+- **When:** the approval gate is reached
+- **Then:** run status is `waiting_approval`, an ApprovalTask exists with status `pending`
+
+#### Scenario 4.2: Approval resolution resumes run
+
+- **Given:** a run in `waiting_approval` with a pending approval
+- **When:** the operator approves
+- **Then:** approval status is `approved`, run status is `running`, and `approval.resolved` event is appended
+
+#### Scenario 4.3: Denial transitions run
+
+- **Given:** a run in `waiting_approval` with a pending approval
+- **When:** the operator denies
+- **Then:** approval status is `denied`, run status is `failed` with `failureReason` referencing the denied approval
+
+#### Scenario 4.4: Approval without prior request is rejected
+
+- **Given:** a run in `running` state with no pending approvals
+- **When:** an approval resolution is submitted
+- **Then:** the resolution is rejected
+
+### Checklist
+
+- [ ] implementation complete
+- [ ] test scenarios passing
+- [ ] deliverable standard verified
+- [ ] approval states match `core-domain-model.md` section 8
+
+---
+
+## Feature 5: Durable Artifact Registration
+
+### User story
+
+> As an operator, I want artifacts produced during a run to be durably registered, so that I can inspect formal outputs and verify that required deliverables were produced.
+
+### Specification
+
+When a run produces an output matching an artifact expectation from the playbook, the control plane registers an Artifact record in Postgres linked to the run. Artifact identity and metadata are durable; payload may remain in runtime-local storage. At run completion, the system checks whether all required artifact expectations are satisfied. A run cannot transition to `succeeded` if required artifacts are missing.
+
+### Deliverable standard
+
+1. Artifact is registered as a durable record linked to a run
+2. Artifact metadata includes type, title, producer context, and run linkage
+3. Required artifacts missing at run completion block the `succeeded` transition
+4. Artifacts are visible in the run detail view
+
+### Test scenarios
+
+#### Scenario 5.1: Register an artifact
+
+- **Given:** a run in `running` state
+- **When:** an artifact of type `retro_document` is produced
+- **Then:** an Artifact record exists in Postgres linked to the run, with type and title
+
+#### Scenario 5.2: Required artifact blocks completion
+
+- **Given:** a playbook expects a required artifact of type `retro_document`, and the run has not registered one
+- **When:** the run attempts to transition to `succeeded`
+- **Then:** the transition is rejected with reason "required artifact missing: retro_document"
+
+#### Scenario 5.3: All required artifacts present allows completion
+
+- **Given:** a playbook expects a required artifact of type `retro_document`, and the run has registered one
+- **When:** the run transitions to `succeeded`
+- **Then:** the transition succeeds
+
+### Checklist
+
+- [ ] implementation complete
+- [ ] test scenarios passing
+- [ ] deliverable standard verified
+- [ ] artifact boundary rule from `core-domain-model.md` section 9 enforced
+
+---
+
+## Feature 6: Operator Views
+
+### User story
+
+> As an operator, I want to browse playbooks, inspect runs, resolve approvals, and view artifacts through a UI, so that I can manage governed execution without reading raw logs or database records.
+
+### Specification
+
+The UI implements the V1 page set defined in `operator-flows.md`: Playbooks list, Playbook Detail, Runs list, Run Detail (business + governance + operator sections), Approvals surface, and Artifact sections. The UI consumes durable product-layer data from the control plane, not raw Paseo runtime streams for business objects.
+
+### Deliverable standard
+
+1. Playbook list shows playbooks with name, description, harness summary
+2. Playbook detail shows intent, inputs, expected artifacts, quality bar, and attached harness
+3. "Start Run" from playbook detail creates a run and navigates to run detail
+4. Run list shows runs with status, phase, playbook, blocker indicator
+5. Run list distinguishes `running`, `waiting_approval`, `blocked`, `failed`, `succeeded` visually
+6. Run detail shows three sections: business (goal, inputs, summary), governance (phase, approvals, artifacts, blockers), operator (events, sessions)
+7. Approval resolution is actionable from run detail
+8. Artifacts are visible in run detail with type, title, and producer context
+
+### Test scenarios
+
+#### Scenario 6.1: Start a run from playbook
+
+- **Given:** a playbook with an attached harness exists
+- **When:** the operator opens the playbook detail and clicks "Start Run" with inputs
+- **Then:** a run is created, and the operator sees the run detail view with status `queued` or `initializing`
+
+#### Scenario 6.2: Run list shows live state
+
+- **Given:** runs exist in states `running`, `waiting_approval`, `failed`, and `succeeded`
+- **When:** the operator opens the run list
+- **Then:** each run shows its status with visual distinction, and `waiting_approval` shows a blocker indicator
+
+#### Scenario 6.3: Resolve approval from run detail
+
+- **Given:** a run in `waiting_approval` with a visible approval card
+- **When:** the operator clicks "Approve"
+- **Then:** approval is resolved, run status updates to `running`, and the approval card shows `approved`
+
+#### Scenario 6.4: Run detail shows three-layer information
+
+- **Given:** a run with a playbook goal, active phase, one pending approval, and one registered artifact
+- **When:** the operator opens the run detail
+- **Then:** the business section shows the goal, governance section shows phase + approval + artifact, operator section shows event timeline
+
+### Checklist
+
+- [ ] implementation complete
+- [ ] test scenarios passing
+- [ ] deliverable standard verified
+- [ ] page set matches `operator-flows.md` V1 requirements
+
+---
+
+## Implementation sequence
+
+1. **Feature 1: Playbook Records** — no dependencies; establishes database foundation and first domain object
+2. **Feature 2: Harness Records** — depends on Feature 1 (attachment relationship)
+3. **Feature 3: Run Creation and Lifecycle** — depends on Features 1, 2 (run requires playbook + harness)
+4. **Feature 4: Durable Approvals** — depends on Feature 3 (approvals are linked to runs)
+5. **Feature 5: Durable Artifact Registration** — depends on Feature 3 (artifacts are linked to runs)
+6. **Feature 6: Operator Views** — depends on all above (UI consumes all product objects)
+
+Features 4 and 5 can be implemented in parallel after Feature 3.
 
 ## Evaluation gates
 
-- a run can be created from a playbook
-- run status and phase are durable and visible
-- environment and session linkage are visible enough to support recovery reasoning
-- effective policy for a run can be explained
-- approval can pause and resume governed execution
-- artifacts are durably registered
-- operator can distinguish active, blocked, waiting-approval, and terminal runs
+### Gate 1: Domain model stable
+
+- Features 1, 2, 3 pass all test scenarios
+- Playbook/Harness boundary is enforced by validation
+- Run state machine rejects invalid transitions
+- RunEvents can reconstruct run state
+- Postgres schema is migrated and tested
+
+### Gate 2: Governance objects durable
+
+- Features 4, 5 pass all test scenarios
+- Approvals pause and resume runs
+- Required artifacts block premature completion
+- All governance objects are Postgres-backed, not in-memory only
+
+### Gate 3: Operator surface functional
+
+- Feature 6 passes all test scenarios
+- The minimum reference scenario from `product-and-scope.md` can be demonstrated end to end
+- An operator can launch, observe, approve, and inspect without touching raw database or logs
 
 ## Completion criteria
 
-- the minimum reference scenario in product scope can be demonstrated end to end
-- authoritative docs remain consistent with the implementation slice
+The plan is complete when all of the following are true:
+
+- all six features pass their deliverable standard
+- all test scenarios pass
+- the minimum reference scenario runs end to end
+- `ARCHITECTURE.md`, `core-domain-model.md`, `operator-flows.md`, and all contracts remain consistent with the implementation
+- no terminology drift back to old workflow language
