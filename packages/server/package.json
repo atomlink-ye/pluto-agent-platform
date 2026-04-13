@@ -17,7 +17,7 @@
     "test": "vitest run --passWithNoTests"
   },
   "dependencies": {
-    "@pluto-agent-platform/control-plane": "0.1.0",
-    "@pluto-agent-platform/contracts": "0.1.0"
+    "@pluto-agent-platform/control-plane": "workspace:*",
+    "@pluto-agent-platform/contracts": "workspace:*"
   }
 }
