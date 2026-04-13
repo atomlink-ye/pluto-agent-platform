@@ -173,7 +173,7 @@ The adapter is idempotent: replaying the same Paseo event produces no duplicate 
 - [x] Deduplication by seq + epoch
 - [x] Agent tracking registry (control-plane-spawned only)
 - [x] Fake AgentManager for testing
-- [ ] Custom MCP tool definitions for phase/artifact declaration
+- [x] Custom MCP tool definitions for phase/artifact declaration (declare_phase, register_artifact with JSON Schema + handlers)
 
 ---
 
