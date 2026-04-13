@@ -240,12 +240,16 @@ describe("Database Foundation (Plan 003 F1)", () => {
 
     it("run session record round-trips", async () => {
       const { run } = await seedRun()
-      const session = buildRunSessionRecord({ run_id: run.id })
+      const session = buildRunSessionRecord({
+        run_id: run.id,
+        persistence_handle: "provider-session-db",
+      })
       const saved = await runSessionRepo.save(session)
       const fetched = await runSessionRepo.getById(saved.id)
       expect(fetched).not.toBeNull()
       expect(fetched!.provider).toBe(session.provider)
       expect(fetched!.status).toBe("active")
+      expect(fetched!.persistence_handle).toBe("provider-session-db")
     })
   })
 

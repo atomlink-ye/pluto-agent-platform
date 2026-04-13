@@ -131,6 +131,7 @@ kind: run_session
 id: rs_001
 run_id: run_123
 session_id: sess_001
+persistence_handle: provider_session_001
 role_id: analyst
 provider: claude
 mode_id: default
@@ -145,6 +146,7 @@ status: running
 | `id` | yes | string | stable run-session record id |
 | `run_id` | yes | string | owning run |
 | `session_id` | yes | string | runtime session handle |
+| `persistence_handle` | no | string | provider session id used for resume/recovery when available |
 | `role_id` | no | string | assigned role |
 | `provider` | no | string | runtime provider |
 | `mode_id` | no | string | provider mode or preset |

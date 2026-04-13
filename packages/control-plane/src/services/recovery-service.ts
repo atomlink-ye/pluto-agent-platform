@@ -118,6 +118,7 @@ export class RecoveryService {
 
     const agentId = activeSession.session_id
     const agent = this.deps.agentManager.getAgent?.(agentId)
+    const persistenceHandle = activeSession.persistence_handle
 
     if (agent) {
       // Step 4: Agent exists — rebind
@@ -132,7 +133,9 @@ export class RecoveryService {
     // Step 6: Cannot resume — mark as blocked
     try {
       await this.deps.runService.transition(runId, "blocked", {
-        blockerReason: "runtime session lost, awaiting operator intervention",
+        blockerReason: persistenceHandle
+          ? "runtime session lost; persistence handle available for resume, awaiting operator intervention"
+          : "runtime session lost, awaiting operator intervention",
       })
     } catch {
       // May already be blocked

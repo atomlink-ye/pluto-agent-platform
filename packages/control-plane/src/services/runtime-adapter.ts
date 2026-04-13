@@ -12,8 +12,10 @@ import type {
 import type {
   AgentManager,
   AgentManagerEvent,
+  AgentPersistenceHandle,
   AgentStreamEvent,
   AgentTimelineItem,
+  ManagedAgent,
 } from "../paseo/types.js"
 import type { RuntimeAdapterRegistry } from "./run-compiler.js"
 import type { RunService } from "./run-service.js"
@@ -91,6 +93,11 @@ export class RuntimeAdapter implements RuntimeAdapterRegistry {
   }
 
   private async handleManagerEvent(event: AgentManagerEvent): Promise<void> {
+    if (event.type === "agent_state") {
+      await this.handleAgentState(event.agent)
+      return
+    }
+
     if (event.type !== "agent_stream") {
       return
     }
@@ -130,6 +137,21 @@ export class RuntimeAdapter implements RuntimeAdapterRegistry {
         processingKeys.delete(dedupeKey)
       }
     }
+  }
+
+  private async handleAgentState(agent: ManagedAgent): Promise<void> {
+    const runId = this.trackedRunByAgentId.get(agent.id)
+
+    if (!runId) {
+      return
+    }
+
+    await this.upsertRunSession(
+      runId,
+      agent.id,
+      agent.provider,
+      agent.persistence,
+    )
   }
 
   private buildDedupeKey(agentId: string, seq?: number, epoch?: string): string | null {
@@ -219,7 +241,10 @@ export class RuntimeAdapter implements RuntimeAdapterRegistry {
     event: Extract<AgentStreamEvent, { type: "thread_started" }>,
     correlationId?: string | null,
   ): Promise<void> {
-    await this.upsertRunSession(runId, agentId, event.provider)
+    await this.upsertRunSession(runId, agentId, event.provider, {
+      provider: event.provider,
+      sessionId: event.sessionId,
+    })
 
     await this.appendRunEvent({
       runId,
@@ -239,15 +264,18 @@ export class RuntimeAdapter implements RuntimeAdapterRegistry {
     runId: string,
     agentId: string,
     provider: string,
+    persistence?: AgentPersistenceHandle | null,
   ): Promise<RunSessionRecord> {
     const sessions = await this.runSessionRepo.listByRunId(runId)
     const existing = sessions.find((session) => session.session_id === agentId)
     const timestamp = new Date().toISOString()
+    const persistenceHandle = persistence?.sessionId
 
     if (existing) {
       return this.runSessionRepo.update({
         ...existing,
         provider,
+        persistence_handle: persistenceHandle ?? existing.persistence_handle,
         status: "active",
         updatedAt: timestamp,
       })
@@ -258,6 +286,7 @@ export class RuntimeAdapter implements RuntimeAdapterRegistry {
       id: `sess_${randomUUID()}`,
       run_id: runId,
       session_id: agentId,
+      persistence_handle: persistenceHandle,
       provider,
       status: "active",
       createdAt: timestamp,

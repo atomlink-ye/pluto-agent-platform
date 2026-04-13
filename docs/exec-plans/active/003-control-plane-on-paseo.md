@@ -371,7 +371,7 @@ The Runtime Adapter updates RunSession status as Paseo agent lifecycle events ar
 - [x] RunSession table and repository
 - [x] Creation during Run Compiler step 9
 - [x] Status updates from Runtime Adapter
-- [ ] Persistence handle capture
+- [x] Persistence handle capture
 - [x] Query by run ID for operator view
 
 ---

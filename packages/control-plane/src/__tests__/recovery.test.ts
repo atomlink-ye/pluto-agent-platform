@@ -220,6 +220,32 @@ describe("Recovery Service (Plan 003 F6)", () => {
       expect(updatedRun!.status).toBe("blocked")
       expect(updatedRun!.blockerReason).toContain("runtime session lost")
     })
+
+    it("surfaces persistence_handle availability during recovery", async () => {
+      const { run } = await createRunInState("running")
+
+      await runSessionRepo.save({
+        kind: "run_session",
+        id: "sess_resumable",
+        run_id: run.id,
+        session_id: "agent_gone",
+        persistence_handle: "provider-session-456",
+        provider: "claude",
+        status: "active",
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      })
+
+      const result = await recoveryService.recoverRun(run.id)
+
+      expect(result).toBe("blocked")
+
+      const updatedRun = await runRepo.getById(run.id)
+      const sessions = await runSessionRepo.listByRunId(run.id)
+
+      expect(updatedRun!.blockerReason).toContain("persistence handle available")
+      expect(sessions[0].persistence_handle).toBe("provider-session-456")
+    })
   })
 
   describe("Scenario 6.4: Waiting-approval survives restart", () => {

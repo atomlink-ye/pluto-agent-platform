@@ -186,6 +186,7 @@ export const runSessions = pgTable(
       .notNull()
       .references(() => runs.id, { onDelete: "cascade" }),
     sessionId: text("session_id").notNull(),
+    persistenceHandle: text("persistence_handle"),
     roleId: text("role_id"),
     provider: text("provider"),
     modeId: text("mode_id"),

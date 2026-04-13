@@ -131,6 +131,26 @@ describe("RunSession Binding (Plan 003 F5)", () => {
       const agents = agentManager.listAgents()
       expect(sessions[0].session_id).toBe(agents[0].id)
     })
+
+    it("stores persistence_handle when the spawned agent exposes one", async () => {
+      const { playbook, harness } = await createPlaybookAndHarness()
+
+      agentManager.nextCreatedAgentPersistence = {
+        provider: "claude",
+        sessionId: "provider-session-123",
+      }
+
+      const run = await compiler.compile({
+        playbookId: playbook.id,
+        harnessId: harness.id,
+        inputs: { topic: "test" },
+      })
+
+      const sessions = await runSessionRepo.listByRunId(run.id)
+
+      expect(sessions).toHaveLength(1)
+      expect(sessions[0].persistence_handle).toBe("provider-session-123")
+    })
   })
 
   describe("Scenario 5.2: Session status tracks agent lifecycle", () => {

@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto"
 import type {
   AgentManager,
   AgentManagerEvent,
+  AgentPersistenceHandle,
   AgentPromptInput,
   AgentRunOptions,
   AgentRunResult,
@@ -24,8 +25,10 @@ export class FakeAgentManager implements AgentManager {
   private readonly agents = new Map<string, ManagedAgent>()
 
   public readonly runAgentCalls: RunAgentCall[] = []
+  public readonly killedAgentIds: string[] = []
   public shouldFailCreateAgent = false
   public shouldFailRunAgent = false
+  public nextCreatedAgentPersistence: AgentPersistenceHandle | null = null
 
   subscribe(callback: AgentSubscriber, _options?: SubscribeOptions): () => void {
     this.subscribers.add(callback)
@@ -51,11 +54,13 @@ export class FakeAgentManager implements AgentManager {
       cwd: config.cwd,
       lifecycle: "idle",
       config,
-      persistence: null,
+      persistence: this.nextCreatedAgentPersistence,
       createdAt: new Date(),
       updatedAt: new Date(),
       labels: options?.labels ?? {},
     }
+
+    this.nextCreatedAgentPersistence = null
 
     this.agents.set(id, agent)
 
@@ -78,6 +83,11 @@ export class FakeAgentManager implements AgentManager {
       finalText: "Task completed",
       timeline: [],
     }
+  }
+
+  async killAgent(agentId: string): Promise<void> {
+    this.killedAgentIds.push(agentId)
+    this.agents.delete(agentId)
   }
 
   emit(agentId: string, event: AgentStreamEvent, seq?: number, epoch?: string): void {

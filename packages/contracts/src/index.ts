@@ -183,6 +183,7 @@ export interface RunSession {
   id: string
   run_id: string
   session_id: string
+  persistence_handle?: string
   role_id?: string
   provider?: string
   mode_id?: string

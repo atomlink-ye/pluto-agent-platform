@@ -138,8 +138,49 @@ describe("RuntimeAdapter", () => {
         expect.objectContaining({
           run_id: run.id,
           session_id: "agent-1",
+          persistence_handle: "sess_runtime_1",
           provider: "claude",
           status: "active",
+        }),
+      ]),
+    )
+  })
+
+  it("updates RunSession persistence_handle from agent_state events", async () => {
+    const run = await createRunningRun()
+    const createdAgent = await agentManager.createAgent({ provider: "claude", cwd: "/tmp" }, "agent-1")
+
+    await runSessionRepo.save({
+      kind: "run_session",
+      id: "sess_1",
+      run_id: run.id,
+      session_id: "agent-1",
+      provider: "claude",
+      status: "active",
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    })
+
+    adapter.trackRun(run.id, "agent-1")
+    const stop = adapter.start()
+
+    createdAgent.persistence = {
+      provider: "claude",
+      sessionId: "provider-session-from-state",
+    }
+    createdAgent.updatedAt = new Date()
+    agentManager.emitAgentState(createdAgent)
+
+    await flush()
+    stop()
+
+    const sessions = await runSessionRepo.listByRunId(run.id)
+
+    expect(sessions).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          session_id: "agent-1",
+          persistence_handle: "provider-session-from-state",
         }),
       ]),
     )

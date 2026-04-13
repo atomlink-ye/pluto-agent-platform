@@ -96,6 +96,8 @@ export class RunCompiler {
 
       const agent = await this.deps.agentManager.createAgent(agentConfig)
       agentId = agent.id
+      const persistenceHandle = this.deps.agentManager.getAgent?.(agent.id)?.persistence?.sessionId
+        ?? agent.persistence?.sessionId
 
       // Step 8: Register agent in Runtime Adapter tracking
       this.deps.runtimeAdapter.trackRun(run.id, agent.id)
@@ -106,6 +108,7 @@ export class RunCompiler {
         id: `sess_${randomUUID()}`,
         run_id: run.id,
         session_id: agent.id,
+        persistence_handle: persistenceHandle,
         provider: agentConfig.provider,
         status: "active",
         createdAt: new Date().toISOString(),
