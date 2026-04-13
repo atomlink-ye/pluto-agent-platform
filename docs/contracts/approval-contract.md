@@ -62,6 +62,13 @@ metadata: {}
 - `expired`
 - `canceled`
 
+## `ApprovalDecision`
+
+Subset of `ApprovalStatus` used for resolution decisions:
+
+- `approved`
+- `denied`
+
 ## `requested_by`
 
 ```yaml

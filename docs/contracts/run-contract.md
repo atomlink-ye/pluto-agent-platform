@@ -37,6 +37,8 @@ current_phase: analyze
 | `input` | yes | object | concrete run inputs |
 | `status` | yes | `RunStatus` | current run state |
 | `current_phase` | no | string | active phase |
+| `failureReason` | no | string | reason when status is `failed` |
+| `blockerReason` | no | string | reason when status is `blocked` |
 
 ### `RunStatus`
 

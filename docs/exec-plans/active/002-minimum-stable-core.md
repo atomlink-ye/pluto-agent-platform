@@ -94,12 +94,19 @@ A playbook is a durable record in Postgres containing task intent fields defined
 - **When:** the playbook list is requested
 - **Then:** all three are returned with name, description, and created timestamp
 
+### Implementation notes
+
+- Domain layer implemented in `packages/control-plane/src/services/playbook-service.ts`
+- Validation via Zod schema in `packages/contracts/src/validation.ts` (`PlaybookCreateSchema`)
+- In-memory repository; Postgres-backed repository deferred to integration phase
+- 6 tests covering scenarios 1.1–1.4 plus getById and null-ID cases
+
 ### Checklist
 
-- [ ] implementation complete
-- [ ] test scenarios passing
-- [ ] deliverable standard verified
-- [ ] playbook contract doc consistent
+- [x] implementation complete (domain layer)
+- [x] test scenarios passing (6 tests)
+- [x] deliverable standard verified
+- [x] playbook contract doc consistent
 
 ---
 
@@ -147,12 +154,19 @@ A harness is a durable record in Postgres containing governance fields defined i
 - **When:** the harness is attached to the playbook
 - **Then:** retrieving the playbook includes the harness summary
 
+### Implementation notes
+
+- Domain layer implemented in `packages/control-plane/src/services/harness-service.ts`
+- Validation via Zod schema in `packages/contracts/src/validation.ts` (`HarnessCreateSchema`)
+- Phase uniqueness enforced via `superRefine`; task-intent fields rejected with "belongs to Playbook" messages
+- Attachment stores `HarnessSummary` (id, name, description, phases) on the playbook record
+
 ### Checklist
 
-- [ ] implementation complete
-- [ ] test scenarios passing
-- [ ] deliverable standard verified
-- [ ] harness contract doc consistent
+- [x] implementation complete (domain layer)
+- [x] test scenarios passing (4 tests)
+- [x] deliverable standard verified
+- [x] harness contract doc consistent
 
 ---
 
@@ -218,13 +232,21 @@ queued → initializing → running → waiting_approval → running → succeed
 - **When:** run state is projected from events only
 - **Then:** the projected state matches: status `succeeded`, all phases complete, approval resolved
 
+### Implementation notes
+
+- State machine in `packages/control-plane/src/services/run-state-machine.ts` encodes all 19 transitions from `run-governance.md` section 2
+- RunService creates Run, RunPlan, PolicySnapshot, and appends `run.created` event atomically
+- All transitions emit `run.status_changed` events with `fromStatus`/`toStatus` payload; `projectRunStateFromEvents` also handles distinct event types (`run.started`, `run.succeeded`, etc.) for forward compatibility
+- `EnvironmentSpec` and `RunSession` types exist in contracts; `RunSessionRepository` interface and in-memory impl exist. Service-level session linkage deferred to runtime integration phase
+- Informal transition diagram shows "canceled from any non-terminal state" but the authoritative `run-governance.md` only allows cancel from `running`, `blocked`, `waiting_approval`; implementation follows `run-governance.md`
+
 ### Checklist
 
-- [ ] implementation complete
-- [ ] test scenarios passing
-- [ ] deliverable standard verified
-- [ ] run contract doc consistent
-- [ ] run-event contract doc consistent
+- [x] implementation complete (domain layer)
+- [x] test scenarios passing (6 tests)
+- [x] deliverable standard verified (6 of 7; deliverable 7 — RunSession linkage — deferred to runtime integration)
+- [x] run contract doc consistent (failureReason, blockerReason added to contract)
+- [x] run-event contract doc consistent
 
 ---
 
@@ -273,12 +295,19 @@ When a run reaches an approval gate (defined by the harness), an ApprovalTask is
 - **When:** an approval resolution is submitted
 - **Then:** the resolution is rejected
 
+### Implementation notes
+
+- ApprovalService in `packages/control-plane/src/services/approval-service.ts`
+- Approval record is saved before the run transitions to `waiting_approval` (ordered for consistency)
+- Denial always transitions the run to `failed` with `failureReason: "approval denied: <id>"`. The spec mentions "or blocked depending on harness rules" but `waiting_approval → blocked` is not in `run-governance.md` allowed transitions; harness-rule-dependent denial routing deferred
+- `ApprovalDecision` type added to contracts (`"approved" | "denied"`) to narrow the resolution decision
+
 ### Checklist
 
-- [ ] implementation complete
-- [ ] test scenarios passing
-- [ ] deliverable standard verified
-- [ ] approval states match `core-domain-model.md` section 8
+- [x] implementation complete (domain layer)
+- [x] test scenarios passing (4 tests)
+- [x] deliverable standard verified (5 of 6; deliverable 5 partial — denial always goes to `failed`, `blocked` path deferred)
+- [x] approval states match `core-domain-model.md` section 8 (ApprovalDecision type added to contract)
 
 ---
 
@@ -319,12 +348,19 @@ When a run produces an output matching an artifact expectation from the playbook
 - **When:** the run transitions to `succeeded`
 - **Then:** the transition succeeds
 
+### Implementation notes
+
+- ArtifactService in `packages/control-plane/src/services/artifact-service.ts`
+- All `ArtifactExpectation` entries in playbook are treated as required (no `required` flag on the type); this is an intentional V1 simplification
+- `checkRequiredArtifacts` matches by `type` and optionally `format`
+- Integrated into `RunService.transition` — the `succeeded` transition calls `checkRequiredArtifacts` and rejects with `"required artifact missing: <type>"` if unmet
+
 ### Checklist
 
-- [ ] implementation complete
-- [ ] test scenarios passing
-- [ ] deliverable standard verified
-- [ ] artifact boundary rule from `core-domain-model.md` section 9 enforced
+- [x] implementation complete (domain layer)
+- [x] test scenarios passing (3 tests)
+- [x] deliverable standard verified
+- [x] artifact boundary rule from `core-domain-model.md` section 9 enforced
 
 ---
 
@@ -397,26 +433,26 @@ Features 4 and 5 can be implemented in parallel after Feature 3.
 
 ## Evaluation gates
 
-### Gate 1: Domain model stable
+### Gate 1: Domain model stable — PARTIALLY MET
 
-- Features 1, 2, 3 pass all test scenarios
-- Playbook/Harness boundary is enforced by validation
-- Run state machine rejects invalid transitions
-- RunEvents can reconstruct run state
-- Postgres schema is migrated and tested
+- [x] Features 1, 2, 3 pass all test scenarios (16 tests)
+- [x] Playbook/Harness boundary is enforced by validation
+- [x] Run state machine rejects invalid transitions
+- [x] RunEvents can reconstruct run state
+- [ ] Postgres schema is migrated and tested (in-memory repositories implemented; Postgres deferred)
 
-### Gate 2: Governance objects durable
+### Gate 2: Governance objects durable — PARTIALLY MET
 
-- Features 4, 5 pass all test scenarios
-- Approvals pause and resume runs
-- Required artifacts block premature completion
-- All governance objects are Postgres-backed, not in-memory only
+- [x] Features 4, 5 pass all test scenarios (7 tests)
+- [x] Approvals pause and resume runs
+- [x] Required artifacts block premature completion
+- [ ] All governance objects are Postgres-backed, not in-memory only (in-memory only; Postgres deferred)
 
-### Gate 3: Operator surface functional
+### Gate 3: Operator surface functional — NOT STARTED
 
-- Feature 6 passes all test scenarios
-- The minimum reference scenario from `product-and-scope.md` can be demonstrated end to end
-- An operator can launch, observe, approve, and inspect without touching raw database or logs
+- [ ] Feature 6 passes all test scenarios
+- [ ] The minimum reference scenario from `product-and-scope.md` can be demonstrated end to end
+- [ ] An operator can launch, observe, approve, and inspect without touching raw database or logs
 
 ## Completion criteria
 
