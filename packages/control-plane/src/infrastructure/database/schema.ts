@@ -5,6 +5,7 @@ import type {
   Playbook,
   PolicySnapshot,
   RoleSpec,
+  TeamSpec,
   RunEventEnvelope,
   RunPlan,
   RunSession,
@@ -88,6 +89,25 @@ export const roles = pgTable(
     metadata: jsonb("metadata").$type<RoleSpec["metadata"]>(),
   },
   (table) => [uniqueIndex("roles_public_id_idx").on(table.publicId)],
+)
+
+export const teams = pgTable(
+  "teams",
+  {
+    ...auditColumns,
+    tenantId: text("tenant_id"),
+    publicId: text("public_id").notNull(),
+    kind: text("kind").$type<TeamSpec["kind"]>().notNull(),
+    name: text("name").notNull(),
+    description: text("description").notNull(),
+    leadRole: text("lead_role"),
+    roles: jsonb("roles").$type<TeamSpec["roles"]>().notNull(),
+    coordination: jsonb("coordination").$type<TeamSpec["coordination"]>(),
+    memoryScope: text("memory_scope"),
+    worktreePolicy: text("worktree_policy"),
+    metadata: jsonb("metadata").$type<TeamSpec["metadata"]>(),
+  },
+  (table) => [uniqueIndex("teams_public_id_idx").on(table.publicId)],
 )
 
 export const runs = pgTable(

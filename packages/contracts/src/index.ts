@@ -266,7 +266,7 @@ export interface TeamSpec {
   lead_role?: string
   roles: string[]
   coordination?: {
-    mode?: "supervisor-led" | "shared-room" | "pipeline" | "committee" | string
+    mode: "supervisor-led" | "shared-room" | "pipeline" | "committee" | string
     shared_room?: boolean
     heartbeat_minutes?: number
   }

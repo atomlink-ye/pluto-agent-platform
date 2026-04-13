@@ -15,8 +15,10 @@ import {
   InMemoryRunRepository,
   InMemoryRunSessionRepository,
   InMemoryRoleSpecRepository,
+  InMemoryTeamSpecRepository,
   PlaybookService,
   RoleService,
+  TeamService,
   RunService,
 } from "@pluto-agent-platform/control-plane"
 import { afterAll, beforeAll, describe, expect, it } from "vitest"
@@ -60,6 +62,20 @@ interface RoleResponse {
   description: string
   tools?: string[]
   provider_preset?: string
+}
+
+interface TeamResponse {
+  id: string
+  kind: string
+  name: string
+  description: string
+  lead_role: string
+  roles: string[]
+  coordination?: {
+    mode: string
+    shared_room?: boolean
+    heartbeat_minutes?: number
+  }
 }
 
 interface RunResponse {
@@ -166,6 +182,29 @@ const createReferenceScenario = async (): Promise<ReferenceScenario> => {
   return { harness, playbook: attachedPlaybook }
 }
 
+const createRole = async (name: string, description: string): Promise<RoleResponse> => {
+  const { response, body } = await postJson<RoleResponse>("/api/roles", {
+    name,
+    description,
+  })
+
+  expect(response.status).toBe(201)
+  return expectData(body)
+}
+
+const createTeam = async (leadRole: string, roles: string[]): Promise<TeamResponse> => {
+  const suffix = unique("team")
+  const { response, body } = await postJson<TeamResponse>("/api/teams", {
+    name: `Retro Team ${suffix}`,
+    description: "Role set for preparing a sprint retrospective",
+    lead_role: leadRole,
+    roles,
+  })
+
+  expect(response.status).toBe(201)
+  return expectData(body)
+}
+
 const createRun = async (playbookId: string, harnessId: string): Promise<RunResponse> => {
   const { response, body } = await postJson<RunResponse>("/api/runs", {
     playbookId,
@@ -192,11 +231,13 @@ describe("Operator API integration", () => {
     const artifactRepo = new InMemoryArtifactRepository()
     const runSessionRepo = new InMemoryRunSessionRepository()
     const roleRepo = new InMemoryRoleSpecRepository()
+    const teamRepo = new InMemoryTeamSpecRepository()
 
     // Services
     const playbookService = new PlaybookService(playbookRepo)
     const harnessService = new HarnessService(harnessRepo, playbookRepo)
     const roleService = new RoleService(roleRepo)
+    const teamService = new TeamService(teamRepo, roleRepo)
     const artifactService = new ArtifactService(artifactRepo, runRepo, playbookRepo, runEventRepo)
     const runService = new RunService(
       playbookRepo,
@@ -213,12 +254,14 @@ describe("Operator API integration", () => {
       playbookService,
       harnessService,
       roleService,
+      teamService,
       runService,
       approvalService,
       artifactService,
       playbookRepository: playbookRepo,
       harnessRepository: harnessRepo,
       roleRepository: roleRepo,
+      teamRepository: teamRepo,
       runRepository: runRepo,
       runEventRepository: runEventRepo,
       approvalRepository: approvalRepo,
@@ -306,6 +349,32 @@ describe("Operator API integration", () => {
     const detailResult = await requestJson<RoleResponse>(`/api/roles/${role.id}`)
     expect(detailResult.response.status).toBe(200)
     expect(expectData(detailResult.body)).toEqual(expect.objectContaining({ id: role.id }))
+  })
+
+  it("creates and lists teams through /api/teams", async () => {
+    const researcher = await createRole("Researcher", "Gathers information")
+    const analyst = await createRole("Analyst", "Synthesizes findings")
+
+    const team = await createTeam(analyst.id, [researcher.id, analyst.id])
+
+    expect(team).toEqual(
+      expect.objectContaining({
+        kind: "team",
+        lead_role: analyst.id,
+        roles: [researcher.id, analyst.id],
+        coordination: { mode: "supervisor-led" },
+      }),
+    )
+
+    const listResult = await requestJson<TeamResponse[]>("/api/teams")
+    expect(listResult.response.status).toBe(200)
+    expect(expectData(listResult.body)).toEqual(
+      expect.arrayContaining([expect.objectContaining({ id: team.id })]),
+    )
+
+    const detailResult = await requestJson<TeamResponse>(`/api/teams/${team.id}`)
+    expect(detailResult.response.status).toBe(200)
+    expect(expectData(detailResult.body)).toEqual(expect.objectContaining({ id: team.id }))
   })
 
   it("attaches a harness via POST /api/harnesses/:id/attach/:playbookId", async () => {

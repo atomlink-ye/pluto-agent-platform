@@ -12,6 +12,8 @@ import type {
   PolicySnapshotRepository,
   RoleSpecRecord,
   RoleSpecRepository,
+  TeamSpecRecord,
+  TeamSpecRepository,
   RunEventRepository,
   RunPlanRepository,
   RunRecord,
@@ -113,6 +115,42 @@ export class InMemoryRoleSpecRepository implements RoleSpecRepository {
     const stored = cloneRecord(role)
 
     this.records.set(role.id, stored)
+
+    return cloneRecord(stored)
+  }
+}
+
+export class InMemoryTeamSpecRepository implements TeamSpecRepository {
+  private readonly records = new Map<string, TeamSpecRecord>()
+
+  async save(team: TeamSpecRecord): Promise<TeamSpecRecord> {
+    const stored = cloneRecord(team)
+
+    this.records.set(team.id, stored)
+
+    return cloneRecord(stored)
+  }
+
+  async getById(id: string): Promise<TeamSpecRecord | null> {
+    const team = this.records.get(id)
+
+    return team ? cloneRecord(team) : null
+  }
+
+  async list(): Promise<TeamSpecRecord[]> {
+    return Array.from(this.records.values())
+      .sort((left, right) => left.createdAt.localeCompare(right.createdAt))
+      .map((record) => cloneRecord(record))
+  }
+
+  async update(team: TeamSpecRecord): Promise<TeamSpecRecord> {
+    if (!this.records.has(team.id)) {
+      throw new Error(`TeamSpec not found: ${team.id}`)
+    }
+
+    const stored = cloneRecord(team)
+
+    this.records.set(team.id, stored)
 
     return cloneRecord(stored)
   }

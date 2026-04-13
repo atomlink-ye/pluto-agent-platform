@@ -8,6 +8,7 @@ import {
   InMemoryPlaybookRepository,
   InMemoryHarnessRepository,
   InMemoryRoleSpecRepository,
+  InMemoryTeamSpecRepository,
   InMemoryRunRepository,
   InMemoryRunEventRepository,
   InMemoryRunPlanRepository,
@@ -18,6 +19,7 @@ import {
   PlaybookService,
   HarnessService,
   RoleService,
+  TeamService,
   RunService,
   ApprovalService,
   ArtifactService,
@@ -32,6 +34,7 @@ const PORT = Number(process.env.PORT ?? 4000)
 const playbookRepo = new InMemoryPlaybookRepository()
 const harnessRepo = new InMemoryHarnessRepository()
 const roleRepo = new InMemoryRoleSpecRepository()
+const teamRepo = new InMemoryTeamSpecRepository()
 const runRepo = new InMemoryRunRepository()
 const runEventRepo = new InMemoryRunEventRepository()
 const runPlanRepo = new InMemoryRunPlanRepository()
@@ -44,6 +47,7 @@ const runSessionRepo = new InMemoryRunSessionRepository()
 const playbookService = new PlaybookService(playbookRepo)
 const harnessService = new HarnessService(harnessRepo, playbookRepo)
 const roleService = new RoleService(roleRepo)
+const teamService = new TeamService(teamRepo, roleRepo)
 const artifactService = new ArtifactService(artifactRepo, runRepo, playbookRepo, runEventRepo)
 const runService = new RunService(
   playbookRepo,
@@ -61,12 +65,14 @@ const app = createApp({
   playbookService,
   harnessService,
   roleService,
+  teamService,
   runService,
   approvalService,
   artifactService,
   playbookRepository: playbookRepo,
   harnessRepository: harnessRepo,
   roleRepository: roleRepo,
+  teamRepository: teamRepo,
   runRepository: runRepo,
   runEventRepository: runEventRepo,
   approvalRepository: approvalRepo,

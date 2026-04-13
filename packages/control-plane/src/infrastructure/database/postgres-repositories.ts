@@ -5,6 +5,7 @@ import type {
   Playbook,
   PolicySnapshot,
   RoleSpec,
+  TeamSpec,
   Run,
   RunEventEnvelope,
   RunPlan,
@@ -26,6 +27,8 @@ import type {
   PolicySnapshotRepository,
   RoleSpecRecord,
   RoleSpecRepository,
+  TeamSpecRecord,
+  TeamSpecRepository,
   RunEventRepository,
   RunPlanRepository,
   RunRecord,
@@ -40,6 +43,7 @@ import {
   playbooks,
   policySnapshots,
   roles,
+  teams,
   runEvents,
   runPlans,
   runs,
@@ -53,6 +57,7 @@ export type PostgresDatabase = PostgresJsDatabase<typeof schema>
 type HarnessRow = typeof harnesses.$inferSelect
 type PlaybookRow = typeof playbooks.$inferSelect
 type RoleRow = typeof roles.$inferSelect
+type TeamRow = typeof teams.$inferSelect
 type RunRow = typeof runs.$inferSelect
 type RunPlanRow = typeof runPlans.$inferSelect
 type RunEventRow = typeof runEvents.$inferSelect
@@ -156,6 +161,22 @@ const toRoleSpecRecord = (row: RoleRow): RoleSpecRecord =>
     isolation: row.isolation ?? undefined,
     background: row.background ?? undefined,
     hooks: row.hooks ?? undefined,
+    metadata: row.metadata ?? undefined,
+  })
+
+const toTeamSpecRecord = (row: TeamRow): TeamSpecRecord =>
+  clone({
+    id: row.publicId,
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt,
+    kind: row.kind,
+    name: row.name,
+    description: row.description,
+    lead_role: row.leadRole ?? undefined,
+    roles: row.roles,
+    coordination: row.coordination ?? undefined,
+    memory_scope: row.memoryScope ?? undefined,
+    worktree_policy: row.worktreePolicy ?? undefined,
     metadata: row.metadata ?? undefined,
   })
 
@@ -604,6 +625,95 @@ export class PostgresRoleSpecRepository extends PostgresRepositoryBase implement
 
     if (!saved) {
       throw new Error(`RoleSpec not found: ${role.id}`)
+    }
+
+    return saved
+  }
+}
+
+export class PostgresTeamSpecRepository extends PostgresRepositoryBase implements TeamSpecRepository {
+  async save(team: TeamSpecRecord): Promise<TeamSpecRecord> {
+    await this.db
+      .insert(teams)
+      .values({
+        publicId: team.id,
+        createdAt: team.createdAt,
+        updatedAt: team.updatedAt,
+        kind: team.kind,
+        name: team.name,
+        description: team.description,
+        leadRole: team.lead_role,
+        roles: team.roles,
+        coordination: team.coordination,
+        memoryScope: team.memory_scope,
+        worktreePolicy: team.worktree_policy,
+        metadata: team.metadata,
+      })
+      .onConflictDoUpdate({
+        target: teams.publicId,
+        set: {
+          createdAt: team.createdAt,
+          updatedAt: team.updatedAt,
+          kind: team.kind,
+          name: team.name,
+          description: team.description,
+          leadRole: team.lead_role,
+          roles: team.roles,
+          coordination: team.coordination,
+          memoryScope: team.memory_scope,
+          worktreePolicy: team.worktree_policy,
+          metadata: team.metadata,
+        },
+      })
+
+    const saved = await this.getById(team.id)
+
+    if (!saved) {
+      throw new Error(`TeamSpec not found: ${team.id}`)
+    }
+
+    return saved
+  }
+
+  async getById(id: string): Promise<TeamSpecRecord | null> {
+    const [row] = await this.db.select().from(teams).where(eq(teams.publicId, id)).limit(1)
+
+    return row ? toTeamSpecRecord(row) : null
+  }
+
+  async list(): Promise<TeamSpecRecord[]> {
+    const rows = await this.db.select().from(teams).orderBy(asc(teams.createdAt))
+
+    return rows.map((row) => toTeamSpecRecord(row))
+  }
+
+  async update(team: TeamSpecRecord): Promise<TeamSpecRecord> {
+    const [updated] = await this.db
+      .update(teams)
+      .set({
+        createdAt: team.createdAt,
+        updatedAt: team.updatedAt,
+        kind: team.kind,
+        name: team.name,
+        description: team.description,
+        leadRole: team.lead_role,
+        roles: team.roles,
+        coordination: team.coordination,
+        memoryScope: team.memory_scope,
+        worktreePolicy: team.worktree_policy,
+        metadata: team.metadata,
+      })
+      .where(eq(teams.publicId, team.id))
+      .returning({ id: teams.id })
+
+    if (!updated) {
+      throw new Error(`TeamSpec not found: ${team.id}`)
+    }
+
+    const saved = await this.getById(team.id)
+
+    if (!saved) {
+      throw new Error(`TeamSpec not found: ${team.id}`)
     }
 
     return saved

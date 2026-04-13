@@ -15,6 +15,7 @@ import type {
   PlaybookRepository,
   HarnessRepository,
   RoleSpecRepository,
+  TeamSpecRepository,
   RunRepository,
   RunEventRepository,
   ApprovalRepository,
@@ -24,6 +25,7 @@ import type {
 import type { PlaybookService } from "@pluto-agent-platform/control-plane"
 import type { HarnessService } from "@pluto-agent-platform/control-plane"
 import type { RoleService } from "@pluto-agent-platform/control-plane"
+import type { TeamService } from "@pluto-agent-platform/control-plane"
 import type { RunService } from "@pluto-agent-platform/control-plane"
 import type { ApprovalService } from "@pluto-agent-platform/control-plane"
 import type { ArtifactService } from "@pluto-agent-platform/control-plane"
@@ -32,12 +34,14 @@ export interface AppDeps {
   playbookService: PlaybookService
   harnessService: HarnessService
   roleService: RoleService
+  teamService: TeamService
   runService: RunService
   approvalService: ApprovalService
   artifactService: ArtifactService
   playbookRepository: PlaybookRepository
   harnessRepository: HarnessRepository
   roleRepository: RoleSpecRepository
+  teamRepository: TeamSpecRepository
   runRepository: RunRepository
   runEventRepository: RunEventRepository
   approvalRepository: ApprovalRepository
@@ -98,6 +102,33 @@ export function createApp(deps: AppDeps): express.Express {
     try {
       const role = await deps.roleService.create(req.body)
       res.status(201).json({ data: role })
+    } catch (err) {
+      res.status(400).json({ error: err instanceof Error ? err.message : "Invalid input" })
+    }
+  })
+
+  // -----------------------------------------------------------------------
+  // Teams
+  // -----------------------------------------------------------------------
+
+  app.get("/api/teams", async (_req: Request, res: Response) => {
+    const teams = await deps.teamService.list()
+    res.json({ data: teams })
+  })
+
+  app.get("/api/teams/:id", async (req: Request, res: Response) => {
+    const team = await deps.teamService.getById(param(req, "id"))
+    if (!team) {
+      res.status(404).json({ error: "Team not found" })
+      return
+    }
+    res.json({ data: team })
+  })
+
+  app.post("/api/teams", async (req: Request, res: Response) => {
+    try {
+      const team = await deps.teamService.create(req.body)
+      res.status(201).json({ data: team })
     } catch (err) {
       res.status(400).json({ error: err instanceof Error ? err.message : "Invalid input" })
     }

@@ -5,6 +5,7 @@ import type {
   Playbook,
   PolicySnapshot,
   RoleSpec,
+  TeamSpec,
   Run,
   RunEventEnvelope,
   RunPlan,
@@ -33,6 +34,8 @@ export interface HarnessRecord extends Harness, DomainRecord {}
 
 export interface RoleSpecRecord extends RoleSpec, DomainRecord {}
 
+export interface TeamSpecRecord extends TeamSpec, DomainRecord {}
+
 export interface RunRecord extends Run, DomainRecord {}
 
 export interface ApprovalRecord extends Approval, DomainRecord {}
@@ -57,6 +60,13 @@ export interface RoleSpecRepository {
   getById(id: string): Promise<RoleSpecRecord | null>
   list(): Promise<RoleSpecRecord[]>
   update(role: RoleSpecRecord): Promise<RoleSpecRecord>
+}
+
+export interface TeamSpecRepository {
+  save(team: TeamSpecRecord): Promise<TeamSpecRecord>
+  getById(id: string): Promise<TeamSpecRecord | null>
+  list(): Promise<TeamSpecRecord[]>
+  update(team: TeamSpecRecord): Promise<TeamSpecRecord>
 }
 
 export interface RunRepository {

@@ -128,6 +128,33 @@ const rejectRoleGovernanceField = (field: string) =>
     }
   })
 
+const rejectTeamGovernanceField = (field: string) =>
+  z.unknown().optional().superRefine((value, ctx) => {
+    if (value !== undefined) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: `${field} belongs to Harness or higher-level policy, not TeamSpec`,
+      })
+    }
+  })
+
+const CoordinationPolicySchema = z
+  .object({
+    mode: z.string().optional(),
+    shared_room: z.boolean().optional(),
+    heartbeat_minutes: z.number().int().positive().optional(),
+  })
+  .strict()
+  .superRefine((coordination, ctx) => {
+    if (coordination.mode !== undefined && coordination.mode !== "supervisor-led") {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "coordination.mode must be supervisor-led for this phase",
+        path: ["mode"],
+      })
+    }
+  })
+
 export const PlaybookCreateSchema = z
   .object({
     name: NonEmptyStringSchema,
@@ -228,6 +255,40 @@ export const RoleSpecCreateSchema = z
   })
   .strict()
 
+export const TeamSpecCreateSchema = z
+  .object({
+    name: NonEmptyStringSchema,
+    description: NonEmptyStringSchema,
+    lead_role: NonEmptyStringSchema,
+    roles: StringArraySchema.min(1),
+    coordination: CoordinationPolicySchema.optional(),
+    memory_scope: z.string().optional(),
+    worktree_policy: z.string().optional(),
+    metadata: z.record(z.string(), z.unknown()).optional(),
+    approval_policy: rejectTeamGovernanceField("approval_policy"),
+    approvals: rejectTeamGovernanceField("approvals"),
+    timeout: rejectTeamGovernanceField("timeout"),
+    timeouts: rejectTeamGovernanceField("timeouts"),
+    retry: rejectTeamGovernanceField("retry"),
+    retries: rejectTeamGovernanceField("retries"),
+    requirements: rejectTeamGovernanceField("requirements"),
+    phases: rejectTeamGovernanceField("phases"),
+    status_model: rejectTeamGovernanceField("status_model"),
+    observability: rejectTeamGovernanceField("observability"),
+    escalation: rejectTeamGovernanceField("escalation"),
+  })
+  .strict()
+  .superRefine((team, ctx) => {
+    if (!team.roles.includes(team.lead_role)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "lead_role must be included in roles",
+        path: ["lead_role"],
+      })
+    }
+  })
+
 export type PlaybookCreateInput = z.infer<typeof PlaybookCreateSchema>
 export type HarnessCreateInput = z.infer<typeof HarnessCreateSchema>
 export type RoleSpecCreateInput = z.infer<typeof RoleSpecCreateSchema>
+export type TeamSpecCreateInput = z.infer<typeof TeamSpecCreateSchema>
