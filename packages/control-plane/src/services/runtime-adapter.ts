@@ -1,96 +1,120 @@
-/**
- * Runtime Adapter — Plan 003 Feature 2
- *
- * Subscribes to Paseo AgentManager events and projects them into durable RunEvents.
- * Only tracks agents spawned by the control plane.
- */
 import { randomUUID } from "node:crypto"
-import type { RunEventEnvelope } from "@pluto-agent-platform/contracts"
+
+import type { ApprovalDecision, RunEventEnvelope } from "@pluto-agent-platform/contracts"
+
 import type {
-  RunEventRepository,
-  RunRepository,
-  RunSessionRepository,
-  RunSessionRecord,
-  ApprovalRepository,
   ApprovalRecord,
+  ApprovalRepository,
+  RunEventRepository,
+  RunSessionRecord,
+  RunSessionRepository,
 } from "../repositories.js"
-import type { RunService } from "./run-service.js"
 import type {
   AgentManager,
   AgentManagerEvent,
   AgentStreamEvent,
+  AgentTimelineItem,
 } from "../paseo/types.js"
 import type { RuntimeAdapterRegistry } from "./run-compiler.js"
+import type { RunService } from "./run-service.js"
+
+type TimelineToolCall =
+  | { kind: "declare_phase"; phase: string }
+  | { kind: "register_artifact"; artifact: Record<string, unknown> }
 
 export class RuntimeAdapter implements RuntimeAdapterRegistry {
-  /** Maps agentId → runId for tracked agents */
-  private trackedAgents = new Map<string, string>()
-  /** Maps runId → agentId for reverse lookup */
-  private trackedRuns = new Map<string, string>()
-  /** Deduplication: set of `${seq}:${epoch}` keys */
-  private seenEvents = new Set<string>()
+  private readonly trackedRunByAgentId = new Map<string, string>()
+  private readonly trackedAgentIdByRunId = new Map<string, string>()
+  private readonly seenEventKeys = new Set<string>()
+  private unsubscribe?: () => void
 
   constructor(
     private readonly agentManager: AgentManager,
     private readonly runEventRepo: RunEventRepository,
-    private readonly runRepo: RunRepository,
-    private readonly runSessionRepo: RunSessionRepository,
     private readonly approvalRepo: ApprovalRepository,
     private readonly runService: RunService,
+    private readonly runSessionRepo: RunSessionRepository,
   ) {}
 
   trackRun(runId: string, agentId: string): void {
-    this.trackedAgents.set(agentId, runId)
-    this.trackedRuns.set(runId, agentId)
+    const previousAgentId = this.trackedAgentIdByRunId.get(runId)
+
+    if (previousAgentId && previousAgentId !== agentId) {
+      this.trackedRunByAgentId.delete(previousAgentId)
+    }
+
+    this.trackedRunByAgentId.set(agentId, runId)
+    this.trackedAgentIdByRunId.set(runId, agentId)
   }
 
   untrackRun(runId: string): void {
-    const agentId = this.trackedRuns.get(runId)
+    const agentId = this.trackedAgentIdByRunId.get(runId)
+
     if (agentId) {
-      this.trackedAgents.delete(agentId)
+      this.trackedRunByAgentId.delete(agentId)
     }
-    this.trackedRuns.delete(runId)
+
+    this.trackedAgentIdByRunId.delete(runId)
   }
 
   isTracked(agentId: string): boolean {
-    return this.trackedAgents.has(agentId)
+    return this.trackedRunByAgentId.has(agentId)
   }
 
   getRunIdForAgent(agentId: string): string | undefined {
-    return this.trackedAgents.get(agentId)
+    return this.trackedRunByAgentId.get(agentId)
   }
 
-  /**
-   * Start listening to Paseo events. Returns an unsubscribe function.
-   */
   start(): () => void {
-    return this.agentManager.subscribe((event) => {
-      this.handleEvent(event).catch((err) => {
-        console.error("[RuntimeAdapter] Error handling event:", err)
-      })
-    })
-  }
-
-  private async handleEvent(event: AgentManagerEvent): Promise<void> {
-    if (event.type !== "agent_stream") return
-
-    const { agentId, event: streamEvent, seq, epoch } = event
-
-    // Only process tracked agents
-    const runId = this.trackedAgents.get(agentId)
-    if (!runId) return
-
-    // Deduplication
-    if (seq != null && epoch != null) {
-      const dedupKey = `${seq}:${epoch}`
-      if (this.seenEvents.has(dedupKey)) return
-      this.seenEvents.add(dedupKey)
+    if (this.unsubscribe) {
+      return this.unsubscribe
     }
 
-    await this.mapEvent(runId, agentId, streamEvent)
+    const stop = this.agentManager.subscribe((event) => {
+      void this.handleManagerEvent(event)
+    })
+
+    this.unsubscribe = () => {
+      stop()
+      this.unsubscribe = undefined
+    }
+
+    return this.unsubscribe
   }
 
-  private async mapEvent(
+  private async handleManagerEvent(event: AgentManagerEvent): Promise<void> {
+    if (event.type !== "agent_stream") {
+      return
+    }
+
+    const runId = this.trackedRunByAgentId.get(event.agentId)
+
+    if (!runId) {
+      return
+    }
+
+    const dedupeKey = this.buildDedupeKey(event.agentId, event.seq, event.epoch)
+
+    if (dedupeKey) {
+      if (this.seenEventKeys.has(dedupeKey)) {
+        return
+      }
+
+      this.seenEventKeys.add(dedupeKey)
+    }
+
+    await this.handleStreamEvent(runId, event.agentId, event.event)
+  }
+
+  private buildDedupeKey(agentId: string, seq?: number, epoch?: string): string | null {
+    if (seq == null || epoch == null) {
+      return null
+    }
+
+    return `${agentId}:${epoch}:${seq}`
+  }
+
+  private async handleStreamEvent(
     runId: string,
     agentId: string,
     event: AgentStreamEvent,
@@ -98,33 +122,51 @@ export class RuntimeAdapter implements RuntimeAdapterRegistry {
     switch (event.type) {
       case "thread_started":
         await this.handleThreadStarted(runId, agentId, event)
-        break
+        return
       case "turn_started":
-        await this.appendRunEvent(runId, "stage.started", {
-          provider: event.provider,
-          turnId: event.turnId,
+        await this.appendRunEvent({
+          runId,
+          eventType: "stage.started",
+          source: "session",
+          phase: event.phase ?? null,
+          stageId: event.stageId ?? null,
+          payload: {
+            provider: event.provider,
+            turnId: event.turnId,
+          },
         })
-        break
+        return
       case "turn_completed":
-        await this.appendRunEvent(runId, "stage.completed", {
-          provider: event.provider,
-          usage: event.usage,
-          turnId: event.turnId,
+        await this.appendRunEvent({
+          runId,
+          eventType: "stage.completed",
+          source: "session",
+          phase: event.phase ?? null,
+          stageId: event.stageId ?? null,
+          payload: {
+            provider: event.provider,
+            turnId: event.turnId,
+            usage: event.usage,
+          },
         })
-        break
+        return
       case "turn_failed":
         await this.handleTurnFailed(runId, event)
-        break
+        return
+      case "turn_canceled":
+        return
       case "permission_requested":
         await this.handlePermissionRequested(runId, event)
-        break
+        return
       case "permission_resolved":
         await this.handlePermissionResolved(runId, event)
-        break
+        return
       case "attention_required":
         await this.handleAttentionRequired(runId, event)
-        break
-      // timeline, turn_canceled, usage_updated are not mapped to RunEvents
+        return
+      case "timeline":
+        await this.handleTimelineEvent(runId, event)
+        return
     }
   }
 
@@ -133,46 +175,85 @@ export class RuntimeAdapter implements RuntimeAdapterRegistry {
     agentId: string,
     event: Extract<AgentStreamEvent, { type: "thread_started" }>,
   ): Promise<void> {
-    await this.appendRunEvent(runId, "session.created", {
-      sessionId: event.sessionId,
-      provider: event.provider,
-      agentId,
-    })
+    await this.upsertRunSession(runId, agentId, event.provider)
 
-    // Upsert RunSession
-    const existingSessions = await this.runSessionRepo.listByRunId(runId)
-    const existing = existingSessions.find((s) => s.session_id === agentId)
-    if (!existing) {
-      const sessionRecord: RunSessionRecord = {
-        kind: "run_session",
-        id: `sess_${randomUUID()}`,
-        run_id: runId,
-        session_id: agentId,
+    await this.appendRunEvent({
+      runId,
+      eventType: "session.created",
+      source: "session",
+      sessionId: event.sessionId,
+      payload: {
+        runtimeSessionId: event.sessionId,
+        agentId,
         provider: event.provider,
+      },
+    })
+  }
+
+  private async upsertRunSession(
+    runId: string,
+    agentId: string,
+    provider: string,
+  ): Promise<RunSessionRecord> {
+    const sessions = await this.runSessionRepo.listByRunId(runId)
+    const existing = sessions.find((session) => session.session_id === agentId)
+    const timestamp = new Date().toISOString()
+
+    if (existing) {
+      return this.runSessionRepo.update({
+        ...existing,
+        provider,
         status: "active",
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-      }
-      await this.runSessionRepo.save(sessionRecord)
+        updatedAt: timestamp,
+      })
     }
+
+    return this.runSessionRepo.save({
+      kind: "run_session",
+      id: `sess_${randomUUID()}`,
+      run_id: runId,
+      session_id: agentId,
+      provider,
+      status: "active",
+      createdAt: timestamp,
+      updatedAt: timestamp,
+    })
   }
 
   private async handleTurnFailed(
     runId: string,
     event: Extract<AgentStreamEvent, { type: "turn_failed" }>,
   ): Promise<void> {
-    await this.appendRunEvent(runId, "stage.failed", {
-      error: event.error,
-      code: event.code,
-      diagnostic: event.diagnostic,
+    const isRunFailure = event.severity === "run" || event.severity === "fatal"
+
+    await this.appendRunEvent({
+      runId,
+      eventType: isRunFailure ? "run.failed" : "stage.failed",
+      source: "session",
+      phase: event.phase ?? null,
+      stageId: event.stageId ?? null,
+      payload: {
+        provider: event.provider,
+        turnId: event.turnId,
+        error: event.error,
+        code: event.code,
+        diagnostic: event.diagnostic,
+        severity: event.severity,
+      },
     })
+
+    if (isRunFailure) {
+      await this.tryTransition(runId, "failed", {
+        failureReason: event.error,
+      })
+    }
   }
 
   private async handlePermissionRequested(
     runId: string,
     event: Extract<AgentStreamEvent, { type: "permission_requested" }>,
   ): Promise<void> {
-    // Create an ApprovalTask
+    const timestamp = new Date().toISOString()
     const approval: ApprovalRecord = {
       kind: "approval",
       id: `appr_${randomUUID()}`,
@@ -187,35 +268,88 @@ export class RuntimeAdapter implements RuntimeAdapterRegistry {
         reason: event.request.description,
       },
       resolution: null,
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
+      metadata: {
+        permissionRequestId: event.request.id,
+        permissionKind: event.request.kind,
+        permissionName: event.request.name,
+      },
+      createdAt: timestamp,
+      updatedAt: timestamp,
     }
-    await this.approvalRepo.save(approval)
 
-    await this.appendRunEvent(runId, "approval.requested", {
-      approvalId: approval.id,
-      permissionRequestId: event.request.id,
-      kind: event.request.kind,
-      name: event.request.name,
-      description: event.request.description,
+    const savedApproval = await this.approvalRepo.save(approval)
+
+    await this.appendRunEvent({
+      runId,
+      eventType: "approval.requested",
+      source: "session",
+      payload: {
+        approvalId: savedApproval.id,
+        permissionRequestId: event.request.id,
+        kind: event.request.kind,
+        name: event.request.name,
+        description: event.request.description,
+      },
     })
 
-    // Transition run to waiting_approval
-    try {
-      await this.runService.transition(runId, "waiting_approval")
-    } catch {
-      // May already be in waiting_approval
-    }
+    await this.tryTransition(runId, "waiting_approval")
   }
 
   private async handlePermissionResolved(
     runId: string,
     event: Extract<AgentStreamEvent, { type: "permission_resolved" }>,
   ): Promise<void> {
-    await this.appendRunEvent(runId, "approval.resolved", {
-      requestId: event.requestId,
-      allowed: event.resolution.allowed,
-      reason: event.resolution.reason,
+    const approval = await this.findApprovalByPermissionRequestId(runId, event.requestId)
+    const decision: ApprovalDecision = event.resolution.allowed ? "approved" : "denied"
+    const timestamp = new Date().toISOString()
+
+    if (approval && approval.status === "pending") {
+      await this.approvalRepo.update({
+        ...approval,
+        status: decision,
+        resolution: {
+          resolved_at: timestamp,
+          resolved_by: "runtime_adapter",
+          decision,
+          note: event.resolution.reason,
+        },
+        updatedAt: timestamp,
+      })
+    }
+
+    await this.appendRunEvent({
+      runId,
+      eventType: "approval.resolved",
+      source: "operator",
+      payload: {
+        approvalId: approval?.id,
+        requestId: event.requestId,
+        decision,
+        allowed: event.resolution.allowed,
+        reason: event.resolution.reason,
+      },
+    })
+
+    if (event.resolution.allowed) {
+      await this.tryTransition(runId, "running")
+      return
+    }
+
+    await this.tryTransition(runId, "failed", {
+      failureReason: event.resolution.reason ?? `permission denied: ${event.requestId}`,
+    })
+  }
+
+  private async findApprovalByPermissionRequestId(
+    runId: string,
+    requestId: string,
+  ): Promise<ApprovalRecord | undefined> {
+    const approvals = await this.approvalRepo.listByRunId(runId)
+
+    return approvals.find((approval) => {
+      const metadata = approval.metadata as Record<string, unknown> | undefined
+
+      return metadata?.permissionRequestId === requestId
     })
   }
 
@@ -224,82 +358,189 @@ export class RuntimeAdapter implements RuntimeAdapterRegistry {
     event: Extract<AgentStreamEvent, { type: "attention_required" }>,
   ): Promise<void> {
     if (event.reason === "finished") {
-      await this.appendRunEvent(runId, "run.completed", {
-        reason: "finished",
-        timestamp: event.timestamp,
+      await this.appendRunEvent({
+        runId,
+        eventType: "run.completed",
+        source: "session",
+        occurredAt: event.timestamp,
+        payload: {
+          reason: event.reason,
+        },
       })
-      try {
-        await this.runService.transition(runId, "succeeded")
-      } catch {
-        // May fail if artifacts are missing
-      }
-    } else if (event.reason === "error") {
-      await this.appendRunEvent(runId, "run.failed", {
-        reason: "error",
-        timestamp: event.timestamp,
+
+      await this.tryTransition(runId, "succeeded")
+      return
+    }
+
+    if (event.reason === "error") {
+      await this.appendRunEvent({
+        runId,
+        eventType: "run.failed",
+        source: "session",
+        occurredAt: event.timestamp,
+        payload: {
+          reason: event.reason,
+          error: event.error,
+        },
       })
-      try {
-        await this.runService.transition(runId, "failed", {
-          failureReason: "Agent reported error",
-        })
-      } catch {
-        // May already be failed
-      }
+
+      await this.tryTransition(runId, "failed", {
+        failureReason: event.error ?? "agent attention required: error",
+      })
     }
   }
 
-  /**
-   * Handle custom MCP tool calls from the lead agent.
-   * Called externally when the MCP server receives these tool invocations.
-   */
-  async handleDeclarePhase(runId: string, phase: string): Promise<void> {
-    await this.appendRunEvent(runId, "phase.entered", { phase })
-
-    // Update the run's current phase
-    const run = await this.runRepo.getById(runId)
-    if (run) {
-      run.current_phase = phase
-      run.updatedAt = new Date().toISOString()
-      await this.runRepo.update(run)
-    }
-  }
-
-  async handleRegisterArtifact(
+  private async handleTimelineEvent(
     runId: string,
-    artifactData: { type: string; title: string; format?: string },
+    event: Extract<AgentStreamEvent, { type: "timeline" }>,
   ): Promise<void> {
-    await this.appendRunEvent(runId, "artifact.created", artifactData)
+    const toolCall = extractTimelineToolCall(event.item)
+
+    if (!toolCall) {
+      return
+    }
+
+    if (toolCall.kind === "declare_phase") {
+      await this.appendRunEvent({
+        runId,
+        eventType: "phase.entered",
+        source: "session",
+        phase: toolCall.phase,
+        payload: {
+          phase: toolCall.phase,
+        },
+      })
+
+      await this.runService.setCurrentPhase(runId, toolCall.phase)
+      return
+    }
+
+    await this.appendRunEvent({
+      runId,
+      eventType: "artifact.created",
+      source: "session",
+      payload: toolCall.artifact,
+    })
   }
 
-  private async appendRunEvent(
+  private async tryTransition(
     runId: string,
-    eventType: string,
-    payload: unknown,
-  ): Promise<RunEventEnvelope> {
-    const event: RunEventEnvelope = {
-      id: `evt_${randomUUID()}`,
-      runId,
-      eventType,
-      occurredAt: new Date().toISOString(),
-      source: eventType.startsWith("approval.") ? "operator" : "session",
-      payload,
+    targetStatus: string,
+    metadata?: { failureReason?: string; blockerReason?: string },
+  ): Promise<void> {
+    try {
+      await this.runService.transition(runId, targetStatus as Parameters<RunService["transition"]>[1], metadata)
+    } catch (error) {
+      if (
+        error instanceof Error &&
+        (error.message.startsWith("Invalid run status transition") ||
+          error.message.startsWith("required artifact missing"))
+      ) {
+        return
+      }
+
+      throw error
     }
-    return this.runEventRepo.append(event)
+  }
+
+  private async appendRunEvent(input: {
+    runId: string
+    eventType: string
+    source: RunEventEnvelope["source"]
+    payload: unknown
+    occurredAt?: string
+    phase?: string | null
+    stageId?: string | null
+    sessionId?: string | null
+    roleId?: string | null
+  }): Promise<RunEventEnvelope> {
+    return this.runEventRepo.append({
+      id: `evt_${randomUUID()}`,
+      runId: input.runId,
+      eventType: input.eventType,
+      occurredAt: input.occurredAt ?? new Date().toISOString(),
+      source: input.source,
+      phase: input.phase,
+      stageId: input.stageId,
+      sessionId: input.sessionId,
+      roleId: input.roleId,
+      payload: input.payload,
+    })
   }
 }
 
-function mapPermissionKindToActionClass(
-  kind: string,
-): ApprovalRecord["action_class"] {
+function mapPermissionKindToActionClass(kind: string): ApprovalRecord["action_class"] {
   switch (kind) {
-    case "tool":
-      return "destructive_write"
-    case "bash":
-    case "network":
-      return "destructive_write"
     case "mcp":
       return "sensitive_mcp_access"
+    case "tool":
+    case "bash":
+    case "network":
     default:
       return "destructive_write"
   }
+}
+
+function extractTimelineToolCall(item: AgentTimelineItem): TimelineToolCall | null {
+  const name = getTimelineToolName(item)
+  const input = getTimelineToolInput(item)
+
+  if (name === "declare_phase" && typeof input.phase === "string" && input.phase.length > 0) {
+    return {
+      kind: "declare_phase",
+      phase: input.phase,
+    }
+  }
+
+  if (name === "register_artifact") {
+    return {
+      kind: "register_artifact",
+      artifact: input,
+    }
+  }
+
+  return null
+}
+
+function getTimelineToolName(item: AgentTimelineItem): string | null {
+  if (typeof item.name === "string") {
+    return item.name
+  }
+
+  if (typeof item.toolName === "string") {
+    return item.toolName
+  }
+
+  const tool = item.tool
+
+  if (
+    tool &&
+    typeof tool === "object" &&
+    !Array.isArray(tool) &&
+    typeof (tool as Record<string, unknown>).name === "string"
+  ) {
+    return (tool as Record<string, string>).name
+  }
+
+  return null
+}
+
+function getTimelineToolInput(item: AgentTimelineItem): Record<string, unknown> {
+  for (const candidate of [item.input, item.arguments, item.args, item.params]) {
+    if (candidate && typeof candidate === "object" && !Array.isArray(candidate)) {
+      return candidate
+    }
+  }
+
+  const tool = item.tool
+
+  if (tool && typeof tool === "object" && !Array.isArray(tool)) {
+    const toolInput = (tool as Record<string, unknown>).input
+
+    if (toolInput && typeof toolInput === "object" && !Array.isArray(toolInput)) {
+      return toolInput as Record<string, unknown>
+    }
+  }
+
+  return {}
 }

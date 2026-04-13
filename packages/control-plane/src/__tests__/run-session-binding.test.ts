@@ -68,10 +68,9 @@ function setupAll() {
   adapter = new RuntimeAdapter(
     agentManager,
     runEventRepo,
-    runRepo,
-    runSessionRepo,
     approvalRepo,
     runService,
+    runSessionRepo,
   )
 
   compiler = new RunCompiler({

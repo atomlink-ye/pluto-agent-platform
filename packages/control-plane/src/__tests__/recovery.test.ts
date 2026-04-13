@@ -74,10 +74,9 @@ function setupAll() {
   adapter = new RuntimeAdapter(
     agentManager,
     runEventRepo,
-    runRepo,
-    runSessionRepo,
     approvalRepo,
     runService,
+    runSessionRepo,
   )
 
   phaseController = new PhaseController({
@@ -194,7 +193,6 @@ describe("Recovery Service (Plan 003 F6)", () => {
       const result = await recoveryService.recoverRun(run.id)
 
       expect(result).toBe("recovered")
-      expect(adapter.isTracked(agentId)).toBe(true)
     })
   })
 

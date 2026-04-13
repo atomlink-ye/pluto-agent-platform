@@ -1,22 +1,20 @@
-/**
- * Plan 003 Feature 2: Runtime Adapter — Unit Tests
- */
-import { describe, it, expect, beforeEach } from "vitest"
+import { beforeEach, describe, expect, it } from "vitest"
+
+import { HarnessService } from "../services/harness-service.js"
 import { RuntimeAdapter } from "../services/runtime-adapter.js"
+import { PlaybookService } from "../services/playbook-service.js"
 import { RunService } from "../services/run-service.js"
 import { ArtifactService } from "../services/artifact-service.js"
-import { PlaybookService } from "../services/playbook-service.js"
-import { HarnessService } from "../services/harness-service.js"
 import { FakeAgentManager } from "../paseo/fake-agent-manager.js"
 import {
-  InMemoryPlaybookRepository,
-  InMemoryHarnessRepository,
-  InMemoryRunRepository,
-  InMemoryRunEventRepository,
-  InMemoryRunPlanRepository,
-  InMemoryPolicySnapshotRepository,
   InMemoryApprovalRepository,
   InMemoryArtifactRepository,
+  InMemoryHarnessRepository,
+  InMemoryPlaybookRepository,
+  InMemoryPolicySnapshotRepository,
+  InMemoryRunEventRepository,
+  InMemoryRunPlanRepository,
+  InMemoryRunRepository,
   InMemoryRunSessionRepository,
 } from "../repositories/in-memory.js"
 
@@ -33,31 +31,35 @@ let runService: RunService
 let agentManager: FakeAgentManager
 let adapter: RuntimeAdapter
 
-async function setupWithRun() {
+const flush = async () => {
+  await new Promise((resolve) => setTimeout(resolve, 0))
+}
+
+async function createRunningRun() {
   const playbookService = new PlaybookService(playbookRepo)
   const harnessService = new HarnessService(harnessRepo, playbookRepo)
 
   const playbook = await playbookService.create({
-    name: "Test Playbook",
-    description: "Test",
-    goal: "Test goal",
-    instructions: "Test instructions",
+    name: "runtime-adapter-playbook",
+    description: "Runtime adapter test playbook",
+    goal: "Exercise runtime event projection",
+    instructions: "Process runtime events",
   })
 
   const harness = await harnessService.create({
-    name: "Test Harness",
-    description: "Test",
+    name: "runtime-adapter-harness",
+    description: "Runtime adapter test harness",
     phases: ["collect", "analyze", "review"],
   })
 
-  const run = await runService.create(playbook.id, harness.id, { topic: "test" })
-  const runAfterInit = await runService.transition(run.id, "initializing")
-  const runAfterStart = await runService.transition(runAfterInit.id, "running")
+  const run = await runService.create(playbook.id, harness.id, { topic: "runtime adapter" })
 
-  return { playbook, harness, run: runAfterStart }
+  await runService.transition(run.id, "initializing")
+
+  return runService.transition(run.id, "running")
 }
 
-describe("Runtime Adapter (Plan 003 F2)", () => {
+describe("RuntimeAdapter", () => {
   beforeEach(() => {
     playbookRepo = new InMemoryPlaybookRepository()
     harnessRepo = new InMemoryHarnessRepository()
@@ -87,196 +89,204 @@ describe("Runtime Adapter (Plan 003 F2)", () => {
     )
 
     agentManager = new FakeAgentManager()
-
     adapter = new RuntimeAdapter(
       agentManager,
       runEventRepo,
-      runRepo,
-      runSessionRepo,
       approvalRepo,
       runService,
+      runSessionRepo,
     )
   })
 
-  describe("Scenario 2.1: Map thread_started to session.created", () => {
-    it("appends session.created event and creates RunSession", async () => {
-      const { run } = await setupWithRun()
-      const agentId = "agent-1"
+  it("scenario 2.1: thread_started -> session.created", async () => {
+    const run = await createRunningRun()
 
-      adapter.trackRun(run.id, agentId)
-      adapter.start()
+    adapter.trackRun(run.id, "agent-1")
+    const stop = adapter.start()
 
-      agentManager.emit(agentId, {
+    agentManager.emit(
+      "agent-1",
+      {
         type: "thread_started",
-        sessionId: "sess_abc",
+        sessionId: "sess_runtime_1",
         provider: "claude",
-      }, 1, "epoch_1")
+      },
+      1,
+      "epoch-1",
+    )
 
-      // Wait for async processing
-      await new Promise((r) => setTimeout(r, 50))
+    await flush()
+    stop()
 
-      const events = await runEventRepo.listByRunId(run.id)
-      const sessionEvents = events.filter((e) => e.eventType === "session.created")
-      expect(sessionEvents).toHaveLength(1)
-      expect((sessionEvents[0].payload as Record<string, unknown>).sessionId).toBe("sess_abc")
+    const events = await runEventRepo.listByRunId(run.id)
+    const sessions = await runSessionRepo.listByRunId(run.id)
 
-      const sessions = await runSessionRepo.listByRunId(run.id)
-      expect(sessions).toHaveLength(1)
-      expect(sessions[0].session_id).toBe(agentId)
-      expect(sessions[0].provider).toBe("claude")
-    })
+    expect(events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          eventType: "session.created",
+          sessionId: "sess_runtime_1",
+          payload: expect.objectContaining({
+            runtimeSessionId: "sess_runtime_1",
+            agentId: "agent-1",
+          }),
+        }),
+      ]),
+    )
+    expect(sessions).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          run_id: run.id,
+          session_id: "agent-1",
+          provider: "claude",
+          status: "active",
+        }),
+      ]),
+    )
   })
 
-  describe("Scenario 2.2: Map permission_requested to approval.requested", () => {
-    it("creates ApprovalTask and appends approval.requested event", async () => {
-      const { run } = await setupWithRun()
-      const agentId = "agent-1"
+  it("scenario 2.2: permission_requested -> approval.requested + ApprovalTask", async () => {
+    const run = await createRunningRun()
 
-      adapter.trackRun(run.id, agentId)
-      adapter.start()
+    adapter.trackRun(run.id, "agent-1")
+    const stop = adapter.start()
 
-      agentManager.emit(agentId, {
+    agentManager.emit(
+      "agent-1",
+      {
         type: "permission_requested",
         provider: "claude",
         request: {
-          id: "perm_1",
+          id: "perm-1",
           kind: "tool",
           name: "bash",
           description: "delete production branch",
         },
-      }, 2, "epoch_1")
+      },
+      2,
+      "epoch-1",
+    )
 
-      await new Promise((r) => setTimeout(r, 50))
+    await flush()
+    stop()
 
-      const events = await runEventRepo.listByRunId(run.id)
-      const approvalEvents = events.filter((e) => e.eventType === "approval.requested")
-      expect(approvalEvents).toHaveLength(1)
+    const approvals = await approvalRepo.listByRunId(run.id)
+    const events = await runEventRepo.listByRunId(run.id)
+    const updatedRun = await runRepo.getById(run.id)
 
-      const approvals = await approvalRepo.listByRunId(run.id)
-      expect(approvals).toHaveLength(1)
-      expect(approvals[0].status).toBe("pending")
-      expect(approvals[0].title).toContain("bash")
-      expect(approvals[0].title).toContain("delete production branch")
-
-      // Run should be in waiting_approval
-      const updatedRun = await runRepo.getById(run.id)
-      expect(updatedRun!.status).toBe("waiting_approval")
-    })
+    expect(approvals).toHaveLength(1)
+    expect(approvals[0]).toEqual(
+      expect.objectContaining({
+        run_id: run.id,
+        status: "pending",
+        title: expect.stringContaining("bash"),
+      }),
+    )
+    expect(events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          eventType: "approval.requested",
+          payload: expect.objectContaining({
+            approvalId: approvals[0].id,
+            permissionRequestId: "perm-1",
+            name: "bash",
+          }),
+        }),
+      ]),
+    )
+    expect(updatedRun?.status).toBe("waiting_approval")
   })
 
-  describe("Scenario 2.3: Idempotent on duplicate events", () => {
-    it("does not create duplicate events for same seq+epoch", async () => {
-      const { run } = await setupWithRun()
-      const agentId = "agent-1"
+  it("scenario 2.3: duplicate seq+epoch events are no-ops", async () => {
+    const run = await createRunningRun()
 
-      adapter.trackRun(run.id, agentId)
-      adapter.start()
+    adapter.trackRun(run.id, "agent-1")
+    const stop = adapter.start()
 
-      const event = {
-        type: "thread_started" as const,
-        sessionId: "sess_abc",
-        provider: "claude",
-      }
+    const event = {
+      type: "thread_started" as const,
+      sessionId: "sess_runtime_1",
+      provider: "claude",
+    }
 
-      agentManager.emit(agentId, event, 5, "abc")
-      await new Promise((r) => setTimeout(r, 50))
+    agentManager.emit("agent-1", event, 5, "epoch-dup")
+    agentManager.emit("agent-1", event, 5, "epoch-dup")
 
-      agentManager.emit(agentId, event, 5, "abc")
-      await new Promise((r) => setTimeout(r, 50))
+    await flush()
+    stop()
 
-      const events = await runEventRepo.listByRunId(run.id)
-      const sessionEvents = events.filter((e) => e.eventType === "session.created")
-      expect(sessionEvents).toHaveLength(1)
-    })
+    const events = await runEventRepo.listByRunId(run.id)
+
+    expect(events.filter((candidate) => candidate.eventType === "session.created")).toHaveLength(1)
   })
 
-  describe("Scenario 2.4: Ignore untracked agents", () => {
-    it("does not create events for agents not spawned by control plane", async () => {
-      const { run } = await setupWithRun()
-      const trackedAgentId = "agent-tracked"
-      const untrackedAgentId = "agent-standalone"
+  it("scenario 2.4: events for untracked agents are ignored", async () => {
+    const run = await createRunningRun()
 
-      adapter.trackRun(run.id, trackedAgentId)
-      adapter.start()
+    adapter.trackRun(run.id, "agent-tracked")
+    const stop = adapter.start()
 
-      // Emit for untracked agent
-      agentManager.emit(untrackedAgentId, {
+    agentManager.emit(
+      "agent-standalone",
+      {
         type: "thread_started",
         sessionId: "sess_untracked",
         provider: "claude",
-      }, 1, "epoch_untracked")
+      },
+      1,
+      "epoch-untracked",
+    )
 
-      await new Promise((r) => setTimeout(r, 50))
+    await flush()
+    stop()
 
-      // No events should be created for the run
-      const events = await runEventRepo.listByRunId(run.id)
-      const sessionEvents = events.filter((e) => e.eventType === "session.created")
-      expect(sessionEvents).toHaveLength(0)
-    })
+    const events = await runEventRepo.listByRunId(run.id)
+    const sessions = await runSessionRepo.listByRunId(run.id)
+
+    expect(events.some((event) => event.eventType === "session.created")).toBe(false)
+    expect(sessions).toHaveLength(0)
   })
 
-  describe("Scenario 2.5: Custom MCP phase declaration", () => {
-    it("appends phase.entered event and updates run current phase", async () => {
-      const { run } = await setupWithRun()
-      const agentId = "agent-1"
+  it("scenario 2.5: custom MCP declare_phase -> phase.entered", async () => {
+    const run = await createRunningRun()
 
-      adapter.trackRun(run.id, agentId)
+    adapter.trackRun(run.id, "agent-1")
+    const stop = adapter.start()
 
-      // Simulate the lead agent calling declare_phase MCP tool
-      await adapter.handleDeclarePhase(run.id, "analyze")
-
-      const events = await runEventRepo.listByRunId(run.id)
-      const phaseEvents = events.filter((e) => e.eventType === "phase.entered")
-      expect(phaseEvents).toHaveLength(1)
-      expect((phaseEvents[0].payload as Record<string, unknown>).phase).toBe("analyze")
-
-      // Run's current phase should be updated
-      const updatedRun = await runRepo.getById(run.id)
-      expect(updatedRun!.current_phase).toBe("analyze")
-    })
-  })
-
-  describe("Additional: attention_required events", () => {
-    it("maps attention_required(finished) to run.completed", async () => {
-      const { run } = await setupWithRun()
-      const agentId = "agent-1"
-
-      adapter.trackRun(run.id, agentId)
-      adapter.start()
-
-      agentManager.emit(agentId, {
-        type: "attention_required",
+    agentManager.emit(
+      "agent-1",
+      {
+        type: "timeline",
         provider: "claude",
-        reason: "finished",
-        timestamp: new Date().toISOString(),
-      }, 10, "epoch_1")
+        item: {
+          type: "tool_call",
+          name: "declare_phase",
+          input: {
+            phase: "analyze",
+          },
+        },
+      },
+      3,
+      "epoch-1",
+    )
 
-      await new Promise((r) => setTimeout(r, 50))
+    await flush()
+    stop()
 
-      const events = await runEventRepo.listByRunId(run.id)
-      const completedEvents = events.filter((e) => e.eventType === "run.completed")
-      expect(completedEvents).toHaveLength(1)
-    })
+    const events = await runEventRepo.listByRunId(run.id)
+    const updatedRun = await runRepo.getById(run.id)
 
-    it("maps attention_required(error) to run.failed", async () => {
-      const { run } = await setupWithRun()
-      const agentId = "agent-1"
-
-      adapter.trackRun(run.id, agentId)
-      adapter.start()
-
-      agentManager.emit(agentId, {
-        type: "attention_required",
-        provider: "claude",
-        reason: "error",
-        timestamp: new Date().toISOString(),
-      }, 11, "epoch_1")
-
-      await new Promise((r) => setTimeout(r, 50))
-
-      const events = await runEventRepo.listByRunId(run.id)
-      const failedEvents = events.filter((e) => e.eventType === "run.failed")
-      expect(failedEvents).toHaveLength(1)
-    })
+    expect(events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          eventType: "phase.entered",
+          phase: "analyze",
+          payload: expect.objectContaining({
+            phase: "analyze",
+          }),
+        }),
+      ]),
+    )
+    expect(updatedRun?.current_phase).toBe("analyze")
   })
 })

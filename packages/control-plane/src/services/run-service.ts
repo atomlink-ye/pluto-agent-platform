@@ -218,6 +218,22 @@ export class RunService {
 
     return savedRun
   }
+
+  async setCurrentPhase(runId: string, currentPhase?: string): Promise<RunRecord> {
+    const run = await this.runRepository.getById(runId)
+
+    if (!run) {
+      throw new Error(`Run not found: ${runId}`)
+    }
+
+    const updatedRun: RunRecord = {
+      ...run,
+      current_phase: currentPhase,
+      updatedAt: new Date().toISOString(),
+    }
+
+    return this.runRepository.update(updatedRun)
+  }
 }
 
 export const projectRunStateFromEvents = (
