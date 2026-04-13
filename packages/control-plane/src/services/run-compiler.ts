@@ -18,6 +18,10 @@ import type {
   PolicySnapshotRepository,
   RunSessionRecord,
   RunSessionRepository,
+  RoleSpecRecord,
+  RoleSpecRepository,
+  TeamSpecRecord,
+  TeamSpecRepository,
 } from "../repositories.js"
 import type { RunService } from "./run-service.js"
 import type { AgentManager, AgentSessionConfig } from "../paseo/types.js"
@@ -34,6 +38,8 @@ export interface RunCompilerDeps {
   runPlanRepository: RunPlanRepository
   policySnapshotRepository: PolicySnapshotRepository
   runSessionRepository: RunSessionRepository
+  roleSpecRepository?: RoleSpecRepository
+  teamSpecRepository?: TeamSpecRepository
   runService: RunService
   agentManager: AgentManager
   runtimeAdapter: RuntimeAdapterRegistry
@@ -45,6 +51,13 @@ export interface CompileRunInput {
   inputs: Record<string, unknown>
   provider?: string
   workingDirectory?: string
+  teamId?: string
+}
+
+export interface ResolvedTeam {
+  team: TeamSpecRecord
+  roles: Map<string, RoleSpecRecord>
+  leadRole: RoleSpecRecord
 }
 
 interface ResolvedRunEnvironment {
@@ -66,12 +79,43 @@ export class RunCompiler {
       const harness = await this.deps.harnessRepository.getById(input.harnessId)
       if (!harness) throw new Error(`Harness not found: ${input.harnessId}`)
 
+      // Step 1b: Resolve team if teamId is provided
+      const resolvedTeam = input.teamId
+        ? await this.resolveTeam(input.teamId)
+        : undefined
+
       // Step 2: Create run with status "queued"
       run = await this.deps.runService.create(
         input.playbookId,
         input.harnessId,
         input.inputs,
       )
+
+      // Step 2b: Record resolved team on the Run
+      if (resolvedTeam) {
+        run = await this.deps.runRepository.update({
+          ...run,
+          team: resolvedTeam.team.id,
+          updatedAt: new Date().toISOString(),
+        })
+      }
+
+      // Step 2c: Update RunPlan with role assignments for team runs
+      if (resolvedTeam) {
+        const plan = await this.deps.runPlanRepository.getByRunId(run.id)
+        if (!plan) {
+          throw new Error(`RunPlan not found: ${run.id}`)
+        }
+
+        const updatedPlan = {
+          ...plan,
+          stages: plan.stages.map((stage) => ({
+            ...stage,
+            role: stage.role ?? resolvedTeam.leadRole.id,
+          })),
+        }
+        await this.deps.runPlanRepository.save(updatedPlan)
+      }
 
       const resolvedEnvironment = resolveEnvironmentSpec({
         playbook,
@@ -88,14 +132,16 @@ export class RunCompiler {
       run = await this.deps.runService.transition(run.id, "initializing")
 
       // Step 6: Construct agent system prompt
-      const systemPrompt = buildSystemPrompt(playbook, harness, resolvedEnvironment.spec)
+      const systemPrompt = buildSystemPrompt(playbook, harness, resolvedEnvironment.spec, resolvedTeam)
 
       // Step 7: Create Paseo agent
       const agentConfig: AgentSessionConfig = {
         provider: input.provider ?? "claude",
         cwd: resolvedEnvironment.workingDirectory,
         systemPrompt,
-        title: `Run: ${playbook.name}`,
+        title: resolvedTeam
+          ? `Run: ${playbook.name} [${resolvedTeam.leadRole.name}]`
+          : `Run: ${playbook.name}`,
         mcpServers: buildMcpServers(),
       }
 
@@ -114,6 +160,7 @@ export class RunCompiler {
           run_id: run.id,
           session_id: agent.id,
           persistence_handle: persistenceHandle,
+          role_id: resolvedTeam?.leadRole.id,
           provider: agentConfig.provider,
           status: "active",
           createdAt: new Date().toISOString(),
@@ -152,6 +199,42 @@ export class RunCompiler {
     }
   }
 
+  private async resolveTeam(teamId: string): Promise<ResolvedTeam> {
+    if (!this.deps.teamSpecRepository) {
+      throw new Error("Team compilation requires teamSpecRepository")
+    }
+
+    if (!this.deps.roleSpecRepository) {
+      throw new Error("Team compilation requires roleSpecRepository")
+    }
+
+    const team = await this.deps.teamSpecRepository.getById(teamId)
+    if (!team) throw new Error(`Team not found: ${teamId}`)
+
+    if (!team.lead_role) {
+      throw new Error(`Team ${teamId} has no lead_role defined`)
+    }
+
+    const mode = team.coordination?.mode ?? "supervisor-led"
+    if (mode !== "supervisor-led") {
+      throw new Error(`Unsupported coordination mode: ${mode}. Only supervisor-led is supported in Phase 2`)
+    }
+
+    const roles = new Map<string, RoleSpecRecord>()
+    for (const roleId of team.roles) {
+      const role = await this.deps.roleSpecRepository.getById(roleId)
+      if (!role) throw new Error(`Role not found: ${roleId} (referenced by team ${teamId})`)
+      roles.set(roleId, role)
+    }
+
+    const leadRole = roles.get(team.lead_role)
+    if (!leadRole) {
+      throw new Error(`Lead role ${team.lead_role} not found in resolved roles for team ${teamId}`)
+    }
+
+    return { team, roles, leadRole }
+  }
+
   private async rollbackSpawnedAgent(
     run: RunRecord,
     agentId: string,
@@ -182,6 +265,7 @@ function buildSystemPrompt(
   playbook: PlaybookRecord,
   harness: HarnessRecord,
   environment: EnvironmentSpec,
+  resolvedTeam?: ResolvedTeam,
 ): string {
   const sections: string[] = []
 
@@ -191,6 +275,31 @@ function buildSystemPrompt(
 
   if (environment.repositories?.length) {
     sections.push(`## Repositories\n${environment.repositories.join("\n")}`)
+  }
+
+  // Team context for supervisor-led runs
+  if (resolvedTeam) {
+    const roleList = resolvedTeam.team.roles
+      .map((roleId) => resolvedTeam.roles.get(roleId))
+      .filter((role): role is RoleSpecRecord => role !== undefined)
+      .map((role) => `- **${role.name}** (\`${role.id}\`): ${role.description}`)
+      .join("\n")
+
+    const teamLines = [
+      `Name: ${resolvedTeam.team.name}`,
+      `Description: ${resolvedTeam.team.description}`,
+      `Lead Role: \`${resolvedTeam.leadRole.id}\` (${resolvedTeam.leadRole.name})`,
+      `Coordination Mode: ${resolvedTeam.team.coordination?.mode ?? "supervisor-led"}`,
+      "Available team roles:",
+      roleList,
+    ]
+
+    if (resolvedTeam.leadRole.system_prompt) {
+      teamLines.push("", "### Lead Role Guidance", resolvedTeam.leadRole.system_prompt)
+    }
+
+    sections.push(`## Team\n${teamLines.join("\n")}`)
+    sections.push(`## Delegation\nYou are the lead role for this run. Use the \`create_handoff\` MCP tool to delegate work to another available role. Use the \`reject_handoff\` MCP tool to reject a handoff that should not proceed.`)
   }
 
   // Harness governance context
@@ -219,6 +328,11 @@ function buildSystemPrompt(
   sections.push(`## Available Control-Plane MCP Tools`)
   sections.push(`### declare_phase\nDeclares transition to the next execution phase.\nParameters: { "phase": "<phase_name>" }`)
   sections.push(`### register_artifact\nRegisters a deliverable produced during execution.\nParameters: { "type": "<artifact_type>", "title": "<title>", "format": "<format>" }`)
+
+  if (resolvedTeam) {
+    sections.push(`### create_handoff\nDelegates work to another team role. A worker session is spawned when accepted.\nParameters: { "role_id": "<role_id>", "summary": "<work_description>", "context": "<optional_context>" }`)
+    sections.push(`### reject_handoff\nRejects a pending handoff request.\nParameters: { "handoff_id": "<handoff_id>", "reason": "<rejection_reason>" }`)
+  }
 
   return sections.join("\n\n")
 }
