@@ -225,9 +225,9 @@ If any step fails, the run transitions to `failed` with the step and error recor
 
 #### Scenario 3.3: Compilation failure is recorded
 
-- **Given:** a playbook referencing an EnvironmentSpec with a non-existent repository path
-- **When:** a run is created
-- **Then:** run status is `failed`, `failureReason` includes "environment setup failed", and no Paseo agent is left running
+- **Given:** a run has already spawned a Paseo agent but persisting the `RunSession` fails
+- **When:** the compiler handles the partial failure
+- **Then:** the spawned agent is cleaned up, the run status is `failed`, and `failureReason` explains the rollback cause
 
 #### Scenario 3.4: Agent is tracked immediately
 
@@ -239,8 +239,8 @@ If any step fails, the run transitions to `failed` with the step and error recor
 
 - [x] 11-step compilation sequence implemented (compile method with FakeAgentManager)
 - [x] System prompt builder with playbook + harness + MCP tool context
-- [ ] EnvironmentSpec resolution (working directory, repo path)
-- [ ] Rollback on partial failure (cleanup Paseo agent if DB write fails)
+- [x] EnvironmentSpec resolution (working directory, prompt repo context, resolved run environment)
+- [x] Rollback on partial failure (cleanup Paseo agent if DB write fails)
 - [ ] Integration test with real Paseo daemon (or realistic mock)
 
 ---

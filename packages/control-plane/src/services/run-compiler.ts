@@ -5,11 +5,7 @@
  * Follows the 11-step compilation sequence from the plan.
  */
 import { randomUUID } from "node:crypto"
-import type {
-  RunPlan,
-  PolicySnapshot,
-  RunSession,
-} from "@pluto-agent-platform/contracts"
+import type { EnvironmentSpec } from "@pluto-agent-platform/contracts"
 import type {
   PlaybookRecord,
   HarnessRecord,
@@ -24,10 +20,7 @@ import type {
   RunSessionRepository,
 } from "../repositories.js"
 import type { RunService } from "./run-service.js"
-import type {
-  AgentManager,
-  AgentSessionConfig,
-} from "../paseo/types.js"
+import type { AgentManager, AgentSessionConfig } from "../paseo/types.js"
 
 export interface RuntimeAdapterRegistry {
   trackRun(runId: string, agentId: string): void
@@ -54,12 +47,16 @@ export interface CompileRunInput {
   workingDirectory?: string
 }
 
+interface ResolvedRunEnvironment {
+  spec: EnvironmentSpec
+  workingDirectory: string
+}
+
 export class RunCompiler {
   constructor(private readonly deps: RunCompilerDeps) {}
 
   async compile(input: CompileRunInput): Promise<RunRecord> {
     let run: RunRecord | null = null
-    let agentId: string | null = null
 
     try {
       // Step 1: Validate playbook + harness + inputs
@@ -76,6 +73,14 @@ export class RunCompiler {
         input.inputs,
       )
 
+      const resolvedEnvironment = resolveEnvironmentSpec({
+        playbook,
+        run,
+        inputs: input.inputs,
+        workingDirectory: input.workingDirectory,
+      })
+      run = await persistResolvedEnvironment(this.deps.runRepository, run, resolvedEnvironment.spec)
+
       // Step 3: Policy snapshot already created by runService.create()
       // Step 4: Run plan already created by runService.create()
 
@@ -83,55 +88,58 @@ export class RunCompiler {
       run = await this.deps.runService.transition(run.id, "initializing")
 
       // Step 6: Construct agent system prompt
-      const systemPrompt = buildSystemPrompt(playbook, harness)
+      const systemPrompt = buildSystemPrompt(playbook, harness, resolvedEnvironment.spec)
 
       // Step 7: Create Paseo agent
       const agentConfig: AgentSessionConfig = {
         provider: input.provider ?? "claude",
-        cwd: input.workingDirectory ?? process.cwd(),
+        cwd: resolvedEnvironment.workingDirectory,
         systemPrompt,
         title: `Run: ${playbook.name}`,
         mcpServers: buildMcpServers(),
       }
 
       const agent = await this.deps.agentManager.createAgent(agentConfig)
-      agentId = agent.id
       const persistenceHandle = this.deps.agentManager.getAgent?.(agent.id)?.persistence?.sessionId
         ?? agent.persistence?.sessionId
 
-      // Step 8: Register agent in Runtime Adapter tracking
-      this.deps.runtimeAdapter.trackRun(run.id, agent.id)
+      try {
+        // Step 8: Register agent in Runtime Adapter tracking
+        this.deps.runtimeAdapter.trackRun(run.id, agent.id)
 
-      // Step 9: Create RunSession linking run to Paseo agent
-      const sessionRecord: RunSessionRecord = {
-        kind: "run_session",
-        id: `sess_${randomUUID()}`,
-        run_id: run.id,
-        session_id: agent.id,
-        persistence_handle: persistenceHandle,
-        provider: agentConfig.provider,
-        status: "active",
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
+        // Step 9: Create RunSession linking run to Paseo agent
+        const sessionRecord: RunSessionRecord = {
+          kind: "run_session",
+          id: `sess_${randomUUID()}`,
+          run_id: run.id,
+          session_id: agent.id,
+          persistence_handle: persistenceHandle,
+          provider: agentConfig.provider,
+          status: "active",
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        }
+        await this.deps.runSessionRepository.save(sessionRecord)
+
+        // Step 10: Start the agent with initial prompt
+        const initialPrompt = buildInitialPrompt(playbook, run.input)
+        // Fire and forget — the runtime adapter will track events
+        this.deps.agentManager
+          .runAgent(agent.id, initialPrompt)
+          .catch(() => {
+            // Errors will be caught by the runtime adapter via events
+          })
+
+        // Step 11: Transition to "running"
+        run = await this.deps.runService.transition(run.id, "running")
+      } catch (error) {
+        run = await this.rollbackSpawnedAgent(run, agent.id, error)
+        throw error
       }
-      await this.deps.runSessionRepository.save(sessionRecord)
-
-      // Step 10: Start the agent with initial prompt
-      const initialPrompt = buildInitialPrompt(playbook, input.inputs)
-      // Fire and forget — the runtime adapter will track events
-      this.deps.agentManager
-        .runAgent(agent.id, initialPrompt)
-        .catch(() => {
-          // Errors will be caught by the runtime adapter via events
-        })
-
-      // Step 11: Transition to "running"
-      run = await this.deps.runService.transition(run.id, "running")
 
       return run
     } catch (error) {
-      // Rollback: transition to failed
-      if (run) {
+      if (run && run.status !== "failed") {
         try {
           run = await this.deps.runService.transition(run.id, "failed", {
             failureReason: `Compilation failed: ${error instanceof Error ? error.message : String(error)}`,
@@ -143,21 +151,46 @@ export class RunCompiler {
       throw error
     }
   }
+
+  private async rollbackSpawnedAgent(
+    run: RunRecord,
+    agentId: string,
+    error: unknown,
+  ): Promise<RunRecord> {
+    let cleanupFailure: string | undefined
+
+    try {
+      await this.deps.agentManager.killAgent(agentId)
+    } catch (killError) {
+      cleanupFailure = killError instanceof Error ? killError.message : String(killError)
+    }
+
+    const baseReason = `Compilation failed after agent spawn: ${error instanceof Error ? error.message : String(error)}`
+    const failureReason = cleanupFailure
+      ? `${baseReason}. Agent cleanup failed: ${cleanupFailure}`
+      : baseReason
+
+    return this.deps.runService.transition(run.id, "failed", { failureReason })
+  }
 }
 
 // ---------------------------------------------------------------------------
 // Prompt builders
 // ---------------------------------------------------------------------------
 
-function buildSystemPrompt(playbook: PlaybookRecord, harness: HarnessRecord): string {
+function buildSystemPrompt(
+  playbook: PlaybookRecord,
+  harness: HarnessRecord,
+  environment: EnvironmentSpec,
+): string {
   const sections: string[] = []
 
   sections.push(`# Task: ${playbook.name}`)
   sections.push(`## Goal\n${playbook.goal}`)
   sections.push(`## Instructions\n${playbook.instructions}`)
 
-  if (playbook.context?.repositories?.length) {
-    sections.push(`## Repositories\n${playbook.context.repositories.join("\n")}`)
+  if (environment.repositories?.length) {
+    sections.push(`## Repositories\n${environment.repositories.join("\n")}`)
   }
 
   // Harness governance context
@@ -167,8 +200,8 @@ function buildSystemPrompt(playbook: PlaybookRecord, harness: HarnessRecord): st
 
   if (harness.approvals) {
     const approvalRules = Object.entries(harness.approvals)
-      .filter(([, v]) => v === "required")
-      .map(([k]) => k)
+      .filter(([, value]) => value === "required")
+      .map(([key]) => key)
     if (approvalRules.length > 0) {
       sections.push(`### Approval Rules\nThe following action classes require approval: ${approvalRules.join(", ")}`)
     }
@@ -176,8 +209,8 @@ function buildSystemPrompt(playbook: PlaybookRecord, harness: HarnessRecord): st
 
   if (playbook.artifacts?.length) {
     sections.push(`### Required Artifacts`)
-    for (const art of playbook.artifacts) {
-      sections.push(`- Type: ${art.type}${art.format ? ` (format: ${art.format})` : ""}${art.description ? ` — ${art.description}` : ""}`)
+    for (const artifact of playbook.artifacts) {
+      sections.push(`- Type: ${artifact.type}${artifact.format ? ` (format: ${artifact.format})` : ""}${artifact.description ? ` — ${artifact.description}` : ""}`)
     }
     sections.push(`Register artifacts using the \`register_artifact\` MCP tool.`)
   }
@@ -213,4 +246,172 @@ function buildMcpServers(): Record<string, { command: string; args?: string[] }>
   // Control-plane MCP tools will be provided via the system prompt
   // In a full implementation, these would be actual MCP server endpoints
   return {}
+}
+
+function resolveEnvironmentSpec(input: {
+  playbook: PlaybookRecord
+  run: RunRecord
+  inputs: Record<string, unknown>
+  workingDirectory?: string
+}): ResolvedRunEnvironment {
+  const defaultRepositories = normalizeStringArray(
+    input.playbook.context?.repositories,
+    "playbook.context.repositories",
+  )
+  const providedEnvironment = parseEnvironmentInput(input.inputs.environment)
+  const workingDirectory = resolveWorkingDirectory(input.workingDirectory)
+
+  return {
+    workingDirectory: workingDirectory ?? process.cwd(),
+    spec: {
+      kind: "environment",
+      id: providedEnvironment?.id ?? `env_${input.run.id}`,
+      name: providedEnvironment?.name ?? `${input.playbook.name} Environment`,
+      repositories: mergeStringArrays(
+        defaultRepositories,
+        providedEnvironment?.repositories,
+        "environment.repositories",
+      ),
+      integrations: providedEnvironment?.integrations,
+      constraints: mergeObjects(
+        providedEnvironment?.constraints,
+        workingDirectory ? { workingDirectory } : undefined,
+      ),
+      metadata: providedEnvironment?.metadata,
+    },
+  }
+}
+
+async function persistResolvedEnvironment(
+  runRepository: RunRepository,
+  run: RunRecord,
+  environment: EnvironmentSpec,
+): Promise<RunRecord> {
+  return runRepository.update({
+    ...run,
+    environment: environment.id,
+    input: {
+      ...run.input,
+      environment: structuredClone(environment),
+    },
+    updatedAt: new Date().toISOString(),
+  })
+}
+
+function parseEnvironmentInput(value: unknown): Partial<EnvironmentSpec> | undefined {
+  if (value === undefined) {
+    return undefined
+  }
+
+  if (!isRecord(value)) {
+    throw new Error("Invalid environment input: expected an object")
+  }
+
+  if (value.kind !== undefined && value.kind !== "environment") {
+    throw new Error('Invalid environment.kind: expected "environment"')
+  }
+
+  return {
+    kind: "environment",
+    id: readOptionalNonEmptyString(value.id, "environment.id"),
+    name: readOptionalNonEmptyString(value.name, "environment.name"),
+    repositories: normalizeStringArray(value.repositories, "environment.repositories"),
+    integrations: normalizeStringArray(value.integrations, "environment.integrations"),
+    constraints: readOptionalObject(value.constraints, "environment.constraints"),
+    metadata: readOptionalObject(value.metadata, "environment.metadata"),
+  }
+}
+
+function resolveWorkingDirectory(workingDirectory: unknown): string | undefined {
+  if (workingDirectory === undefined) {
+    return undefined
+  }
+
+  return readRequiredNonEmptyString(workingDirectory, "workingDirectory")
+}
+
+function readRequiredNonEmptyString(value: unknown, field: string): string {
+  if (typeof value !== "string") {
+    throw new Error(`Invalid ${field}: expected a non-empty string`)
+  }
+
+  const normalized = value.trim()
+  if (normalized.length === 0) {
+    throw new Error(`Invalid ${field}: expected a non-empty string`)
+  }
+
+  return normalized
+}
+
+function readOptionalNonEmptyString(value: unknown, field: string): string | undefined {
+  if (value === undefined) {
+    return undefined
+  }
+
+  return readRequiredNonEmptyString(value, field)
+}
+
+function normalizeStringArray(value: unknown, field: string): string[] | undefined {
+  if (value === undefined) {
+    return undefined
+  }
+
+  if (!Array.isArray(value)) {
+    throw new Error(`Invalid ${field}: expected an array of non-empty strings`)
+  }
+
+  return mergeStringArrays(value, undefined, field)
+}
+
+function mergeStringArrays(
+  left: readonly unknown[] | undefined,
+  right: readonly unknown[] | undefined,
+  field: string,
+): string[] | undefined {
+  const merged = [...(left ?? []), ...(right ?? [])].map((entry) => {
+    if (typeof entry !== "string" || entry.trim().length === 0) {
+      throw new Error(`Invalid ${field}: expected an array of non-empty strings`)
+    }
+
+    return entry.trim()
+  })
+
+  if (merged.length === 0) {
+    return undefined
+  }
+
+  return Array.from(new Set(merged))
+}
+
+function readOptionalObject(
+  value: unknown,
+  field: string,
+): Record<string, unknown> | undefined {
+  if (value === undefined) {
+    return undefined
+  }
+
+  if (!isRecord(value)) {
+    throw new Error(`Invalid ${field}: expected an object`)
+  }
+
+  return structuredClone(value)
+}
+
+function mergeObjects(
+  left: Record<string, unknown> | undefined,
+  right: Record<string, unknown> | undefined,
+): Record<string, unknown> | undefined {
+  if (!left && !right) {
+    return undefined
+  }
+
+  return {
+    ...(left ?? {}),
+    ...(right ?? {}),
+  }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
 }

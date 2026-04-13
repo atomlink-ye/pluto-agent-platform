@@ -195,6 +195,48 @@ describe("Run Compiler (Plan 003 F3)", () => {
       expect(prompt).toContain("register_artifact")
       expect(prompt).toContain("retro_document")
     })
+
+    it("passes resolved EnvironmentSpec repositories into the system prompt", async () => {
+      const { playbook, harness } = await createPlaybookAndHarness({
+        context: {
+          repositories: ["monorepo-main"],
+        },
+      })
+
+      const run = await compiler.compile({
+        playbookId: playbook.id,
+        harnessId: harness.id,
+        workingDirectory: " /tmp/pluto-workspace ",
+        inputs: {
+          topic: "Q1 Sprint 3",
+          environment: {
+            id: "env_custom",
+            name: "Custom Environment",
+            repositories: ["docs-repo"],
+            integrations: ["slack"],
+            metadata: { owner: "ops" },
+          },
+        },
+      })
+
+      const agentConfig = agentManager.listAgents()[0].config
+      const prompt = agentConfig.systemPrompt ?? ""
+      expect(prompt).toContain("monorepo-main")
+      expect(prompt).toContain("docs-repo")
+      expect(agentConfig.cwd).toBe("/tmp/pluto-workspace")
+
+      const storedRun = await runRepo.getById(run.id)
+      expect(storedRun?.environment).toBe("env_custom")
+      expect(storedRun?.input.environment).toEqual({
+        kind: "environment",
+        id: "env_custom",
+        name: "Custom Environment",
+        repositories: ["monorepo-main", "docs-repo"],
+        integrations: ["slack"],
+        constraints: { workingDirectory: "/tmp/pluto-workspace" },
+        metadata: { owner: "ops" },
+      })
+    })
   })
 
   describe("Scenario 3.3: Compilation failure is recorded", () => {
@@ -211,12 +253,9 @@ describe("Run Compiler (Plan 003 F3)", () => {
 
       await expect(compiler.compile(input)).rejects.toThrow()
 
-      // The run should exist and be in "failed" state
-      const allRuns = await runRepo.getById(
-        (await runEventRepo.listByRunId("")).length > 0 ? "" : "",
-      )
-      // We need to find the run that was created
-      // Check events for the run.created event
+      const runs = await runRepo.list()
+      expect(runs).toHaveLength(1)
+      expect(runs[0].status).toBe("failed")
     })
 
     it("sets failure reason on the run", async () => {
@@ -236,8 +275,45 @@ describe("Run Compiler (Plan 003 F3)", () => {
         // expected
       }
 
-      // No agents should be running
+      const runs = await runRepo.list()
+      expect(runs).toHaveLength(1)
+      expect(runs[0].failureReason).toContain("Compilation failed")
+      expect(runs[0].failureReason).toContain("Failed to create agent")
       expect(agentManager.listAgents()).toHaveLength(0)
+    })
+
+    it("kills the agent and fails the run when RunSession save throws after spawn", async () => {
+      const { playbook, harness } = await createPlaybookAndHarness()
+      const failingRunSessionRepo = {
+        save: async () => {
+          throw new Error("RunSession persistence failed")
+        },
+        getById: runSessionRepo.getById.bind(runSessionRepo),
+        listByRunId: runSessionRepo.listByRunId.bind(runSessionRepo),
+        update: runSessionRepo.update.bind(runSessionRepo),
+      }
+
+      const rollbackCompiler = new RunCompiler({
+        ...compiler["deps"],
+        runSessionRepository: failingRunSessionRepo,
+      })
+
+      await expect(
+        rollbackCompiler.compile({
+          playbookId: playbook.id,
+          harnessId: harness.id,
+          inputs: { topic: "rollback" },
+        }),
+      ).rejects.toThrow("RunSession persistence failed")
+
+      expect(agentManager.killedAgentIds).toHaveLength(1)
+      expect(agentManager.listAgents()).toHaveLength(0)
+
+      const runs = await runRepo.list()
+      expect(runs).toHaveLength(1)
+      expect(runs[0].status).toBe("failed")
+      expect(runs[0].failureReason).toContain("Compilation failed after agent spawn")
+      expect(runs[0].failureReason).toContain("RunSession persistence failed")
     })
   })
 
@@ -266,6 +342,9 @@ describe("Run Compiler (Plan 003 F3)", () => {
           async createAgent(config, agentId, options) {
             return agentManager.createAgent(config, agentId, options)
           },
+          async killAgent(agentId) {
+            return agentManager.killAgent(agentId)
+          },
           subscribe: agentManager.subscribe.bind(agentManager),
           getAgent: agentManager.getAgent.bind(agentManager),
           listAgents: agentManager.listAgents.bind(agentManager),
@@ -280,6 +359,34 @@ describe("Run Compiler (Plan 003 F3)", () => {
 
       await customCompiler.compile(input)
       expect(trackedAtRunTime).toBe(true)
+    })
+
+    it("does not block compilation for a valid merged EnvironmentSpec", async () => {
+      const { playbook, harness } = await createPlaybookAndHarness({
+        context: {
+          repositories: ["monorepo-main"],
+        },
+      })
+
+      const run = await compiler.compile({
+        playbookId: playbook.id,
+        harnessId: harness.id,
+        inputs: {
+          topic: "test",
+          environment: {
+            name: "Merged Environment",
+          },
+        },
+      })
+
+      expect(run.status).toBe("running")
+      const storedRun = await runRepo.getById(run.id)
+      expect(storedRun?.input.environment).toEqual({
+        kind: "environment",
+        id: `env_${run.id}`,
+        name: "Merged Environment",
+        repositories: ["monorepo-main"],
+      })
     })
   })
 })

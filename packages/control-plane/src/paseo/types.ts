@@ -198,6 +198,7 @@ export interface AgentManager {
     agentId?: string,
     options?: { labels?: Record<string, string> },
   ): Promise<ManagedAgent>
+  killAgent(agentId: string): Promise<void>
   runAgent(
     agentId: string,
     prompt: AgentPromptInput,
