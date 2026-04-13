@@ -58,8 +58,32 @@ type PolicySnapshotRow = typeof policySnapshots.$inferSelect
 
 const clone = <T>(value: T): T => structuredClone(value)
 
-const toVersionValue = (value: string | number | undefined): string | undefined =>
-  value === undefined ? undefined : String(value)
+const toStoredVersion = (
+  value: string | number | undefined,
+): { version: string | undefined; versionKind: "string" | "number" | undefined } => {
+  if (value === undefined) {
+    return {
+      version: undefined,
+      versionKind: undefined,
+    }
+  }
+
+  return {
+    version: String(value),
+    versionKind: typeof value === "number" ? "number" : "string",
+  }
+}
+
+const fromStoredVersion = (
+  value: string | null,
+  kind: "string" | "number" | null,
+): string | number | undefined => {
+  if (value === null) {
+    return undefined
+  }
+
+  return kind === "number" ? Number(value) : value
+}
 
 const toHarnessSummary = (row: HarnessRow) => ({
   id: row.publicId,
@@ -77,7 +101,7 @@ const toPlaybookRecord = (row: PlaybookRow, harnessRow: HarnessRow | null): Play
     name: row.name,
     description: row.description,
     owner: row.owner ?? undefined,
-    version: row.version ?? undefined,
+    version: fromStoredVersion(row.version, row.versionKind),
     harnessId: harnessRow?.publicId ?? null,
     harness: harnessRow ? toHarnessSummary(harnessRow) : null,
     inputs: row.inputs ?? undefined,
@@ -100,7 +124,7 @@ const toHarnessRecord = (row: HarnessRow): HarnessRecord =>
     kind: row.kind,
     name: row.name,
     description: row.description,
-    version: row.version ?? undefined,
+    version: fromStoredVersion(row.version, row.versionKind),
     phases: row.phases,
     status_model: row.statusModel ?? undefined,
     timeouts: row.timeouts ?? undefined,
@@ -174,7 +198,7 @@ const toApprovalRecord = (row: ApprovalRow, runPublicId: string): ApprovalRecord
     status: row.status as Approval["status"],
     requested_by: row.requestedBy,
     context: row.context ?? undefined,
-    resolution: row.resolution ?? undefined,
+    resolution: row.resolution,
     metadata: row.metadata ?? undefined,
   })
 
@@ -263,6 +287,7 @@ abstract class PostgresRepositoryBase {
 export class PostgresPlaybookRepository extends PostgresRepositoryBase implements PlaybookRepository {
   async save(playbook: PlaybookRecord): Promise<PlaybookRecord> {
     const harnessRow = playbook.harnessId ? await this.requireHarnessRow(playbook.harnessId) : null
+    const { version, versionKind } = toStoredVersion(playbook.version)
 
     await this.db
       .insert(playbooks)
@@ -274,7 +299,8 @@ export class PostgresPlaybookRepository extends PostgresRepositoryBase implement
         name: playbook.name,
         description: playbook.description,
         owner: playbook.owner,
-        version: toVersionValue(playbook.version),
+        version,
+        versionKind,
         harnessId: harnessRow?.id ?? null,
         inputs: playbook.inputs,
         goal: playbook.goal,
@@ -296,7 +322,8 @@ export class PostgresPlaybookRepository extends PostgresRepositoryBase implement
           name: playbook.name,
           description: playbook.description,
           owner: playbook.owner,
-          version: toVersionValue(playbook.version),
+          version,
+          versionKind,
           harnessId: harnessRow?.id ?? null,
           inputs: playbook.inputs,
           goal: playbook.goal,
@@ -353,6 +380,7 @@ export class PostgresPlaybookRepository extends PostgresRepositoryBase implement
 
   async update(playbook: PlaybookRecord): Promise<PlaybookRecord> {
     const harnessRow = playbook.harnessId ? await this.requireHarnessRow(playbook.harnessId) : null
+    const { version, versionKind } = toStoredVersion(playbook.version)
 
     const [updated] = await this.db
       .update(playbooks)
@@ -363,7 +391,8 @@ export class PostgresPlaybookRepository extends PostgresRepositoryBase implement
         name: playbook.name,
         description: playbook.description,
         owner: playbook.owner,
-        version: toVersionValue(playbook.version),
+        version,
+        versionKind,
         harnessId: harnessRow?.id ?? null,
         inputs: playbook.inputs,
         goal: playbook.goal,
@@ -395,6 +424,8 @@ export class PostgresPlaybookRepository extends PostgresRepositoryBase implement
 
 export class PostgresHarnessRepository extends PostgresRepositoryBase implements HarnessRepository {
   async save(harness: HarnessRecord): Promise<HarnessRecord> {
+    const { version, versionKind } = toStoredVersion(harness.version)
+
     await this.db
       .insert(harnesses)
       .values({
@@ -404,7 +435,8 @@ export class PostgresHarnessRepository extends PostgresRepositoryBase implements
         kind: harness.kind,
         name: harness.name,
         description: harness.description,
-        version: toVersionValue(harness.version),
+        version,
+        versionKind,
         phases: harness.phases,
         statusModel: harness.status_model,
         timeouts: harness.timeouts,
@@ -423,7 +455,8 @@ export class PostgresHarnessRepository extends PostgresRepositoryBase implements
           kind: harness.kind,
           name: harness.name,
           description: harness.description,
-          version: toVersionValue(harness.version),
+          version,
+          versionKind,
           phases: harness.phases,
           statusModel: harness.status_model,
           timeouts: harness.timeouts,
@@ -725,12 +758,6 @@ export class PostgresApprovalRepository extends PostgresRepositoryBase implement
         actionClass: approval.action_class,
         title: approval.title,
         status: approval.status,
-        source: approval.requested_by.source,
-        phase: approval.context?.phase,
-        stageId: approval.context?.stage_id,
-        sessionId: approval.requested_by.session_id,
-        roleId: approval.requested_by.role_id,
-        reason: approval.context?.reason,
         requestedBy: approval.requested_by,
         context: approval.context,
         resolution: approval.resolution,
@@ -746,12 +773,6 @@ export class PostgresApprovalRepository extends PostgresRepositoryBase implement
           actionClass: approval.action_class,
           title: approval.title,
           status: approval.status,
-          source: approval.requested_by.source,
-          phase: approval.context?.phase,
-          stageId: approval.context?.stage_id,
-          sessionId: approval.requested_by.session_id,
-          roleId: approval.requested_by.role_id,
-          reason: approval.context?.reason,
           requestedBy: approval.requested_by,
           context: approval.context,
           resolution: approval.resolution,
@@ -813,12 +834,6 @@ export class PostgresApprovalRepository extends PostgresRepositoryBase implement
         actionClass: approval.action_class,
         title: approval.title,
         status: approval.status,
-        source: approval.requested_by.source,
-        phase: approval.context?.phase,
-        stageId: approval.context?.stage_id,
-        sessionId: approval.requested_by.session_id,
-        roleId: approval.requested_by.role_id,
-        reason: approval.context?.reason,
         requestedBy: approval.requested_by,
         context: approval.context,
         resolution: approval.resolution,
@@ -856,8 +871,6 @@ export class PostgresArtifactRepository extends PostgresRepositoryBase implement
         type: artifact.type,
         title: artifact.title,
         format: artifact.format,
-        roleId: artifact.producer?.role_id,
-        sessionId: artifact.producer?.session_id,
         producer: artifact.producer,
         storage: artifact.storage,
         status: artifact.status,
@@ -873,8 +886,6 @@ export class PostgresArtifactRepository extends PostgresRepositoryBase implement
           type: artifact.type,
           title: artifact.title,
           format: artifact.format,
-          roleId: artifact.producer?.role_id,
-          sessionId: artifact.producer?.session_id,
           producer: artifact.producer,
           storage: artifact.storage,
           status: artifact.status,

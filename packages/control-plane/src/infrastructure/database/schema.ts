@@ -21,11 +21,13 @@ export const harnesses = pgTable(
   "harnesses",
   {
     ...auditColumns,
+    tenantId: text("tenant_id"),
     publicId: text("public_id").notNull(),
     kind: text("kind").$type<Harness["kind"]>().notNull(),
     name: text("name").notNull(),
     description: text("description").notNull(),
     version: text("version"),
+    versionKind: text("version_kind").$type<"string" | "number">(),
     phases: jsonb("phases").$type<Harness["phases"]>().notNull(),
     statusModel: jsonb("status_model").$type<Harness["status_model"]>(),
     timeouts: jsonb("timeouts").$type<Harness["timeouts"]>(),
@@ -43,12 +45,14 @@ export const playbooks = pgTable(
   "playbooks",
   {
     ...auditColumns,
+    tenantId: text("tenant_id"),
     publicId: text("public_id").notNull(),
     kind: text("kind").$type<Playbook["kind"]>().notNull(),
     name: text("name").notNull(),
     description: text("description").notNull(),
     owner: text("owner"),
     version: text("version"),
+    versionKind: text("version_kind").$type<"string" | "number">(),
     harnessId: uuid("harness_id").references(() => harnesses.id, { onDelete: "set null" }),
     inputs: jsonb("inputs").$type<Playbook["inputs"]>(),
     goal: text("goal").notNull(),
@@ -68,6 +72,7 @@ export const runs = pgTable(
   "runs",
   {
     ...auditColumns,
+    tenantId: text("tenant_id"),
     publicId: text("public_id").notNull(),
     kind: text("kind").$type<"run">().notNull(),
     playbookId: uuid("playbook_id")
@@ -91,6 +96,7 @@ export const runPlans = pgTable(
   "run_plans",
   {
     ...auditColumns,
+    tenantId: text("tenant_id"),
     kind: text("kind").$type<RunPlan["kind"]>().notNull(),
     runId: uuid("run_id")
       .notNull()
@@ -105,6 +111,7 @@ export const runEvents = pgTable(
   "run_events",
   {
     ...auditColumns,
+    tenantId: text("tenant_id"),
     publicId: text("public_id").notNull(),
     runId: uuid("run_id")
       .notNull()
@@ -130,6 +137,7 @@ export const approvalTasks = pgTable(
   "approval_tasks",
   {
     ...auditColumns,
+    tenantId: text("tenant_id"),
     publicId: text("public_id").notNull(),
     kind: text("kind").$type<Approval["kind"]>().notNull(),
     runId: uuid("run_id")
@@ -138,12 +146,6 @@ export const approvalTasks = pgTable(
     actionClass: text("action_class").notNull(),
     title: text("title").notNull(),
     status: text("status").notNull(),
-    source: text("source").notNull(),
-    phase: text("phase"),
-    stageId: text("stage_id"),
-    sessionId: text("session_id"),
-    roleId: text("role_id"),
-    reason: text("reason"),
     requestedBy: jsonb("requested_by").$type<Approval["requested_by"]>().notNull(),
     context: jsonb("context").$type<Approval["context"]>(),
     resolution: jsonb("resolution").$type<Approval["resolution"]>(),
@@ -156,6 +158,7 @@ export const artifacts = pgTable(
   "artifacts",
   {
     ...auditColumns,
+    tenantId: text("tenant_id"),
     publicId: text("public_id").notNull(),
     kind: text("kind").$type<Artifact["kind"]>().notNull(),
     runId: uuid("run_id")
@@ -164,8 +167,6 @@ export const artifacts = pgTable(
     type: text("type").notNull(),
     title: text("title"),
     format: text("format"),
-    roleId: text("role_id"),
-    sessionId: text("session_id"),
     producer: jsonb("producer").$type<Artifact["producer"]>(),
     storage: jsonb("storage").$type<Artifact["storage"]>(),
     status: text("status").notNull(),
@@ -178,6 +179,7 @@ export const runSessions = pgTable(
   "run_sessions",
   {
     ...auditColumns,
+    tenantId: text("tenant_id"),
     publicId: text("public_id").notNull(),
     kind: text("kind").$type<RunSession["kind"]>().notNull(),
     runId: uuid("run_id")
@@ -196,6 +198,7 @@ export const policySnapshots = pgTable(
   "policy_snapshots",
   {
     ...auditColumns,
+    tenantId: text("tenant_id"),
     kind: text("kind").$type<PolicySnapshot["kind"]>().notNull(),
     runId: uuid("run_id")
       .notNull()
