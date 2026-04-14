@@ -25,7 +25,8 @@
     "@pluto-agent-platform/paseo": "workspace:*",
     "drizzle-orm": "^0.44.2",
     "express": "^5.2.1",
-    "postgres": "^3.4.5"
+    "postgres": "^3.4.5",
+    "zod": "^4.3.6"
   },
   "devDependencies": {
     "@types/express": "^5.0.6"

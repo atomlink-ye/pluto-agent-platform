@@ -96,7 +96,8 @@ function createControlPlaneMcpServer(deps: CreateControlPlaneMcpToolsDeps): McpS
         description: tool.description,
         inputSchema: toZodObjectSchema(tool.inputSchema),
       },
-      async (input) => buildToolResult(await invokeToolHandler(tool.name, input, tools.handlers)),
+      async (input: Record<string, unknown>) =>
+        buildToolResult(await invokeToolHandler(tool.name, input, tools.handlers)),
     )
   }
 

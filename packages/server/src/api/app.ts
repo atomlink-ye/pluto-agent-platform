@@ -46,7 +46,13 @@ function queryParam(req: Request, name: string): string | undefined {
 const APPROVAL_STATUSES = new Set(["pending", "approved", "denied", "expired", "canceled"])
 
 interface ApprovalQueueItem extends ApprovalRecord {
-  run: Pick<RunRecord, "id" | "status" | "current_phase"> | null
+  run:
+    | {
+        id: RunRecord["id"]
+        status: RunRecord["status"]
+        current_phase: RunRecord["current_phase"] | null
+      }
+    | null
   playbook: Pick<PlaybookRecord, "id" | "name"> | null
 }
 

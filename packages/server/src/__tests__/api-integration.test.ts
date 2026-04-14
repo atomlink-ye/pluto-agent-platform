@@ -525,11 +525,6 @@ describe("Operator API integration", () => {
     const firstRun = await createRun(firstScenario.playbook.id, firstScenario.harness.id)
     const secondRun = await createRun(secondScenario.playbook.id, secondScenario.harness.id)
 
-    await runService.transition(firstRun.id, "initializing")
-    await runService.transition(firstRun.id, "running")
-    await runService.transition(secondRun.id, "initializing")
-    await runService.transition(secondRun.id, "running")
-
     const firstApproval = await approvalService.createApproval({
       runId: firstRun.id,
       actionClass: "pr_creation",

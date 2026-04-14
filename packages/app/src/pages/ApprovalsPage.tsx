@@ -83,7 +83,7 @@ export function ApprovalsPage() {
     try {
       setResolvingId(approvalId)
       setError(null)
-      await api.approvals.resolve(approvalId, { decision, resolvedBy: "operator" })
+      await api.approvals.resolve(approvalId, { decision })
       const data = await api.approvals.list(filter === "all" ? undefined : filter)
       setApprovals(data)
     } catch (e: any) {
