@@ -16,10 +16,11 @@ Preferred V1 navigation:
 
 - Playbooks
 - Runs
+- Approvals
 
-Approvals, artifacts, sessions, and operator/debug detail are currently surfaced inside **Run Detail** rather than as separate primary navigation destinations.
+Artifacts, sessions, and operator/debug detail remain primarily surfaced inside **Run Detail**.
 
-Dedicated Approvals and Artifacts list views may be added later, but they are not required for the current minimum coherent operator surface.
+The operator surface now includes a dedicated **Approvals** queue for cross-run review and resolution. This route exists to keep pending governance work high-visibility without making lower-level runtime objects the primary navigation model.
 
 Teams may exist in the model before they become a primary V1 navigation destination.
 
@@ -68,7 +69,7 @@ Must clearly separate:
 
 - pending approvals should be explicit and high visibility
 - approval context should include run linkage, requested action, and consequences
-- approval resolution may happen from the run detail surface until a dedicated approvals queue exists
+- approval resolution should work from both Run Detail and the dedicated approvals queue
 
 ## V1 frontend constraints
 
