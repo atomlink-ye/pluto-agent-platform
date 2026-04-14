@@ -65,8 +65,14 @@ const ToolReadChunkSchema = z.union([
 const ToolReadContentSchema = z.union([z.string(), ToolReadChunkSchema, z.array(ToolReadChunkSchema)]);
 export const ToolReadOutputSchema = z.union([
   z.string().transform((value) => ({ content: value })),
-  z.object({ content: ToolReadContentSchema.optional(), text: ToolReadContentSchema.optional(), output: ToolReadContentSchema.optional() }).passthrough(),
+  z.object({ content: ToolReadContentSchema.optional(), text: ToolReadContentSchema.optional(), output: ToolReadContentSchema.optional() }).passthrough().transform((value) => ({
+    content: value.content ?? value.text ?? value.output,
+  })),
 ]);
+
+type NormalizedReadOutput = {
+  content?: z.infer<typeof ToolReadContentSchema>;
+};
 
 export const ToolWriteInputSchema = z.union([
   z.object({ path: z.string(), content: z.string().optional() }).passthrough().transform((value) => ({ filePath: value.path, content: value.content })),
@@ -91,7 +97,8 @@ export function toShellToolDetail(input: z.infer<typeof ToolShellInputSchema>, o
 
 export function toReadToolDetail(input: z.infer<typeof ToolReadInputSchema>, output: z.infer<typeof ToolReadOutputSchema> | null): ToolCallDetail | undefined {
   if (!input.filePath) return undefined;
-  return { type: "read", filePath: input.filePath, content: flattenToolReadContent(output?.content ?? output?.text ?? output?.output), offset: input.offset, limit: input.limit };
+  const normalizedOutput = output as NormalizedReadOutput | null;
+  return { type: "read", filePath: input.filePath, content: flattenToolReadContent(normalizedOutput?.content), offset: input.offset, limit: input.limit };
 }
 
 export function toWriteToolDetail(input: z.infer<typeof ToolWriteInputSchema>, _output?: unknown): ToolCallDetail | undefined {
@@ -114,11 +121,17 @@ export function toFetchToolDetail(input: z.infer<typeof ToolWebFetchInputSchema>
   return { type: "fetch", url: input.url, prompt: input.prompt, result: typeof output === "string" ? output : undefined };
 }
 
-export function toolDetailBranchByName<TInput, TOutput>(
+export function toolDetailBranchByName<
+  TInputSchema extends z.ZodTypeAny,
+  TOutputSchema extends z.ZodTypeAny,
+>(
   name: string,
-  inputSchema: z.ZodType<TInput>,
-  outputSchema: z.ZodType<TOutput>,
-  mapper: (input: TInput, output: TOutput | null) => ToolCallDetail | undefined,
+  inputSchema: TInputSchema,
+  outputSchema: TOutputSchema,
+  mapper: (
+    input: z.output<TInputSchema>,
+    output: z.output<TOutputSchema> | null,
+  ) => ToolCallDetail | undefined,
 ) {
   return z.object({ name: z.literal(name), input: z.unknown().nullable(), output: z.unknown().nullable() }).transform(({ input, output }) => {
     const parsedInput = inputSchema.safeParse(input);

@@ -1,8 +1,15 @@
 import { z } from "zod";
 
 import type { ToolCallTimelineItem } from "../../agent-sdk-types.js";
-import { isSpeakToolName } from "../../tool-name-normalization.js";
 import { deriveClaudeToolDetail } from "./tool-call-detail-parser.js";
+
+function isSpeakToolName(name: string): boolean {
+  const normalized = name.trim().toLowerCase();
+  if (normalized === "speak") {
+    return true;
+  }
+  return normalized.split(/[:./]|__/).filter(Boolean).at(-1) === "speak";
+}
 
 type MapperParams = {
   callId?: string | null;
