@@ -4,6 +4,8 @@ dist/
 coverage/
 .env
 .env.*
+.pnpm-store/
+artifacts/
 *.tsbuildinfo
 
 .worktrees
