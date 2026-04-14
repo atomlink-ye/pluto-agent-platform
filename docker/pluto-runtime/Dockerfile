@@ -1,11 +1,12 @@
 FROM node:22-bookworm-slim
 
 ENV NODE_ENV=production
+ARG OPENCODE_VERSION=1.4.3
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates curl git openssh-client ripgrep \
     && rm -rf /var/lib/apt/lists/* \
-    && npm install -g opencode-ai@latest
+    && npm install -g "opencode-ai@${OPENCODE_VERSION}"
 
 WORKDIR /workspace
 

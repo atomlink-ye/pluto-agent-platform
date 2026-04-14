@@ -1,26 +1,74 @@
 # Pluto Agent Platform
 
-Pluto Agent Platform is a TypeScript, Postgres-backed rewrite direction for a workflow-oriented agent operations platform built on top of a forked Paseo kernel.
+Pluto Agent Platform is a TypeScript control plane for coding-agent teams. It treats agent execution as governed, durable runs instead of isolated chat sessions.
 
-## What this repository is trying to become
+The core model is:
 
-This project is not a traditional chat-first agent shell and not a static workflow-graph engine.
+- **Playbook** — reusable task intent
+- **Harness** — platform-enforced execution governance
+- **Run** — the durable, operator-visible execution instance
 
-It is intended to become a control plane for coding-agent teams where:
+## Quick start
 
-- **Playbook** defines task intent
-- **Harness** defines platform-enforced execution rules
-- **Run** is the durable, observable execution object
+The easiest out-of-box way to try the project is the seeded demo stack:
 
-The product remains workflow-oriented in the sense of **workflow-oriented UX and operations**, where users work around reusable task definitions and visible runs rather than isolated chat sessions. The core model intentionally weakens the idea of a rigid workflow graph and replaces it with **playbook + harness + run**.
+```bash
+docker compose up --build pluto-demo
+```
 
-## Strategic direction
+Then open:
+
+- App UI: http://localhost:3000
+- API health: http://localhost:4000/api/health
+
+This path does **not** require provider auth. It starts the operator UI and the seeded demo API backend in fake runtime mode.
+
+The demo image bundles the workspace and installs dependencies inside the image, so you do not need a local Node or pnpm setup just to try the project.
+
+## What you get in the demo
+
+The demo bootstraps sample data so open source users can explore the product immediately:
+
+- playbooks
+- harnesses
+- runs in multiple lifecycle states
+- approvals
+- artifacts
+- a supervisor-led team run with session and handoff examples
+
+## Docker modes
+
+### Out-of-box demo
+
+Recommended onboarding path: use the quick-start command above.
+
+### Live provider-backed Docker E2E
+
+The live E2E stack uses tracked repo-owned Docker assets under:
+
+- `docker/pluto-runtime/`
+- `docker/pluto-platform/`
+
+It still requires local provider auth mounted through `docker-compose.runtime.override.yml`.
+
+Host prerequisites:
+
+- `${HOME}/.local/share/opencode/auth.json`
+- `${HOME}/.codex`
+
+Run it with:
+
+```bash
+docker compose -f docker-compose.e2e-live.yml -f docker-compose.runtime.override.yml up --build --abort-on-container-exit --exit-code-from pluto-platform-e2e-live
+```
+
+## Current repository shape
 
 - **Language:** TypeScript
 - **Durable business state:** Postgres
 - **Runtime and UI kernel:** forked Paseo
 - **Product layer:** run lifecycle, approvals, artifacts, orchestration semantics, operator-facing UX
-- **Delivery method:** EDD-first, with documents treated as part of the product surface
+- **Delivery method:** EDD-first, with docs treated as part of the product
 
 ## Documentation entry points
 
@@ -39,10 +87,6 @@ Read in this order:
 - [`docs/exec-plans/`](./docs/exec-plans/testing-and-evaluation-strategy.md) — execution plans, EDD workflow, active implementation plans
 - [`docs/references/`](./docs/references/index.md) — reference summaries and source mapping from redesign inputs
 
-## Current repository state
-
-This repository currently prioritizes documentation normalization before code implementation. The immediate goal is to freeze terminology, scope, architectural boundaries, and the minimum stable core before building the actual monorepo.
-
 ## Core principles
 
 - Prefer **playbook / harness / run** over rigid workflow graphs
@@ -50,7 +94,3 @@ This repository currently prioritizes documentation normalization before code im
 - Use **EDD** for every iteration
 - Treat documentation consistency as a delivery requirement
 - Keep durable truth in **Postgres**, not in runtime-local files
-
-## Status
-
-Phase 0: documentation bootstrap and decision freeze.

@@ -7,7 +7,7 @@
   ],
   "scripts": {
     "build": "tsc -b",
-    "dev": "sh -c 'pnpm --filter @pluto-agent-platform/server dev:server & pnpm --filter @pluto-agent-platform/app dev'",
+    "dev": "sh -c 'trap \"kill 0\" EXIT; pnpm --filter @pluto-agent-platform/server dev:server & pnpm --filter @pluto-agent-platform/app dev'",
     "typecheck": "tsc -b",
     "test": "vitest run --passWithNoTests"
   },

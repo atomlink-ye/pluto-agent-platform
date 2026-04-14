@@ -45,12 +45,13 @@ services:
       OPENCODE_BASE_URL: http://pluto-runtime:4096
       LIVE_AGENT_E2E: "1"
       PASEO_MODE: live
+      CI: "true"
     volumes:
       - .:/workspace
     command: >-
       sh -lc "
         corepack enable &&
-        pnpm install --frozen-lockfile &&
+        pnpm install --frozen-lockfile --config.confirmModulesPurge=false &&
         pnpm --filter @pluto-agent-platform/control-plane db:push &&
-        pnpm vitest run packages/control-plane/src/__tests__/e2e-docker/live-agent.test.ts
+        pnpm exec vitest run packages/control-plane/src/__tests__/e2e-docker/live-agent.test.ts
       "

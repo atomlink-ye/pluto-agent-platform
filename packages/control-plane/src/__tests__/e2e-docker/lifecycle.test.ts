@@ -77,7 +77,17 @@ describeDocker("Docker E2E: Postgres-backed lifecycle", () => {
     expect(persistedRun).not.toBeNull()
     expect(persistedRun?.playbook).toBe(playbook.id)
     expect(persistedRun?.harness).toBe(harness.id)
-    expect(persistedRun?.input).toEqual({ topic: "docker-e2e", attempt: 1 })
+    expect(persistedRun?.input).toEqual(
+      expect.objectContaining({ topic: "docker-e2e", attempt: 1 }),
+    )
+    expect(persistedRun?.input).toEqual(
+      expect.objectContaining({
+        environment: expect.objectContaining({
+          kind: "environment",
+          name: "Docker E2E Playbook Environment",
+        }),
+      }),
+    )
     expect(persistedPlan?.current_phase).toBe("work")
     expect(persistedPlan?.stages.map((stage) => stage.phase)).toEqual(["work", "review"])
     expect(persistedPolicySnapshot?.approvals).toEqual({ destructive_write: "required" })

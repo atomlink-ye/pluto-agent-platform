@@ -180,7 +180,7 @@ async function main() {
 
   app.listen(PORT, () => {
     console.log(`Pluto dev server running at http://localhost:${PORT}`)
-    console.log(`Frontend: http://localhost:3000 (run "pnpm --filter app dev")`)
+    console.log(`Frontend: http://localhost:3000 (run "pnpm dev")`)
   })
 }
 

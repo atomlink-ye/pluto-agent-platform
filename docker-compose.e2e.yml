@@ -13,12 +13,13 @@ services:
     environment:
       DATABASE_URL: postgres://pluto_test:pluto_test@postgres-e2e:5432/pluto_test
       TEST_DATABASE_URL: postgres://pluto_test:pluto_test@postgres-e2e:5432/pluto_test
+      CI: "true"
     volumes:
       - .:/workspace
     command: >-
       sh -lc "
         corepack enable &&
-        pnpm install --frozen-lockfile &&
+        pnpm install --frozen-lockfile --config.confirmModulesPurge=false &&
         pnpm --filter @pluto-agent-platform/control-plane db:push &&
-        pnpm --filter @pluto-agent-platform/control-plane test -- src/__tests__/e2e-docker/lifecycle.test.ts
+        pnpm exec vitest run packages/control-plane/src/__tests__/e2e-docker/lifecycle.test.ts
       "
