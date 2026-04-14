@@ -221,12 +221,58 @@ describe("Recovery Service (Plan 003 F6)", () => {
       expect(updatedRun!.blockerReason).toContain("runtime session lost")
     })
 
-    it("surfaces persistence_handle availability during recovery", async () => {
+    it("resumes from persistence_handle when the agent is gone", async () => {
       const { run } = await createRunInState("running")
+      agentManager.nextCreatedAgentPersistence = {
+        provider: "claude",
+        sessionId: "provider-session-789",
+      }
 
       await runSessionRepo.save({
         kind: "run_session",
         id: "sess_resumable",
+        run_id: run.id,
+        session_id: "agent_gone",
+        persistence_handle: "provider-session-456",
+        provider: "claude",
+        status: "active",
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      })
+
+      const result = await recoveryService.recoverRun(run.id)
+
+      expect(result).toBe("recovered")
+
+      const sessions = await runSessionRepo.listByRunId(run.id)
+      const resumedSession = sessions[0]
+      const resumedAgentId = resumedSession.session_id
+
+      expect(agentManager.getAgent(resumedAgentId)).toBeDefined()
+      expect(adapter.getRunIdForAgent(resumedAgentId)).toBe(run.id)
+      expect(agentManager.runAgentCalls).toContainEqual({
+        agentId: resumedAgentId,
+        prompt: "Resume after daemon restart",
+        options: {
+          resumeFrom: {
+            provider: "claude",
+            sessionId: "provider-session-456",
+          },
+        },
+      })
+      expect(resumedSession.persistence_handle).toBe("provider-session-789")
+
+      const updatedRun = await runRepo.getById(run.id)
+      expect(updatedRun!.status).toBe("running")
+    })
+
+    it("blocks with resume error details when persistence resume fails", async () => {
+      const { run } = await createRunInState("running")
+      agentManager.shouldFailRunAgent = true
+
+      await runSessionRepo.save({
+        kind: "run_session",
+        id: "sess_resumable_failure",
         run_id: run.id,
         session_id: "agent_gone",
         persistence_handle: "provider-session-456",
@@ -243,8 +289,9 @@ describe("Recovery Service (Plan 003 F6)", () => {
       const updatedRun = await runRepo.getById(run.id)
       const sessions = await runSessionRepo.listByRunId(run.id)
 
-      expect(updatedRun!.blockerReason).toContain("persistence handle available")
-      expect(sessions[0].persistence_handle).toBe("provider-session-456")
+      expect(updatedRun!.blockerReason).toContain("resume from persistence handle failed")
+      expect(updatedRun!.blockerReason).toContain("Failed to run agent (simulated)")
+      expect(sessions[0].status).toBe("failed")
     })
   })
 
@@ -262,13 +309,56 @@ describe("Recovery Service (Plan 003 F6)", () => {
   })
 
   describe("Scenario 6.5: Idempotent recovery", () => {
-    it("second recovery call is a no-op", async () => {
+    it("scans non-terminal runs once and leaves the second call empty", async () => {
+      const { run: terminalRun } = await createRunInState("running")
+      await runService.transition(terminalRun.id, "succeeded")
+
+      const { run: liveRun } = await createRunInState("running")
+      await agentManager.createAgent({ provider: "claude", cwd: "/tmp/live" }, "agent_live")
+      await runSessionRepo.save({
+        kind: "run_session",
+        id: "sess_live",
+        run_id: liveRun.id,
+        session_id: "agent_live",
+        provider: "claude",
+        status: "active",
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      })
+
+      const { run: lostRun } = await createRunInState("running")
+      await runSessionRepo.save({
+        kind: "run_session",
+        id: "sess_lost_scan",
+        run_id: lostRun.id,
+        session_id: "agent_missing",
+        provider: "claude",
+        status: "active",
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      })
+
       const firstResult = await recoveryService.recover()
       const secondResult = await recoveryService.recover()
 
-      // Both should succeed without errors
-      expect(firstResult).toBeDefined()
-      expect(secondResult).toBeDefined()
+      expect(firstResult).toEqual({
+        recovered: [liveRun.id],
+        blocked: [lostRun.id],
+        waitingApproval: [],
+        skipped: [],
+      })
+
+      const updatedTerminalRun = await runRepo.getById(terminalRun.id)
+      const updatedLostRun = await runRepo.getById(lostRun.id)
+
+      expect(updatedTerminalRun!.status).toBe("succeeded")
+      expect(updatedLostRun!.status).toBe("blocked")
+      expect(secondResult).toEqual({
+        recovered: [],
+        blocked: [],
+        waitingApproval: [],
+        skipped: [],
+      })
     })
   })
 })
