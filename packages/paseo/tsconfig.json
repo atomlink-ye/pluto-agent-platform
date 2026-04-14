@@ -1,0 +1,15 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "outDir": "dist",
+    "rootDir": "src"
+  },
+  "include": ["src/**/*.ts"],
+  "exclude": [
+    "src/**/*.test.ts",
+    "src/server/agent/mcp-server.ts",
+    "src/server/agent/mcp-shared.ts",
+    "src/server/agent/provider-registry.ts",
+    "src/server/agent/providers/**/*"
+  ]
+}
