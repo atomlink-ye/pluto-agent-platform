@@ -27,12 +27,32 @@ import {
   RuntimeAdapter,
   PhaseController,
   FakeAgentManager,
+  PaseoAgentManager,
 } from "@pluto-agent-platform/control-plane"
+import {
+  AgentManager as PaseoKernelAgentManager,
+  createRootLogger,
+} from "@pluto-agent-platform/paseo"
+import { ClaudeAgentClient } from "../../paseo/src/server/agent/providers/claude-agent.js"
 
 import { createApp } from "./api/app.js"
 import { seedDevData } from "./seed.js"
 
 const PORT = Number(process.env.PORT ?? 4000)
+const PASEO_MODE = process.env.PASEO_MODE ?? "fake"
+
+function createAgentManager() {
+  if (PASEO_MODE !== "live") {
+    return new FakeAgentManager()
+  }
+
+  const logger = createRootLogger()
+  const clients = {
+    claude: new ClaudeAgentClient({ logger }),
+  }
+
+  return new PaseoAgentManager(new PaseoKernelAgentManager({ clients, logger }))
+}
 
 // Repositories
 const playbookRepo = new InMemoryPlaybookRepository()
@@ -63,7 +83,7 @@ const runService = new RunService(
   artifactService,
 )
 const approvalService = new ApprovalService(approvalRepo, runService, runEventRepo)
-const agentManager = new FakeAgentManager()
+const agentManager = createAgentManager()
 const phaseController = new PhaseController({
   harnessRepository: harnessRepo,
   runRepository: runRepo,

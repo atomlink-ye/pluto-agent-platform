@@ -21,6 +21,7 @@
   },
   "dependencies": {
     "@pluto-agent-platform/contracts": "workspace:*",
+    "@pluto-agent-platform/paseo": "workspace:*",
     "drizzle-orm": "^0.44.2",
     "postgres": "^3.4.5"
   },

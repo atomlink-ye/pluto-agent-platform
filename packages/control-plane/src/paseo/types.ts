@@ -64,6 +64,12 @@ export type AgentStreamEvent =
       stageId?: string
     }
   | {
+      type: "usage_updated"
+      provider: AgentProvider
+      usage: AgentUsage
+      turnId?: string
+    }
+  | {
       type: "turn_failed"
       provider: AgentProvider
       error: string

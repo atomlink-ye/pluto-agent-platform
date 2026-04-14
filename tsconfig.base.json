@@ -13,6 +13,7 @@
     "paths": {
       "@pluto-agent-platform/contracts": ["packages/contracts/src/index.ts"],
       "@pluto-agent-platform/control-plane": ["packages/control-plane/src/index.ts"],
+      "@pluto-agent-platform/paseo": ["packages/paseo/src/index.ts"],
       "@pluto-agent-platform/server": ["packages/server/src/index.ts"],
       "@pluto-agent-platform/app": ["packages/app/src/index.ts"],
       "@pluto-agent-platform/cli": ["packages/cli/src/index.ts"]
