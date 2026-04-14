@@ -6,7 +6,13 @@ Fork the minimal Paseo kernel into this repository and wire it to the control pl
 
 ## Current status note
 
-Draft. Pending architecture review.
+Features 1–3 complete. Features 4–5 in progress.
+
+- **F1 (Paseo Core Package):** All excluded files integrated, provider-registry stripped to Claude-only, typecheck clean, 132 tests passing.
+- **F2 (Control-Plane Wiring):** PaseoAgentManager adapter created, dev-server bootstrap wired with `PASEO_MODE` env selection.
+- **F3 (Recovery Completion):** Startup scan, persistence handle resume, and idempotent guard all implemented and tested.
+- **F4 (E2E Test Infrastructure):** In progress — Docker + OpenCode provider.
+- **F5 (Web UI Tests):** In progress — midscenejs browser automation.
 
 ## Scope
 
@@ -107,15 +113,15 @@ The package exports at minimum:
 
 ### Checklist
 
-- [ ] `packages/paseo/` created with package.json and tsconfig
-- [ ] AgentManager forked and adapted
-- [ ] Claude provider forked (minimal, no other providers)
-- [ ] MCP server forked
-- [ ] Bootstrap/daemon initialization
-- [ ] WebSocket server (for UI client connections)
-- [ ] Shared types and protocol
-- [ ] Monorepo builds cleanly with new package
-- [ ] Smoke test: create agent, run prompt, receive events
+- [x] `packages/paseo/` created with package.json and tsconfig
+- [x] AgentManager forked and adapted
+- [x] Claude provider forked (minimal, no other providers)
+- [x] MCP server forked (stripped of terminal, schedule, voice, worktree-bootstrap)
+- [x] Bootstrap/daemon initialization
+- [x] WebSocket server (for UI client connections)
+- [x] Shared types and protocol
+- [x] Monorepo builds cleanly with new package
+- [ ] Smoke test: create agent, run prompt, receive events (deferred to F4 E2E)
 
 ---
 
@@ -162,12 +168,12 @@ The adapter maps between Paseo's internal types and the control-plane's stable i
 
 ### Checklist
 
-- [ ] `PaseoAgentManager` adapter created
-- [ ] Server bootstrap updated with environment-based selection
-- [ ] RuntimeAdapter receives real Paseo events
-- [ ] RunCompiler spawns real agents
-- [ ] PhaseController interacts with real agents
-- [ ] Existing tests unaffected (FakeAgentManager preserved for testing)
+- [x] `PaseoAgentManager` adapter created (`packages/control-plane/src/paseo/paseo-agent-manager.ts`)
+- [x] Server bootstrap updated with environment-based selection (`PASEO_MODE=live|fake`)
+- [x] RuntimeAdapter receives real Paseo events (via adapter type mapping)
+- [x] RunCompiler spawns real agents (through PaseoAgentManager)
+- [x] PhaseController interacts with real agents (through PaseoAgentManager)
+- [x] Existing tests unaffected (FakeAgentManager preserved for testing) — 132 tests passing
 
 ---
 
@@ -199,10 +205,10 @@ Complete the remaining items from Plan 003 Feature 6:
 
 ### Checklist
 
-- [ ] Startup recovery scan for non-terminal runs
-- [ ] Resume attempt via persistence handle
-- [ ] Idempotent full recovery (safe startup sweep)
-- [ ] All Plan 003 F6 test scenarios passing
+- [x] Startup recovery scan for non-terminal runs (`recover()` queries all runs, filters non-terminal)
+- [x] Resume attempt via persistence handle (`recoverRun()` Step 5 creates new agent with `resumeFrom`)
+- [x] Idempotent full recovery (`hasRun` flag prevents re-entry)
+- [x] All Plan 003 F6 test scenarios passing (132 tests, including new startup scan test)
 
 ---
 

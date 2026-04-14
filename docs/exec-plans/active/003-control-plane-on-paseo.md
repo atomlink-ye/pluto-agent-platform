@@ -447,11 +447,11 @@ Runs in `waiting_approval` do not need a live agent — they simply remain pause
 ### Checklist
 
 - [x] Event-based state projector (RunEvents → current Run state)
-- [ ] Startup recovery scan for non-terminal runs
+- [x] Startup recovery scan for non-terminal runs (Plan 005 F3)
 - [x] Agent existence check via Paseo AgentManager
-- [ ] Resume attempt via persistence handle
+- [x] Resume attempt via persistence handle (Plan 005 F3)
 - [x] Graceful degradation to `blocked` on unrecoverable loss for targeted recovery
-- [ ] Idempotent full recovery (safe startup sweep across all active runs)
+- [x] Idempotent full recovery (safe startup sweep across all active runs) (Plan 005 F3)
 
 ---
 
@@ -492,9 +492,11 @@ Features 2 and 3 can be developed in parallel if Feature 2 uses a fake AgentMana
 
 ### Gate 4: Survives restart
 
-- Feature 6 remains in progress
-- Targeted recovery behavior exists for known runs, but startup sweep/rebind is not complete yet
-- A run in `waiting_approval` remains durably visible, but full restart handling is still being finished
+- Feature 6 complete (implemented in Plan 005 F3)
+- Startup sweep scans all non-terminal runs and recovers or blocks each
+- Persistence handle resume creates new agent with `resumeFrom` option
+- Idempotent guard prevents duplicate recovery runs
+- A run in `waiting_approval` remains durably visible without needing a live agent
 - No durable state is lost
 
 ## Completion criteria
