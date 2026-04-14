@@ -50,6 +50,19 @@ export interface OpenCodeDeliveredPrompt {
   agentId: string
   opencodeSessionId: string
   prompt: string
+  runtimeMetadata: OpenCodeRuntimeMetadata
+}
+
+export interface OpenCodeRuntimeMetadata {
+  providerId: string | null
+  modelId: string | null
+  mode: string | null
+  agent: string | null
+}
+
+interface OpenCodeMessagePayload {
+  runtimeMetadata: OpenCodeRuntimeMetadata
+  assistantText: string
 }
 
 export class OpenCodeTestAgentClient implements AgentClient {
@@ -315,15 +328,18 @@ export class OpenCodeTestSession implements AgentSession {
         throw new Error(`OpenCode message failed: ${response.status} ${response.statusText}`)
       }
 
+      const payload = extractOpenCodeMessagePayload((await response.json()) as unknown)
+
       this.onDeliveredPrompt({
         agentId: this.agentId,
         opencodeSessionId: this.id,
         prompt,
+        runtimeMetadata: payload.runtimeMetadata,
       })
 
       const assistantMessage: AgentTimelineItem = {
         type: "assistant_message",
-        text: "Prompt accepted by OpenCode runtime.",
+        text: payload.assistantText || "Prompt accepted by OpenCode runtime.",
       }
       this.timeline.push(assistantMessage)
       this.notify({
@@ -376,4 +392,81 @@ function normalizePrompt(prompt: AgentPromptInput): string {
     .filter((block) => block.type === "text")
     .map((block) => block.text)
     .join("\n")
+}
+
+function extractOpenCodeMessagePayload(payload: unknown): OpenCodeMessagePayload {
+  return {
+    runtimeMetadata: extractOpenCodeRuntimeMetadata(payload),
+    assistantText: extractAssistantText(payload),
+  }
+}
+
+function extractOpenCodeRuntimeMetadata(payload: unknown): OpenCodeRuntimeMetadata {
+  const providerId = findStringValue(payload, ["providerID", "providerId", "provider"])
+  const modelId = findStringValue(payload, ["modelID", "modelId", "model"])
+  const mode = findStringValue(payload, ["mode", "modeID", "modeId"])
+  const agent = findStringValue(payload, ["agent", "agentID", "agentId"])
+
+  return {
+    providerId,
+    modelId,
+    mode,
+    agent,
+  }
+}
+
+function extractAssistantText(payload: unknown): string {
+  if (!isRecord(payload)) {
+    return ""
+  }
+
+  const parts = payload.parts
+  if (!Array.isArray(parts)) {
+    return ""
+  }
+
+  const textParts = parts
+    .filter((part): part is Record<string, unknown> => isRecord(part))
+    .filter((part) => part.type === "text")
+    .map((part) => (typeof part.text === "string" ? part.text : ""))
+    .filter((text) => text.length > 0)
+
+  return textParts.join("\n")
+}
+
+function findStringValue(value: unknown, fieldNames: string[]): string | null {
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const match = findStringValue(item, fieldNames)
+      if (match != null) {
+        return match
+      }
+    }
+
+    return null
+  }
+
+  if (!isRecord(value)) {
+    return null
+  }
+
+  for (const fieldName of fieldNames) {
+    const directValue = value[fieldName]
+    if (typeof directValue === "string" && directValue.length > 0) {
+      return directValue
+    }
+  }
+
+  for (const nestedValue of Object.values(value)) {
+    const match = findStringValue(nestedValue, fieldNames)
+    if (match != null) {
+      return match
+    }
+  }
+
+  return null
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null
 }

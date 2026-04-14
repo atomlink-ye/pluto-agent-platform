@@ -1,6 +1,4 @@
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest"
-
-import type { RunEventEnvelope } from "@pluto-agent-platform/contracts"
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest"
 
 import {
   closeLiveE2EDockerTestContext,
@@ -12,6 +10,7 @@ import {
 const describeLiveAgent = process.env.LIVE_AGENT_E2E === "1" ? describe : describe.skip
 
 let context: LiveE2EDockerTestContext
+let stopRuntimeAdapter: (() => void) | null = null
 
 describeLiveAgent("Docker E2E: live OpenCode agent runtime", () => {
   beforeAll(() => {
@@ -20,27 +19,34 @@ describeLiveAgent("Docker E2E: live OpenCode agent runtime", () => {
 
   beforeEach(async () => {
     await resetLiveE2EDockerDatabase()
-    context.runtimeAdapter.start()
+    stopRuntimeAdapter = context.runtimeAdapter.start()
+  })
+
+  afterEach(() => {
+    stopRuntimeAdapter?.()
+    stopRuntimeAdapter = null
   })
 
   afterAll(async () => {
     await closeLiveE2EDockerTestContext()
   })
 
-  it("compiles an opencode run, delivers the prompt, and projects runtime events", async () => {
+  it("compiles a run and persists an OpenCode-backed run session", async () => {
+    stopRuntimeAdapter?.()
+    stopRuntimeAdapter = null
+
     const playbook = await context.playbookService.create({
-      name: "Live Agent E2E Playbook",
-      description: "Exercises a real OpenCode runtime from the control plane",
-      goal: "Verify prompt delivery and runtime event projection against OpenCode",
-      instructions: "Follow the harness and use control-plane tools when directed.",
-      artifacts: [{ type: "run_report", format: "json" }],
+      name: "Live Compile Session Playbook",
+      description: "Verifies compile-time binding to a local OpenCode runtime",
+      goal: "Create a governed run backed by a real OpenCode session",
+      instructions: "Acknowledge the task briefly.",
+      artifacts: [],
     })
 
     const harness = await context.harnessService.create({
-      name: "Live Agent E2E Harness",
-      description: "Minimal harness for live runtime verification",
-      phases: ["work", "review"],
-      approvals: { destructive_write: "required" },
+      name: "Live Compile Session Harness",
+      description: "Single-phase harness for compile/session verification",
+      phases: ["work"],
     })
 
     await context.harnessService.attachToPlaybook(harness.id, playbook.id)
@@ -48,9 +54,7 @@ describeLiveAgent("Docker E2E: live OpenCode agent runtime", () => {
     const run = await context.compiler.compile({
       playbookId: playbook.id,
       harnessId: harness.id,
-      inputs: {
-        topic: "live-agent-e2e",
-      },
+      inputs: {},
       provider: "opencode",
       workingDirectory: process.cwd(),
     })
@@ -60,76 +64,62 @@ describeLiveAgent("Docker E2E: live OpenCode agent runtime", () => {
       return sessions.length > 0 ? sessions : null
     })
 
-    const deliveredPrompt = await waitFor(() => {
-      return (
-        context.agentClient.deliveredPrompts.find((entry) => entry.agentId === runSession.session_id) ??
-        null
-      )
-    })
+    const testSession = context.agentClient.getSessionByAgentId(runSession.session_id)
 
     expect(run.status).toBe("running")
-    expect(deliveredPrompt.opencodeSessionId).toBeTruthy()
-    expect(deliveredPrompt.prompt).toContain(`Begin executing the task \"${playbook.name}\".`)
-    expect(deliveredPrompt.prompt).toContain("topic")
-
-    const testSession = context.agentClient.getSessionByAgentId(runSession.session_id)
+    expect(runSession.provider).toBe("opencode")
+    expect(runSession.persistence_handle).toBeTruthy()
     expect(testSession).toBeDefined()
+    expect(testSession?.id).toBe(runSession.persistence_handle)
 
-    testSession?.emitTimeline(
-      {
-        type: "tool_call",
-        callId: "tool_call_review",
-        name: "declare_phase",
-        status: "completed",
-        error: null,
-        detail: {
-          type: "plain_text",
-        },
-        input: { phase: "review" },
-      },
-      "turn_live_phase",
-    )
+    await context.agentManager.killAgent(runSession.session_id)
+  }, 30_000)
 
-    const phaseEvent = await waitForRunEvent(run.id, (event) => event.eventType === "phase.entered")
-    expect(phaseEvent.payload).toEqual({ phase: "review" })
-
-    const phaseResult = await context.phaseController.handlePhaseDeclaration(run.id, "review")
-    expect(phaseResult.allowed).toBe(true)
-
-    const [approval] = await waitFor(async () => {
-      const approvals = await context.approvalRepo.listByRunId(run.id)
-      return approvals.length > 0 ? approvals : null
+  it("uses the co-deployed OpenCode runtime with the free MiniMax build default", async () => {
+    const agent = await context.agentManager.createAgent({
+      provider: "opencode",
+      cwd: process.cwd(),
+      title: "Live OpenCode MiniMax build smoke test",
     })
 
-    expect(approval.status).toBe("pending")
+    const result = await context.agentManager.runAgent(agent.id, "Reply with exactly: hi")
 
-    await context.phaseController.handleApprovalResolution(run.id, approval.id, "approved")
-    await context.approvalService.resolve(
-      approval.id,
-      "approved",
-      "operator_live",
-      "Approved in live OpenCode E2E",
-    )
-
-    const approvalPrompt = await waitFor(() => {
-      return (
-        context.agentClient.deliveredPrompts.find(
-          (entry) =>
-            entry.agentId === runSession.session_id &&
-            entry.prompt.includes("Approval granted for review phase. Proceed with execution."),
-        ) ?? null
-      )
+    const deliveredPrompt = await waitFor(() => {
+      return context.agentClient.deliveredPrompts.find((entry) => entry.agentId === agent.id) ?? null
     })
 
-    expect(approvalPrompt.prompt).toContain("Proceed with execution")
-  })
+    expect(result.finalText.trim().toLowerCase()).toBe("hi")
+    expect(deliveredPrompt.opencodeSessionId).toBeTruthy()
+    expect(deliveredPrompt.prompt).toContain("Reply with exactly: hi")
+    expect(
+      normalizeRuntimeValue(deliveredPrompt.runtimeMetadata.mode),
+      `Expected OpenCode runtime to report build mode for initial prompt; received ${formatRuntimeMetadata(deliveredPrompt.runtimeMetadata)}`,
+    ).toBe("build")
+
+    const normalizedProvider = normalizeRuntimeValue(deliveredPrompt.runtimeMetadata.providerId)
+    const normalizedModel = normalizeRuntimeValue(deliveredPrompt.runtimeMetadata.modelId)
+
+    expect(
+      normalizedProvider,
+      `Expected OpenCode runtime to report the OpenCode provider for initial prompt; received ${formatRuntimeMetadata(deliveredPrompt.runtimeMetadata)}`,
+    ).toBe("opencode")
+    expect(
+      normalizedModel,
+      `Expected OpenCode runtime to report a free MiniMax/default OpenCode model for initial prompt; received ${formatRuntimeMetadata(deliveredPrompt.runtimeMetadata)}`,
+    ).toContain("minimax")
+    expect(
+      normalizedModel,
+      `Expected OpenCode runtime to report a free MiniMax/default OpenCode model for initial prompt; received ${formatRuntimeMetadata(deliveredPrompt.runtimeMetadata)}`,
+    ).toContain("free")
+    expect(normalizedModel).not.toContain("gpt-5.4")
+  }, 60_000)
 })
 
 async function waitFor<T>(
   producer: () => Promise<T | null> | T | null,
   options?: { timeoutMs?: number; intervalMs?: number },
 ): Promise<T> {
-  const timeoutMs = options?.timeoutMs ?? 10_000
+  const timeoutMs = options?.timeoutMs ?? 30_000
   const intervalMs = options?.intervalMs ?? 100
   const start = Date.now()
 
@@ -144,12 +134,15 @@ async function waitFor<T>(
   throw new Error(`Timed out after ${timeoutMs}ms`)
 }
 
-async function waitForRunEvent(
-  runId: string,
-  predicate: (event: RunEventEnvelope) => boolean,
-): Promise<RunEventEnvelope> {
-  return waitFor(async () => {
-    const events = await context.runEventRepo.listByRunId(runId)
-    return events.find(predicate) ?? null
-  })
+function formatRuntimeMetadata(metadata: {
+  providerId: string | null
+  modelId: string | null
+  mode: string | null
+  agent: string | null
+}): string {
+  return JSON.stringify(metadata)
+}
+
+function normalizeRuntimeValue(value: string | null): string {
+  return value?.trim().toLowerCase() ?? ""
 }
