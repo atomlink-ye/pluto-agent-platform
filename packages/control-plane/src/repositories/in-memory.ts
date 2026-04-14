@@ -266,6 +266,12 @@ export class InMemoryApprovalRepository implements ApprovalRepository {
     return approval ? cloneRecord(approval) : null
   }
 
+  async list(): Promise<ApprovalRecord[]> {
+    return Array.from(this.records.values())
+      .sort((left, right) => left.createdAt.localeCompare(right.createdAt))
+      .map((approval) => cloneRecord(approval))
+  }
+
   async listByRunId(runId: string): Promise<ApprovalRecord[]> {
     return Array.from(this.records.values())
       .filter((approval) => approval.run_id === runId)

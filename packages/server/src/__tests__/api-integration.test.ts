@@ -101,6 +101,22 @@ interface RunDetailResponse {
   sessions: unknown[]
 }
 
+interface ApprovalQueueItem {
+  id: string
+  title: string
+  status: string
+  action_class: string
+  run: {
+    id: string
+    status: string
+    current_phase: string | null
+  } | null
+  playbook: {
+    id: string
+    name: string
+  } | null
+}
+
 interface ReferenceScenario {
   harness: HarnessResponse
   playbook: PlaybookResponse
@@ -109,6 +125,8 @@ interface ReferenceScenario {
 let server: Server
 let baseUrl = ""
 let nextId = 0
+let approvalService: ApprovalService
+let runService: RunService
 
 const unique = (prefix: string): string => {
   nextId += 1
@@ -244,7 +262,7 @@ describe("Operator API integration", () => {
     const roleService = new RoleService(roleRepo)
     const teamService = new TeamService(teamRepo, roleRepo)
     const artifactService = new ArtifactService(artifactRepo, runRepo, playbookRepo, runEventRepo)
-    const runService = new RunService(
+    runService = new RunService(
       playbookRepo,
       harnessRepo,
       runRepo,
@@ -253,7 +271,7 @@ describe("Operator API integration", () => {
       policySnapshotRepo,
       artifactService,
     )
-    const approvalService = new ApprovalService(approvalRepo, runService, runEventRepo)
+    approvalService = new ApprovalService(approvalRepo, runService, runEventRepo)
     const agentManager = new FakeAgentManager()
     const phaseController = new PhaseController({
       harnessRepository: harnessRepo,
@@ -499,6 +517,68 @@ describe("Operator API integration", () => {
     expect(Array.isArray(detail.approvals)).toBe(true)
     expect(Array.isArray(detail.artifacts)).toBe(true)
     expect(Array.isArray(detail.sessions)).toBe(true)
+  })
+
+  it("lists approvals across runs and filters by status", async () => {
+    const firstScenario = await createReferenceScenario()
+    const secondScenario = await createReferenceScenario()
+    const firstRun = await createRun(firstScenario.playbook.id, firstScenario.harness.id)
+    const secondRun = await createRun(secondScenario.playbook.id, secondScenario.harness.id)
+
+    await runService.transition(firstRun.id, "initializing")
+    await runService.transition(firstRun.id, "running")
+    await runService.transition(secondRun.id, "initializing")
+    await runService.transition(secondRun.id, "running")
+
+    const firstApproval = await approvalService.createApproval({
+      runId: firstRun.id,
+      actionClass: "pr_creation",
+      title: "Create PR for run one",
+      requestedBy: { source: "policy", role_id: "lead" },
+      context: { phase: "review", reason: "PR creation requires operator confirmation" },
+    })
+    const secondApproval = await approvalService.createApproval({
+      runId: secondRun.id,
+      actionClass: "external_publish",
+      title: "Publish report for run two",
+      requestedBy: { source: "policy", role_id: "lead" },
+      context: { phase: "review", reason: "Publishing leaves the platform boundary" },
+    })
+
+    await approvalService.resolve(secondApproval.id, "approved", "operator")
+
+    const listResult = await requestJson<ApprovalQueueItem[]>("/api/approvals")
+    expect(listResult.response.status).toBe(200)
+
+    const approvals = expectData(listResult.body)
+    expect(approvals).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: firstApproval.id,
+          status: "pending",
+          action_class: "pr_creation",
+          run: expect.objectContaining({ id: firstRun.id }),
+          playbook: expect.objectContaining({ id: firstScenario.playbook.id, name: firstScenario.playbook.name }),
+        }),
+        expect.objectContaining({
+          id: secondApproval.id,
+          status: "approved",
+          action_class: "external_publish",
+          run: expect.objectContaining({ id: secondRun.id }),
+          playbook: expect.objectContaining({ id: secondScenario.playbook.id, name: secondScenario.playbook.name }),
+        }),
+      ]),
+    )
+    expect(approvals[0]?.status).toBe("pending")
+
+    const filteredResult = await requestJson<ApprovalQueueItem[]>("/api/approvals?status=approved")
+    expect(filteredResult.response.status).toBe(200)
+    expect(expectData(filteredResult.body)).toEqual([
+      expect.objectContaining({
+        id: secondApproval.id,
+        status: "approved",
+      }),
+    ])
   })
 
   it("returns ok from GET /api/health", async () => {

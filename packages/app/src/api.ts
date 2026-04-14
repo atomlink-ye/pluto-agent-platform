@@ -33,6 +33,8 @@ export const api = {
       request<any>("/runs", { method: "POST", body: JSON.stringify(data) }),
   },
   approvals: {
+    list: (status?: string) =>
+      request<any[]>(status ? `/approvals?status=${encodeURIComponent(status)}` : "/approvals"),
     listByRun: (runId: string) => request<any[]>(`/runs/${runId}/approvals`),
     resolve: (id: string, data: { decision: string; note?: string }) =>
       request<any>(`/approvals/${id}/resolve`, { method: "POST", body: JSON.stringify(data) }),

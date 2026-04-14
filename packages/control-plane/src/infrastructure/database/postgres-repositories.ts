@@ -1051,6 +1051,19 @@ export class PostgresApprovalRepository extends PostgresRepositoryBase implement
     return toApprovalRecord(selection.approval, selection.runPublicId)
   }
 
+  async list(): Promise<ApprovalRecord[]> {
+    const rows = await this.db
+      .select({
+        approval: approvalTasks,
+        runPublicId: runs.publicId,
+      })
+      .from(approvalTasks)
+      .innerJoin(runs, eq(approvalTasks.runId, runs.id))
+      .orderBy(asc(approvalTasks.createdAt))
+
+    return rows.map((row) => toApprovalRecord(row.approval, row.runPublicId))
+  }
+
   async listByRunId(runId: string): Promise<ApprovalRecord[]> {
     const rows = await this.db
       .select({

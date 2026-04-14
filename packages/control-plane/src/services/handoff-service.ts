@@ -296,7 +296,7 @@ function buildWorkerSystemPrompt(
   }
 
   sections.push(`## Available Control-Plane MCP Tools`)
-  sections.push(`### register_artifact\nRegisters a deliverable produced during execution.\nParameters: { "type": "<artifact_type>", "title": "<title>", "format": "<format>" }`)
+  sections.push(`### register_artifact\nRegisters a deliverable produced during execution.\nParameters: { "runId": "${handoff.runId}", "type": "<artifact_type>", "title": "<title>", "format": "<format>" }`)
 
   return sections.join("\n\n")
 }

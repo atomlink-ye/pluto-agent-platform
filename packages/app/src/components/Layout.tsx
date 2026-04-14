@@ -3,6 +3,7 @@ import { NavLink, Outlet } from "react-router-dom"
 const navItems = [
   { to: "/playbooks", label: "Playbooks" },
   { to: "/runs", label: "Runs" },
+  { to: "/approvals", label: "Approvals" },
 ]
 
 export function Layout() {

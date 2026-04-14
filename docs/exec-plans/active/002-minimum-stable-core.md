@@ -372,7 +372,7 @@ When a run produces an output matching an artifact expectation from the playbook
 
 ### Specification
 
-The UI implements the V1 page set defined in `operator-flows.md`: Playbooks list, Playbook Detail, Runs list, Run Detail (business + governance + operator sections), Approvals surface, and Artifact sections. The UI consumes durable product-layer data from the control plane, not raw Paseo runtime streams for business objects.
+The UI implements the V1 page set defined in `operator-flows.md`: Playbooks list, Playbook Detail, Runs list, Run Detail (business + governance + operator sections), a dedicated Approvals surface, and Artifact sections. The Approvals surface provides a cross-run approval queue with run linkage and direct resolution actions for pending items. The UI consumes durable product-layer data from the control plane, not raw Paseo runtime streams for business objects.
 
 ### Deliverable standard
 
@@ -414,20 +414,22 @@ The UI implements the V1 page set defined in `operator-flows.md`: Playbooks list
 ### Implementation notes
 
 - REST API endpoints in `packages/server/src/api/app.ts`: playbooks, harnesses, runs (enriched with names), approvals, artifacts, events, health
+- `GET /api/approvals` returns a pending-first approval queue enriched with linked run and playbook summaries; `POST /api/approvals/:id/resolve` remains the write path
 - React frontend in `packages/app/`: Vite + React 19 + Tailwind CSS 4 + react-router-dom 7
 - API client in `packages/app/src/api.ts` wraps all endpoints
 - `StatusBadge` component provides visual distinction for all run, approval, and artifact statuses
 - Vite dev server proxies `/api` to `http://localhost:4000`
 - PlaybookDetailPage includes "Start Run" button when harness is attached
 - RunDetailPage shows three sections (business, governance, operator) with approval resolution actions
+- `ApprovalsPage` exposes a dedicated operator queue for cross-run approval review and resolution
 - Run list enriched with `playbookName`/`harnessName` via server-side join for readable display
 
 ### Checklist
 
-- [x] implementation complete (REST API + React UI for all V1 pages)
+- [x] implementation complete (REST API + React UI for all V1 pages, including dedicated Approvals route)
 - [ ] test scenarios passing (E2E/integration browser tests not yet automated; manual verification)
 - [x] deliverable standard verified (all 8 deliverables implemented)
-- [x] page set matches `operator-flows.md` V1 requirements (Playbooks, Playbook Detail, Runs, Run Detail with approvals + artifacts)
+- [x] page set matches `operator-flows.md` V1 requirements (Playbooks, Playbook Detail, Runs, Run Detail, dedicated Approvals page, artifact sections in Run Detail)
 
 ---
 

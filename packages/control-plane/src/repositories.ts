@@ -94,6 +94,7 @@ export interface PolicySnapshotRepository {
 export interface ApprovalRepository {
   save(approval: ApprovalRecord): Promise<ApprovalRecord>
   getById(id: string): Promise<ApprovalRecord | null>
+  list(): Promise<ApprovalRecord[]>
   listByRunId(runId: string): Promise<ApprovalRecord[]>
   update(approval: ApprovalRecord): Promise<ApprovalRecord>
 }

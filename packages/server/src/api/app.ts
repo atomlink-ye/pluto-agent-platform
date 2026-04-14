@@ -5,32 +5,50 @@
  * Provides the backend that the operator UI consumes.
  */
 import express, { type Request, type Response } from "express"
+import type {
+  ApprovalRecord,
+  ApprovalRepository,
+  ArtifactRepository,
+  HarnessRepository,
+  PlaybookRecord,
+  PlaybookRepository,
+  RoleSpecRepository,
+  RunEventRepository,
+  RunRecord,
+  RunRepository,
+  RunSessionRepository,
+  TeamSpecRepository,
+} from "@pluto-agent-platform/control-plane"
+import type { ApprovalService } from "@pluto-agent-platform/control-plane"
+import type { ArtifactService } from "@pluto-agent-platform/control-plane"
+import type { HarnessService } from "@pluto-agent-platform/control-plane"
+import type { PlaybookService } from "@pluto-agent-platform/control-plane"
+import type { RoleService } from "@pluto-agent-platform/control-plane"
+import type { RunCompiler } from "@pluto-agent-platform/control-plane"
+import type { RunService } from "@pluto-agent-platform/control-plane"
+import type { TeamService } from "@pluto-agent-platform/control-plane"
+import type { PhaseController } from "@pluto-agent-platform/control-plane"
 
 function param(req: Request, name: string): string {
   const val = req.params[name]
   if (Array.isArray(val)) return val[0]
   return val
 }
-import type {
-  PlaybookRepository,
-  HarnessRepository,
-  RoleSpecRepository,
-  TeamSpecRepository,
-  RunRepository,
-  RunEventRepository,
-  ApprovalRepository,
-  ArtifactRepository,
-  RunSessionRepository,
-} from "@pluto-agent-platform/control-plane"
-import type { PlaybookService } from "@pluto-agent-platform/control-plane"
-import type { HarnessService } from "@pluto-agent-platform/control-plane"
-import type { RoleService } from "@pluto-agent-platform/control-plane"
-import type { TeamService } from "@pluto-agent-platform/control-plane"
-import type { RunService } from "@pluto-agent-platform/control-plane"
-import type { ApprovalService } from "@pluto-agent-platform/control-plane"
-import type { ArtifactService } from "@pluto-agent-platform/control-plane"
-import type { RunCompiler } from "@pluto-agent-platform/control-plane"
-import type { PhaseController } from "@pluto-agent-platform/control-plane"
+function queryParam(req: Request, name: string): string | undefined {
+  const val = req.query[name]
+  if (Array.isArray(val)) {
+    const first = val[0]
+    return typeof first === "string" ? first : undefined
+  }
+  return typeof val === "string" ? val : undefined
+}
+
+const APPROVAL_STATUSES = new Set(["pending", "approved", "denied", "expired", "canceled"])
+
+interface ApprovalQueueItem extends ApprovalRecord {
+  run: Pick<RunRecord, "id" | "status" | "current_phase"> | null
+  playbook: Pick<PlaybookRecord, "id" | "name"> | null
+}
 
 export interface AppDeps {
   playbookService: PlaybookService
@@ -262,6 +280,69 @@ export function createApp(deps: AppDeps): express.Express {
   // -----------------------------------------------------------------------
   // Approvals
   // -----------------------------------------------------------------------
+
+  app.get("/api/approvals", async (req: Request, res: Response) => {
+    const status = queryParam(req, "status")
+    if (status && !APPROVAL_STATUSES.has(status)) {
+      res.status(400).json({ error: `Invalid approval status: ${status}` })
+      return
+    }
+
+    const [approvals, runs] = await Promise.all([
+      deps.approvalRepository.list(),
+      deps.runRepository.list(),
+    ])
+    const runById = new Map<string, RunRecord>(runs.map((run) => [run.id, run]))
+    const playbookIds = Array.from(
+      new Set(
+        approvals
+          .map((approval) => runById.get(approval.run_id)?.playbook)
+          .filter((playbookId): playbookId is string => Boolean(playbookId)),
+      ),
+    )
+    const playbooks = await Promise.all(
+      playbookIds.map((playbookId) => deps.playbookRepository.getById(playbookId)),
+    )
+    const playbookById = new Map<string, PlaybookRecord>(
+      playbooks
+        .filter((playbook): playbook is PlaybookRecord => playbook !== null)
+        .map((playbook) => [playbook.id, playbook]),
+    )
+
+    const filteredApprovals = approvals.filter((approval) => (status ? approval.status === status : true))
+    const enriched: ApprovalQueueItem[] = filteredApprovals
+      .map((approval) => {
+        const run = runById.get(approval.run_id)
+        const playbook = run ? playbookById.get(run.playbook) : null
+
+        return {
+          ...approval,
+          run: run
+            ? {
+                id: run.id,
+                status: run.status,
+                current_phase: run.current_phase ?? null,
+              }
+            : null,
+          playbook: playbook
+            ? {
+                id: playbook.id,
+                name: playbook.name,
+              }
+            : null,
+        }
+      })
+      .sort((left, right) => {
+        if (!status && left.status !== right.status) {
+          if (left.status === "pending") return -1
+          if (right.status === "pending") return 1
+        }
+
+        return right.createdAt.localeCompare(left.createdAt)
+      })
+
+    res.json({ data: enriched })
+  })
 
   app.get("/api/runs/:runId/approvals", async (req: Request, res: Response) => {
     const approvals = await deps.approvalRepository.listByRunId(param(req, "runId"))
