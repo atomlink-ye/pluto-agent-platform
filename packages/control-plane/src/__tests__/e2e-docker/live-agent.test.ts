@@ -13,8 +13,8 @@ let context: LiveE2EDockerTestContext
 let stopRuntimeAdapter: (() => void) | null = null
 
 describeLiveAgent("Docker E2E: live OpenCode agent runtime", () => {
-  beforeAll(() => {
-    context = getLiveE2EDockerTestContext()
+  beforeAll(async () => {
+    context = await getLiveE2EDockerTestContext()
   })
 
   beforeEach(async () => {

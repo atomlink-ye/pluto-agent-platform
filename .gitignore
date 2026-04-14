@@ -6,6 +6,10 @@ coverage/
 .env.*
 .pnpm-store/
 artifacts/
+.local/
+.tmp/
+run_summary.md
+NATIVE_LIVE_TEAM_RUN_SUMMARY.md
 *.tsbuildinfo
 
 .worktrees

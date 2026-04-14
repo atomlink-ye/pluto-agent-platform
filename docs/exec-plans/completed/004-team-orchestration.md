@@ -1,6 +1,6 @@
-# 004 — Team Orchestration (DRAFT)
+# 004 — Team Orchestration
 
-> **Status**: Complete — all features implemented and evaluation gates passed. 131 tests (up from 114 baseline). Implemented 2026-04-14.
+> **Status**: Complete for the minimum stable slice. Durable supervisor-led team orchestration is implemented and covered by an opt-in live Docker evaluation, with a deterministic test-only bridge/fallback remaining in the OpenCode live test client. Implemented 2026-04-14.
 
 ## Purpose
 
@@ -48,6 +48,35 @@ Extend the minimum stable core with the smallest coherent multi-role execution s
 4. **Multi-agent architectural risk is bounded by keeping Postgres and RunEvents authoritative.** The orchestrator may decide at run time, but role/session linkage, handoff facts, and plan mutation must remain durable and operator-visible.
 5. **The handoff model is simplified for Phase 2.** This plan uses `handoff.created`, `handoff.accepted`, and `handoff.rejected` from the Run Event contract. Completion is inferred from stage/session/artifact events rather than a separate `handoff.completed` event.
 6. **Only the Stage 2 reference scenarios that fit the narrowed slice are included.** Initial run-plan generation, formal handoff behavior, approval continuity, and artifact enforcement are in scope. Multi-mode comparison, generalized replan behavior, and broader parallel-stage semantics are deferred.
+
+## Evaluation outcome recorded after implementation
+
+### Durable product behavior now verified
+
+- a team run can be compiled from Playbook + Harness + Inputs + TeamSpec
+- the lead RunSession is created first and recorded durably
+- supervisor-led delegation emits durable `handoff.created` and `handoff.accepted` events
+- accepted handoffs spawn worker RunSessions tagged to the delegated role
+- delegated execution advances harness phases through durable `phase.entered` events
+- artifact registration remains durable and operator-visible through `artifact.registered`
+
+### Live Docker evidence added in this implementation round
+
+- `packages/control-plane/src/__tests__/e2e-docker/native-team-orchestration.test.ts` defines an **opt-in** live Docker run against a disposable clone of `anomalyco/opencode`
+- when enabled, the live test uses the free/default OpenCode runtime path and verifies durable Run, RunSession, RunEvent, and Artifact records
+- the live setup now mounts a local control-plane MCP endpoint so the lead and delegated workers can use native control-plane tools during the test slice
+
+### Current bounded limitation
+
+The current live OpenCode provider path does not yet natively expose the control-plane MCP tools to the model in a way the model reliably adopts on its own. To keep the product-layer slice available for deeper investigation without making the default live suite nondeterministic, the live OpenCode team-orchestration test remains **opt-in** and the live OpenCode test client includes a **test-only bridge/fallback** that can advance the governed control-plane flow when the model refuses or fails to emit the expected control-plane tool-call protocol.
+
+This limitation is explicitly bounded to the live test harness and does **not** change the durable product authority model:
+
+- Playbook / Harness / Run remain the formal execution model
+- Postgres remains authoritative for Run, RunPlan, RunEvent, RunSession, and Artifact state
+- delegation facts still flow through control-plane services and durable events rather than prompt-only claims
+
+Follow-on work should remove this test-side fallback once the live provider path can adopt the control-plane tool contract directly.
 
 ## Phase 2 risks and bounds
 

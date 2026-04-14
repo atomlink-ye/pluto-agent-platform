@@ -52,7 +52,7 @@ const teamService = new TeamService(teamRepository, roleRepository)
 
 describeLiveApi("Operator API live OpenCode integration", () => {
   beforeAll(async () => {
-    context = getLiveE2EDockerTestContext()
+    context = await getLiveE2EDockerTestContext()
 
     const app = createApp({
       playbookService: context.playbookService,
@@ -94,8 +94,11 @@ describeLiveApi("Operator API live OpenCode integration", () => {
   })
 
   afterEach(() => {
-    stopRuntimeAdapter?.()
-    stopRuntimeAdapter = null
+    const stop: (() => void) | null = stopRuntimeAdapter
+    if (stop) {
+      stop()
+      stopRuntimeAdapter = null
+    }
   })
 
   afterAll(async () => {
@@ -114,8 +117,11 @@ describeLiveApi("Operator API live OpenCode integration", () => {
   })
 
   it("creates a run via POST /api/runs and returns an OpenCode persistence handle", async () => {
-    stopRuntimeAdapter?.()
-    stopRuntimeAdapter = null
+    const stop: (() => void) | null = stopRuntimeAdapter
+    if (stop) {
+      stop()
+      stopRuntimeAdapter = null
+    }
 
     const playbook = await context.playbookService.create({
       name: "Live API Run Playbook",
@@ -189,8 +195,11 @@ describeLiveApi("Operator API live OpenCode integration", () => {
     expect(normalizedModel).toContain("minimax")
     expect(normalizedModel).toContain("free")
 
-    stopRuntimeAdapter?.()
-    stopRuntimeAdapter = null
+    const finalStop: (() => void) | null = stopRuntimeAdapter
+    if (finalStop) {
+      finalStop()
+      stopRuntimeAdapter = null
+    }
     await context.agentManager.killAgent(session.session_id)
   }, 60_000)
 })

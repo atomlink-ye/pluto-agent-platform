@@ -207,13 +207,14 @@ export class HandoffService {
     handoff: HandoffRecord,
   ): Promise<RunSessionRecord> {
     const systemPrompt = buildWorkerSystemPrompt(role, handoff)
+    const inheritedConfig = await this.resolveOriginAgentConfig(run.id, handoff.fromRole)
 
     const agentConfig: AgentSessionConfig = {
-      provider: "claude",
-      cwd: process.cwd(),
+      provider: inheritedConfig?.provider ?? "claude",
+      cwd: inheritedConfig?.cwd ?? process.cwd(),
       systemPrompt,
       title: `Run: ${run.id} [${role.name}]`,
-      mcpServers: {},
+      mcpServers: inheritedConfig?.mcpServers ?? {},
     }
 
     const agent = await this.deps.agentManager.createAgent(agentConfig)
@@ -244,7 +245,7 @@ export class HandoffService {
     this.deps.agentManager
       .runAgent(agent.id, initialPrompt)
       .catch(() => {
-        // Errors handled by runtime adapter
+        // Errors are surfaced through the runtime adapter and durable events.
       })
 
     // Record session.created event
@@ -257,6 +258,29 @@ export class HandoffService {
     )
 
     return sessionRecord
+  }
+
+  private async resolveOriginAgentConfig(
+    runId: string,
+    fromRole: string,
+  ): Promise<Pick<AgentSessionConfig, "provider" | "cwd" | "mcpServers"> | null> {
+    const sessions = await this.deps.runSessionRepository.listByRunId(runId)
+    const originSession = sessions.find((session) => session.role_id === fromRole) ?? sessions[0]
+
+    if (!originSession || !this.deps.agentManager.getAgent) {
+      return null
+    }
+
+    const agent = this.deps.agentManager.getAgent(originSession.session_id)
+    if (!agent) {
+      return null
+    }
+
+    return {
+      provider: agent.config.provider,
+      cwd: agent.config.cwd,
+      mcpServers: agent.config.mcpServers,
+    }
   }
 }
 
