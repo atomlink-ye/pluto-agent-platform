@@ -6,11 +6,11 @@ Wire the domain model from plan 002 to the live Paseo runtime. After 002, durabl
 
 ## Current status note
 
-This plan is still active. The repository now has a server-wired run compiler and fake runtime scaffold for local execution, but several integration promises remain incomplete:
+This plan is still active. The repository now has a server-wired run compiler, a live control-plane MCP endpoint mounted at the server layer, and a Postgres-backed live server bootstrap. Several integration promises remain incomplete:
 
-- control-plane MCP tool transport is not yet wired into live agent sessions
 - startup recovery scan and resume remain partial
 - handoff durability still relies on events plus in-memory service state rather than a durable handoff record/projection
+- live end-to-end coverage still depends on surrogate runtime tests rather than a fully exercised Claude-backed path
 
 ## Scope
 

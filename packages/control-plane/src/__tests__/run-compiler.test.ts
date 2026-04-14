@@ -193,6 +193,7 @@ describe("Run Compiler (Plan 003 F3)", () => {
       expect(prompt).toContain("destructive_write")
       expect(prompt).toContain("declare_phase")
       expect(prompt).toContain("register_artifact")
+      expect(prompt).toContain('"runId"')
       expect(prompt).toContain("retro_document")
     })
 

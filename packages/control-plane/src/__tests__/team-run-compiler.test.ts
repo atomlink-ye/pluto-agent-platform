@@ -226,6 +226,7 @@ describe("Team-aware Run Compiler (Plan 004 F3)", () => {
       // Handoff MCP tools documented
       expect(prompt).toContain("### create_handoff")
       expect(prompt).toContain("### reject_handoff")
+      expect(prompt).toContain('"fromRole": "role_')
     })
 
     it("names the agent title with the lead role", async () => {

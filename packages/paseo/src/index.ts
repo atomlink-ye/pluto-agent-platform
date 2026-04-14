@@ -14,5 +14,6 @@ export {
   type SubscribeOptions,
 } from "./server/agent/agent-manager.js";
 export * from "./server/agent/agent-sdk-types.js";
+export { ClaudeAgentClient } from "./server/agent/providers/claude-agent.js";
 export * from "./server/exports.js";
 export * from "./shared/agent-lifecycle.js";

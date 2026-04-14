@@ -24,6 +24,7 @@ import {
   RunCompiler,
   ApprovalService,
   ArtifactService,
+  HandoffService,
   RuntimeAdapter,
   PhaseController,
   FakeAgentManager,
@@ -31,11 +32,12 @@ import {
 } from "@pluto-agent-platform/control-plane"
 import {
   AgentManager as PaseoKernelAgentManager,
+  ClaudeAgentClient,
   createRootLogger,
 } from "@pluto-agent-platform/paseo"
-import { ClaudeAgentClient } from "../../paseo/src/server/agent/providers/claude-agent.js"
 
 import { createApp } from "./api/app.js"
+import { mountControlPlaneMcpEndpoint } from "./mcp/control-plane-mcp.js"
 import { seedDevData } from "./seed.js"
 
 const PORT = Number(process.env.PORT ?? 4000)
@@ -51,7 +53,13 @@ function createAgentManager() {
     claude: new ClaudeAgentClient({ logger }),
   }
 
-  return new PaseoAgentManager(new PaseoKernelAgentManager({ clients, logger }))
+  return new PaseoAgentManager(
+    new PaseoKernelAgentManager({
+      clients,
+      logger,
+      mcpBaseUrl: `http://127.0.0.1:${PORT}/mcp`,
+    }),
+  )
 }
 
 // Repositories
@@ -100,6 +108,16 @@ const runtimeAdapter = new RuntimeAdapter(
   runService,
   runSessionRepo,
 )
+const handoffService = new HandoffService({
+  runRepository: runRepo,
+  runEventRepository: runEventRepo,
+  runPlanRepository: runPlanRepo,
+  runSessionRepository: runSessionRepo,
+  roleSpecRepository: roleRepo,
+  teamSpecRepository: teamRepo,
+  agentManager,
+  runtimeAdapter,
+})
 const runCompiler = new RunCompiler({
   playbookRepository: playbookRepo,
   harnessRepository: harnessRepo,
@@ -108,6 +126,8 @@ const runCompiler = new RunCompiler({
   runPlanRepository: runPlanRepo,
   policySnapshotRepository: policySnapshotRepo,
   runSessionRepository: runSessionRepo,
+  roleSpecRepository: roleRepo,
+  teamSpecRepository: teamRepo,
   runService,
   agentManager,
   runtimeAdapter,
@@ -135,6 +155,11 @@ const app = createApp({
   approvalRepository: approvalRepo,
   artifactRepository: artifactRepo,
   runSessionRepository: runSessionRepo,
+})
+mountControlPlaneMcpEndpoint(app, {
+  phaseController,
+  artifactService,
+  handoffService,
 })
 
 // Seed and start

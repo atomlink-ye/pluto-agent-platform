@@ -134,7 +134,13 @@ export class RunCompiler {
       // Step 4: Run plan already created by runService.create()
 
       // Step 5: Construct agent system prompt
-      const systemPrompt = buildSystemPrompt(playbook, harness, resolvedEnvironment.spec, resolvedTeam)
+      const systemPrompt = buildSystemPrompt(
+        playbook,
+        harness,
+        run.id,
+        resolvedEnvironment.spec,
+        resolvedTeam,
+      )
 
       // Step 6: Create Paseo agent
       const agentConfig: AgentSessionConfig = {
@@ -267,6 +273,7 @@ export class RunCompiler {
 function buildSystemPrompt(
   playbook: PlaybookRecord,
   harness: HarnessRecord,
+  runId: string,
   environment: EnvironmentSpec,
   resolvedTeam?: ResolvedTeam,
 ): string {
@@ -329,11 +336,11 @@ function buildSystemPrompt(
 
   // MCP tool documentation
   sections.push(`## Available Control-Plane MCP Tools`)
-  sections.push(`### declare_phase\nDeclares transition to the next execution phase.\nParameters: { "phase": "<phase_name>" }`)
-  sections.push(`### register_artifact\nRegisters a deliverable produced during execution.\nParameters: { "type": "<artifact_type>", "title": "<title>", "format": "<format>" }`)
+  sections.push(`### declare_phase\nDeclares transition to the next execution phase.\nParameters: { "runId": "${runId}", "phase": "<phase_name>" }`)
+  sections.push(`### register_artifact\nRegisters a deliverable produced during execution.\nParameters: { "runId": "${runId}", "type": "<artifact_type>", "title": "<title>", "format": "<format>" }`)
 
   if (resolvedTeam) {
-    sections.push(`### create_handoff\nDelegates work to another team role. A worker session is spawned when accepted.\nParameters: { "role_id": "<role_id>", "summary": "<work_description>", "context": "<optional_context>" }`)
+    sections.push(`### create_handoff\nDelegates work to another team role. A worker session is spawned when accepted.\nParameters: { "runId": "${runId}", "fromRole": "${resolvedTeam.leadRole.id}", "toRole": "<role_id>", "summary": "<work_description>", "context": "<optional_context>" }`)
     sections.push(`### reject_handoff\nRejects a pending handoff request.\nParameters: { "handoff_id": "<handoff_id>", "reason": "<rejection_reason>" }`)
   }
 
