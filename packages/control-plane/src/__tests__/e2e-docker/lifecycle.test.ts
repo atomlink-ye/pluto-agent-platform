@@ -8,6 +8,8 @@ import {
   type E2EDockerTestContext,
 } from "./setup.js"
 
+const describeDocker = process.env.DATABASE_URL ? describe : describe.skip
+
 let context: E2EDockerTestContext
 
 async function createStartedRun(options?: {
@@ -45,7 +47,7 @@ async function createStartedRun(options?: {
   return { playbook, harness, run }
 }
 
-describe("Docker E2E: Postgres-backed lifecycle", () => {
+describeDocker("Docker E2E: Postgres-backed lifecycle", () => {
   beforeAll(() => {
     context = getE2EDockerTestContext()
   })

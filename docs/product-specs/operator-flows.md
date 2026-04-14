@@ -77,7 +77,7 @@ Approval handling should be durable, explainable, and linked to the affected run
 ### Expected flow
 
 1. run enters `waiting_approval`
-2. approval appears in the run detail and approval surface
+2. approval appears in the run detail and, when present later, any approval-focused operator surface
 3. operator sees what action is being requested and why it matters
 4. operator resolves the approval
 5. run resumes or transitions accordingly
@@ -119,8 +119,8 @@ Minimum expected pages or equivalent surfaces:
 - Playbook Detail
 - Runs
 - Run Detail
-- Approvals
-- basic Artifacts view or artifact sections inside Run Detail
+- approval handling inside Run Detail; dedicated approvals queue deferred
+- artifact sections inside Run Detail; dedicated artifact index deferred
 
 ## V1 flow success criteria
 
@@ -129,6 +129,6 @@ The operator can:
 - launch a run from a playbook
 - observe the run's current phase
 - understand whether it is blocked or waiting approval
-- resolve approvals
-- inspect produced artifacts
+- resolve approvals from Run Detail
+- inspect produced artifacts from Run Detail
 - distinguish business summary from raw debug detail

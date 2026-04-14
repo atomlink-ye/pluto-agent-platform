@@ -21,8 +21,12 @@ import {
   RoleService,
   TeamService,
   RunService,
+  RunCompiler,
   ApprovalService,
   ArtifactService,
+  RuntimeAdapter,
+  PhaseController,
+  FakeAgentManager,
 } from "@pluto-agent-platform/control-plane"
 
 import { createApp } from "./api/app.js"
@@ -59,6 +63,37 @@ const runService = new RunService(
   artifactService,
 )
 const approvalService = new ApprovalService(approvalRepo, runService, runEventRepo)
+const agentManager = new FakeAgentManager()
+const phaseController = new PhaseController({
+  harnessRepository: harnessRepo,
+  runRepository: runRepo,
+  runEventRepository: runEventRepo,
+  approvalRepository: approvalRepo,
+  runService,
+  artifactChecker: artifactService,
+  agentManager,
+})
+const runtimeAdapter = new RuntimeAdapter(
+  agentManager,
+  runEventRepo,
+  approvalRepo,
+  runService,
+  runSessionRepo,
+)
+const runCompiler = new RunCompiler({
+  playbookRepository: playbookRepo,
+  harnessRepository: harnessRepo,
+  runRepository: runRepo,
+  runEventRepository: runEventRepo,
+  runPlanRepository: runPlanRepo,
+  policySnapshotRepository: policySnapshotRepo,
+  runSessionRepository: runSessionRepo,
+  runService,
+  agentManager,
+  runtimeAdapter,
+  phaseController,
+})
+runtimeAdapter.start()
 
 // Wire app
 const app = createApp({
@@ -67,8 +102,10 @@ const app = createApp({
   roleService,
   teamService,
   runService,
+  runCompiler,
   approvalService,
   artifactService,
+  phaseController,
   playbookRepository: playbookRepo,
   harnessRepository: harnessRepo,
   roleRepository: roleRepo,

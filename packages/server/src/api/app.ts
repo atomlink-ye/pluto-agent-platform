@@ -29,6 +29,8 @@ import type { TeamService } from "@pluto-agent-platform/control-plane"
 import type { RunService } from "@pluto-agent-platform/control-plane"
 import type { ApprovalService } from "@pluto-agent-platform/control-plane"
 import type { ArtifactService } from "@pluto-agent-platform/control-plane"
+import type { RunCompiler } from "@pluto-agent-platform/control-plane"
+import type { PhaseController } from "@pluto-agent-platform/control-plane"
 
 export interface AppDeps {
   playbookService: PlaybookService
@@ -36,8 +38,10 @@ export interface AppDeps {
   roleService: RoleService
   teamService: TeamService
   runService: RunService
+  runCompiler: RunCompiler
   approvalService: ApprovalService
   artifactService: ArtifactService
+  phaseController?: Pick<PhaseController, "handleApprovalResolution">
   playbookRepository: PlaybookRepository
   harnessRepository: HarnessRepository
   roleRepository: RoleSpecRepository
@@ -200,8 +204,13 @@ export function createApp(deps: AppDeps): express.Express {
 
   app.post("/api/runs", async (req: Request, res: Response) => {
     try {
-      const { playbookId, harnessId, inputs } = req.body
-      const run = await deps.runService.create(playbookId, harnessId, inputs ?? {})
+      const { playbookId, harnessId, inputs, teamId } = req.body
+      const run = await deps.runCompiler.compile({
+        playbookId,
+        harnessId,
+        inputs: inputs ?? {},
+        ...(typeof teamId === "string" && teamId.length > 0 ? { teamId } : {}),
+      })
       res.status(201).json({ data: run })
     } catch (err) {
       res.status(400).json({ error: err instanceof Error ? err.message : "Invalid input" })
@@ -261,13 +270,16 @@ export function createApp(deps: AppDeps): express.Express {
 
   app.post("/api/approvals/:id/resolve", async (req: Request, res: Response) => {
     try {
-      const { decision, resolvedBy, note } = req.body
+      const { decision, note } = req.body
       const approval = await deps.approvalService.resolve(
         param(req, "id"),
         decision,
-        resolvedBy,
+        "operator",
         note,
       )
+      if (decision === "approved") {
+        await deps.phaseController?.handleApprovalResolution(approval.run_id, approval.id, "approved")
+      }
       res.json({ data: approval })
     } catch (err) {
       res.status(400).json({ error: err instanceof Error ? err.message : "Invalid input" })

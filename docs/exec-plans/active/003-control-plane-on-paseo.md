@@ -4,6 +4,14 @@
 
 Wire the domain model from plan 002 to the live Paseo runtime. After 002, durable product objects exist in Postgres but nothing drives actual agent execution. This plan delivers the integration layer that compiles runs into Paseo agent sessions, projects Paseo events back into durable RunEvents, enforces harness governance during execution, and recovers run state after restarts. The result is a governed run that is both durable (Postgres) and alive (Paseo agents).
 
+## Current status note
+
+This plan is still active. The repository now has a server-wired run compiler and fake runtime scaffold for local execution, but several integration promises remain incomplete:
+
+- control-plane MCP tool transport is not yet wired into live agent sessions
+- startup recovery scan and resume remain partial
+- handoff durability still relies on events plus in-memory service state rather than a durable handoff record/projection
+
 ## Scope
 
 - Postgres migration framework and schema for all product objects
@@ -306,7 +314,7 @@ The Phase Controller subscribes to new RunEvents (from the Runtime Adapter) and 
 
 - [x] Phase ordering validation against harness
 - [x] Approval gate detection and ApprovalTask creation
-- [x] Approval resolution → Paseo agent continuation
+- [x] Approval resolution → Paseo agent continuation in the current server scaffold
 - [x] Artifact requirement check at completion
 - [x] Timeout monitoring (polling or scheduled check)
 - [x] All controller actions emit RunEvents
@@ -439,11 +447,11 @@ Runs in `waiting_approval` do not need a live agent — they simply remain pause
 ### Checklist
 
 - [x] Event-based state projector (RunEvents → current Run state)
-- [x] Startup recovery scan for non-terminal runs
+- [ ] Startup recovery scan for non-terminal runs
 - [x] Agent existence check via Paseo AgentManager
-- [x] Resume attempt via persistence handle
-- [x] Graceful degradation to `blocked` on unrecoverable loss
-- [x] Idempotent recovery (safe to run multiple times)
+- [ ] Resume attempt via persistence handle
+- [x] Graceful degradation to `blocked` on unrecoverable loss for targeted recovery
+- [ ] Idempotent full recovery (safe startup sweep across all active runs)
 
 ---
 
@@ -471,7 +479,7 @@ Features 2 and 3 can be developed in parallel if Feature 2 uses a fake AgentMana
 - Feature 2 passes all test scenarios
 - Paseo events flow through the adapter into durable RunEvents
 - Deduplication and agent tracking work correctly
-- Custom MCP tools (`declare_phase`, `register_artifact`) are available to agents
+- Custom MCP tool definitions exist; live MCP transport to agents remains incomplete
 
 ### Gate 3: Governed run executes
 
@@ -484,9 +492,9 @@ Features 2 and 3 can be developed in parallel if Feature 2 uses a fake AgentMana
 
 ### Gate 4: Survives restart
 
-- Feature 6 passes all test scenarios
-- A run in `running` state survives a simulated daemon restart
-- A run in `waiting_approval` survives restart and can still be resolved
+- Feature 6 remains in progress
+- Targeted recovery behavior exists for known runs, but startup sweep/rebind is not complete yet
+- A run in `waiting_approval` remains durably visible, but full restart handling is still being finished
 - No durable state is lost
 
 ## Completion criteria

@@ -4,6 +4,7 @@ import type { AddressInfo } from "node:net"
 import {
   ApprovalService,
   ArtifactService,
+  FakeAgentManager,
   HarnessService,
   InMemoryApprovalRepository,
   InMemoryArtifactRepository,
@@ -16,8 +17,11 @@ import {
   InMemoryRunSessionRepository,
   InMemoryRoleSpecRepository,
   InMemoryTeamSpecRepository,
+  PhaseController,
   PlaybookService,
   RoleService,
+  RunCompiler,
+  RuntimeAdapter,
   TeamService,
   RunService,
 } from "@pluto-agent-platform/control-plane"
@@ -94,6 +98,7 @@ interface RunDetailResponse {
   events: unknown[]
   approvals: unknown[]
   artifacts: unknown[]
+  sessions: unknown[]
 }
 
 interface ReferenceScenario {
@@ -249,6 +254,37 @@ describe("Operator API integration", () => {
       artifactService,
     )
     const approvalService = new ApprovalService(approvalRepo, runService, runEventRepo)
+    const agentManager = new FakeAgentManager()
+    const phaseController = new PhaseController({
+      harnessRepository: harnessRepo,
+      runRepository: runRepo,
+      runEventRepository: runEventRepo,
+      approvalRepository: approvalRepo,
+      runService,
+      artifactChecker: artifactService,
+      agentManager,
+    })
+    const runtimeAdapter = new RuntimeAdapter(
+      agentManager,
+      runEventRepo,
+      approvalRepo,
+      runService,
+      runSessionRepo,
+    )
+    const runCompiler = new RunCompiler({
+      playbookRepository: playbookRepo,
+      harnessRepository: harnessRepo,
+      runRepository: runRepo,
+      runEventRepository: runEventRepo,
+      runPlanRepository: runPlanRepo,
+      policySnapshotRepository: policySnapshotRepo,
+      runSessionRepository: runSessionRepo,
+      runService,
+      agentManager,
+      runtimeAdapter,
+      phaseController,
+    })
+    runtimeAdapter.start()
 
     const app = createApp({
       playbookService,
@@ -256,8 +292,10 @@ describe("Operator API integration", () => {
       roleService,
       teamService,
       runService,
+      runCompiler,
       approvalService,
       artifactService,
+      phaseController,
       playbookRepository: playbookRepo,
       harnessRepository: harnessRepo,
       roleRepository: roleRepo,
@@ -424,7 +462,7 @@ describe("Operator API integration", () => {
     )
   })
 
-  it("creates a queued run via POST /api/runs", async () => {
+  it("creates a running run via POST /api/runs", async () => {
     const scenario = await createReferenceScenario()
     const run = await createRun(scenario.playbook.id, scenario.harness.id)
 
@@ -432,7 +470,7 @@ describe("Operator API integration", () => {
       expect.objectContaining({
         playbook: scenario.playbook.id,
         harness: scenario.harness.id,
-        status: "queued",
+        status: "running",
       }),
     )
   })
@@ -456,10 +494,11 @@ describe("Operator API integration", () => {
     expect(detailResult.response.status).toBe(200)
 
     const detail = expectData(detailResult.body)
-    expect(detail.run).toEqual(expect.objectContaining({ id: run.id, status: "queued" }))
+    expect(detail.run).toEqual(expect.objectContaining({ id: run.id, status: "running" }))
     expect(Array.isArray(detail.events)).toBe(true)
     expect(Array.isArray(detail.approvals)).toBe(true)
     expect(Array.isArray(detail.artifacts)).toBe(true)
+    expect(Array.isArray(detail.sessions)).toBe(true)
   })
 
   it("returns ok from GET /api/health", async () => {

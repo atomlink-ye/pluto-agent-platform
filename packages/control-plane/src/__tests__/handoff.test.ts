@@ -335,7 +335,7 @@ describe("Handoff Service (Plan 004 F4)", () => {
       const run = await createTeamRun()
 
       const mcpDeps: CreateControlPlaneMcpToolsDeps = {
-        phaseController: { handlePhaseDeclaration: async () => ({ success: true, phase: "test", runId: run.id }) },
+        phaseController: { handlePhaseDeclaration: async () => ({ allowed: true }) },
         artifactService: { register: async () => ({ kind: "artifact", id: "a1", run_id: run.id, type: "test", status: "registered", title: "t", createdAt: "", updatedAt: "" }) },
         handoffService,
       }
@@ -358,7 +358,7 @@ describe("Handoff Service (Plan 004 F4)", () => {
 
     it("create_handoff handler throws without handoff service", async () => {
       const mcpDeps: CreateControlPlaneMcpToolsDeps = {
-        phaseController: { handlePhaseDeclaration: async () => ({ success: true, phase: "test", runId: "r" }) },
+        phaseController: { handlePhaseDeclaration: async () => ({ allowed: true }) },
         artifactService: { register: async () => ({ kind: "artifact", id: "a1", run_id: "r", type: "test", status: "registered", title: "t", createdAt: "", updatedAt: "" }) },
       }
 

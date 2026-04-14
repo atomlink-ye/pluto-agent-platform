@@ -1,7 +1,7 @@
 import type { RunStatus } from "@pluto-agent-platform/contracts"
 
 const allowedTransitions: Record<RunStatus, RunStatus[]> = {
-  queued: ["initializing", "failed"],
+  queued: ["initializing"],
   initializing: ["running", "failed"],
   running: ["blocked", "waiting_approval", "failing", "failed", "succeeded", "canceled"],
   blocked: ["running", "failed", "canceled"],

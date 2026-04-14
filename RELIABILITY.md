@@ -15,6 +15,14 @@ The system should be:
 
 ## Core reliability requirements
 
+## Current implementation note
+
+The current repository has durable run, approval, artifact, and session records, but **full startup recovery is not complete yet**.
+
+- targeted recovery for a known run exists in `RecoveryService.recoverRun()`
+- the top-level startup sweep in `RecoveryService.recover()` remains partial/scaffolded
+- resumability is therefore a current reliability gap, not a completed guarantee
+
 ### 1. Runs must remain operator-legible
 
 At minimum, the system should make it clear:
@@ -58,6 +66,8 @@ An approval request or artifact registration must not disappear because a client
 - artifact metadata is durable
 - operator can see whether a run is resumable or terminal
 - interrupt and resume semantics are explicit enough to evaluate
+
+Until startup recovery is completed, the last two items remain an active gap rather than a fully met property.
 
 ## Reliability anti-patterns
 

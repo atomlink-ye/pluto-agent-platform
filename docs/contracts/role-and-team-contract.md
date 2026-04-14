@@ -72,7 +72,7 @@ metadata: {}
 | `id` | yes | string | stable team identifier |
 | `name` | yes | string | UI-facing name |
 | `description` | yes | string | what the team is suited for |
-| `lead_role` | no | string | supervisory or lead role |
+| `lead_role` | yes | string | required for the current V1 supervisor-led team mode |
 | `roles` | yes | string[] | included role ids |
 | `coordination` | no | `CoordinationPolicy` | orchestration defaults |
 | `memory_scope` | no | string | default shared memory scope |
@@ -99,4 +99,5 @@ Recommended `coordination.mode` values:
 
 - roles describe responsibilities, not fixed step numbers
 - teams describe reusable collaboration structures, not static DAGs
+- the current V1 team creation path requires `lead_role`, and `lead_role` must be included in `roles`
 - governance such as approvals, retries, and artifact registration belongs to Harness or higher-level policy, not RoleSpec or TeamSpec

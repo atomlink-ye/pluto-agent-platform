@@ -34,7 +34,7 @@ export const api = {
   },
   approvals: {
     listByRun: (runId: string) => request<any[]>(`/runs/${runId}/approvals`),
-    resolve: (id: string, data: { decision: string; resolvedBy: string; note?: string }) =>
+    resolve: (id: string, data: { decision: string; note?: string }) =>
       request<any>(`/approvals/${id}/resolve`, { method: "POST", body: JSON.stringify(data) }),
   },
   artifacts: {

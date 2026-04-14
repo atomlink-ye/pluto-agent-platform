@@ -27,24 +27,21 @@ type RunEventEnvelope<TPayload = unknown> = {
 
 ## Event categories
 
+The current implementation relies on `run.status_changed` as the canonical durable run-state transition event. Some more specific event names remain reserved for future expansion, but the following list reflects the event names that are currently emitted by the control-plane services and server scaffold.
+
 ### Run-level events
 
 - `run.created`
-- `run.initialized`
-- `run.started`
 - `run.status_changed`
-- `run.phase_changed`
-- `run.blocked`
-- `run.unblocked`
+- `run.completed`
 - `run.failed`
-- `run.succeeded`
-- `run.canceled`
-- `run.archived`
 
 ### Phase and stage events
 
 - `phase.entered`
 - `phase.exited`
+- `phase.rejected`
+- `phase.timeout`
 - `stage.created`
 - `stage.started`
 - `stage.completed`
@@ -85,8 +82,7 @@ type RunEventEnvelope<TPayload = unknown> = {
 ### Governance events
 
 - `approval.requested`
-- `approval.approved`
-- `approval.denied`
+- `approval.resolved`
 - `policy.blocked`
 - `policy.allowed`
 - `retry.scheduled`
@@ -99,9 +95,24 @@ type RunEventEnvelope<TPayload = unknown> = {
 
 ### Operator events
 
-- `operator.approval_resolved`
 - `operator.run_canceled`
 - `operator.run_retried`
+
+## Reserved forward-compatible names
+
+The following names may still appear in projections, tests, or future extensions, but they are not the current minimum emitted set:
+
+- `run.initialized`
+- `run.started`
+- `run.succeeded`
+- `run.canceled`
+- `run.archived`
+- `run.phase_changed`
+- `run.blocked`
+- `run.unblocked`
+- `approval.approved`
+- `approval.denied`
+- `operator.approval_resolved`
 
 ## Contract rules
 

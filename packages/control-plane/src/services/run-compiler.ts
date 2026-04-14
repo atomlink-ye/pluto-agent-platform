@@ -25,6 +25,7 @@ import type {
 } from "../repositories.js"
 import type { RunService } from "./run-service.js"
 import type { AgentManager, AgentSessionConfig } from "../paseo/types.js"
+import type { PhaseController } from "./phase-controller.js"
 
 export interface RuntimeAdapterRegistry {
   trackRun(runId: string, agentId: string): void
@@ -43,6 +44,7 @@ export interface RunCompilerDeps {
   runService: RunService
   agentManager: AgentManager
   runtimeAdapter: RuntimeAdapterRegistry
+  phaseController?: Pick<PhaseController, "registerRunAgent">
 }
 
 export interface CompileRunInput {
@@ -91,7 +93,10 @@ export class RunCompiler {
         input.inputs,
       )
 
-      // Step 2b: Record resolved team on the Run
+      // Step 2b: Transition to "initializing"
+      run = await this.deps.runService.transition(run.id, "initializing")
+
+      // Step 2c: Record resolved team on the Run
       if (resolvedTeam) {
         run = await this.deps.runRepository.update({
           ...run,
@@ -100,7 +105,7 @@ export class RunCompiler {
         })
       }
 
-      // Step 2c: Update RunPlan with role assignments for team runs
+      // Step 2d: Update RunPlan with role assignments for team runs
       if (resolvedTeam) {
         const plan = await this.deps.runPlanRepository.getByRunId(run.id)
         if (!plan) {
@@ -128,13 +133,10 @@ export class RunCompiler {
       // Step 3: Policy snapshot already created by runService.create()
       // Step 4: Run plan already created by runService.create()
 
-      // Step 5: Transition to "initializing"
-      run = await this.deps.runService.transition(run.id, "initializing")
-
-      // Step 6: Construct agent system prompt
+      // Step 5: Construct agent system prompt
       const systemPrompt = buildSystemPrompt(playbook, harness, resolvedEnvironment.spec, resolvedTeam)
 
-      // Step 7: Create Paseo agent
+      // Step 6: Create Paseo agent
       const agentConfig: AgentSessionConfig = {
         provider: input.provider ?? "claude",
         cwd: resolvedEnvironment.workingDirectory,
@@ -150,10 +152,11 @@ export class RunCompiler {
         ?? agent.persistence?.sessionId
 
       try {
-        // Step 8: Register agent in Runtime Adapter tracking
+        // Step 7: Register agent in Runtime Adapter tracking
         this.deps.runtimeAdapter.trackRun(run.id, agent.id)
+        this.deps.phaseController?.registerRunAgent(run.id, agent.id)
 
-        // Step 9: Create RunSession linking run to Paseo agent
+        // Step 8: Create RunSession linking run to Paseo agent
         const sessionRecord: RunSessionRecord = {
           kind: "run_session",
           id: `sess_${randomUUID()}`,
@@ -168,7 +171,7 @@ export class RunCompiler {
         }
         await this.deps.runSessionRepository.save(sessionRecord)
 
-        // Step 10: Start the agent with initial prompt
+        // Step 9: Start the agent with initial prompt
         const initialPrompt = buildInitialPrompt(playbook, run.input)
         // Fire and forget — the runtime adapter will track events
         this.deps.agentManager
@@ -177,7 +180,7 @@ export class RunCompiler {
             // Errors will be caught by the runtime adapter via events
           })
 
-        // Step 11: Transition to "running"
+        // Step 10: Transition to "running"
         run = await this.deps.runService.transition(run.id, "running")
       } catch (error) {
         run = await this.rollbackSpawnedAgent(run, agent.id, error)

@@ -17,12 +17,16 @@ This document tracks deferred work that should remain visible without pretending
 - richer tenancy strategy
 - deeper access control and RBAC
 - more advanced policy enforcement paths
+- trustworthy operator identity propagation for approval resolution
+- tenant-scoped repository enforcement instead of schema-only tenancy columns
 
 ### Deferred product richness
 
 - broader playbook libraries
 - richer artifact lineage views
 - more advanced replay and investigation tools
+- durable handoff records or projections instead of in-memory-only handoff service state
+- full startup recovery scan and resumable rebind across process restart
 
 ## Usage rule
 

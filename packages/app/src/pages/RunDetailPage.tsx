@@ -32,7 +32,7 @@ export function RunDetailPage() {
 
   const handleApproval = async (approvalId: string, decision: "approved" | "denied") => {
     try {
-      await api.approvals.resolve(approvalId, { decision, resolvedBy: "operator" })
+      await api.approvals.resolve(approvalId, { decision })
       load()
     } catch (e: any) {
       setError(e.message)
@@ -147,7 +147,7 @@ export function RunDetailPage() {
                   )}
                   {a.resolution && (
                     <p className="text-xs text-gray-500 mt-1">
-                      Resolved: {a.resolution.decision} by {a.resolution.resolvedBy}
+                      Resolved: {a.resolution.decision} by {a.resolution.resolved_by}
                       {a.resolution.note && ` — ${a.resolution.note}`}
                     </p>
                   )}
@@ -267,9 +267,10 @@ export function RunDetailPage() {
                   <span className="font-medium text-gray-700">{e.eventType}</span>
                   {e.phase && <span className="text-gray-500">[{e.phase}]</span>}
                   {e.roleId && <span className="text-purple-600">{e.roleId}</span>}
-                  {e.payload?.from_role && e.payload?.to_role && (
+                  {(e.payload?.fromRole || e.payload?.from_role) &&
+                    (e.payload?.toRole || e.payload?.to_role) && (
                     <span className="text-purple-500">
-                      {e.payload.from_role} → {e.payload.to_role}
+                      {e.payload.fromRole ?? e.payload.from_role} → {e.payload.toRole ?? e.payload.to_role}
                     </span>
                   )}
                   <span className="text-gray-400">{e.source}</span>
