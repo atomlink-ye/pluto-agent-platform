@@ -20,7 +20,7 @@ Mapped mainly into:
 - `PLANS.md`
 - directory index pages under `docs/`
 
-These references are historical design inputs. If `.local/` is cleaned later, this mapping should be treated as a historical note rather than a live path contract.
+These references are historical design inputs. `.local/` is ignored local scratch space, not a tracked runtime or Docker asset location, so this mapping should be treated as a historical note rather than a live path contract.
 
 ### `.local/refDoc/product-redesign/reference/design-01.md`
 
@@ -97,7 +97,14 @@ Mapped mainly into:
 - `docs/design-docs/system-architecture.md`
 - `docs/product-specs/product-and-scope.md`
 
-These references are historical design inputs. If `.local/` is cleaned later, this mapping should be treated as a historical note rather than a live path contract.
+These references are historical design inputs. `.local/` is ignored local scratch space, not a tracked runtime or Docker asset location, so this mapping should be treated as a historical note rather than a live path contract.
+
+## Current tracked Docker/runtime location note
+
+Repo-owned Docker assets for the live E2E setup now live under `docker/pluto-runtime/` and `docker/pluto-platform/`.
+
+- use these tracked paths for repository-owned container packaging
+- use `.local/` only for ignored local experiments, reference drops, or machine-specific scratch state
 
 ## Local repository decisions added during normalization
 

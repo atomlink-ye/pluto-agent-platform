@@ -6,12 +6,12 @@ Fork the minimal Paseo kernel into this repository and wire it to the control pl
 
 ## Current status note
 
-All features implemented. 132 tests passing, 9 skipped (E2E/UI tests behind env flags).
+Core features implemented. 132 tests passing, 9 skipped (live E2E/UI tests still sit behind env flags and local provider auth injection).
 
 - **F1 (Paseo Core Package):** Complete. All excluded files integrated, provider-registry stripped to Claude-only.
 - **F2 (Control-Plane Wiring):** Complete. PaseoAgentManager adapter, `PASEO_MODE=live|fake` bootstrap.
 - **F3 (Recovery Completion):** Complete. Startup scan, persistence handle resume, idempotent guard.
-- **F4 (E2E Test Infrastructure):** Complete. Docker Compose with Postgres + OpenCode runtime. `LIVE_AGENT_E2E=1` to enable.
+- **F4 (E2E Test Infrastructure):** Complete for tracked packaging. Docker Compose now uses in-repo Pluto runtime/platform Docker assets; live provider execution still depends on local auth mounts via `docker-compose.runtime.override.yml`. `LIVE_AGENT_E2E=1` to enable.
 - **F5 (Web UI Tests):** Complete. Playwright + midscenejs, 4 operator flow tests. `UI_E2E=1` to enable.
 
 Remaining: F1 smoke test (deferred to live E2E), F4 failure path test, F5 approval resolution test.
@@ -24,7 +24,7 @@ Remaining: F1 smoke test (deferred to live E2E), F4 failure path test, F5 approv
 - MCP tool transport: ensure control-plane tools (declare_phase, register_artifact, create_handoff, reject_handoff) are callable by agents
 - Complete Plan 003 Feature 6: startup recovery scan, persistence handle resume, idempotent recovery
 - E2E integration test: minimum reference scenario with a real Paseo agent against Postgres
-- Docker-based E2E test infrastructure following the opencode-runtime pattern
+- Docker-based E2E test infrastructure using tracked in-repo Pluto runtime/platform packaging for the live OpenCode E2E path
 - Web UI integration tests using midscenejs for operator flows
 
 ## Non-goals
@@ -45,7 +45,8 @@ Remaining: F1 smoke test (deferred to live E2E), F4 failure path test, F5 approv
 - `docs/exec-plans/active/003-control-plane-on-paseo.md` — Feature 6 (Recovery) remaining items
 - `docs/exec-plans/active/002-minimum-stable-core.md` — Feature 6 (Operator Views) E2E tests
 - `.local/refCode/paseo/packages/server/` — Paseo source to fork from
-- `.local/refCode/agent-cowork/` — E2E test patterns (Docker opencode-runtime)
+- `docker/pluto-runtime/` — tracked repo-owned OpenCode-compatible runtime container assets for live E2E
+- `docker/pluto-platform/` — tracked repo-owned platform container assets for live E2E
 - `.local/refDoc/product-redesign/reference/test-design-04.md` — test strategy reference
 
 ## Actors
@@ -222,7 +223,7 @@ Complete the remaining items from Plan 003 Feature 6:
 
 ### Specification
 
-Create Docker-based E2E test infrastructure following the opencode-runtime pattern from `.local/refCode/agent-cowork/`. The E2E tests validate the minimum reference scenario from `product-and-scope.md`:
+Create Docker-based E2E test infrastructure using tracked in-repo Docker assets for the Pluto runtime and Pluto platform containers. `.local/` may still exist as ignored local scratch space, but it is not the live Docker path contract. The E2E tests validate the minimum reference scenario from `product-and-scope.md`:
 
 1. Operator creates a playbook and harness
 2. Operator starts a run with inputs
@@ -235,10 +236,10 @@ Create Docker-based E2E test infrastructure following the opencode-runtime patte
 
 ### Deliverable standard
 
-1. Docker Compose configuration starts Postgres + control plane + Paseo kernel
+1. Docker Compose configuration starts Postgres + Pluto platform + Pluto runtime, with provider auth injected through the local runtime override when running live turns
 2. E2E test creates a run and validates the full lifecycle
-3. Tests run in CI (or via `docker compose -f docker-compose.e2e.yml up --abort-on-container-exit`)
-4. Minimum reference scenario passes end-to-end
+3. Tests run locally via `docker compose -f docker-compose.e2e-live.yml -f docker-compose.runtime.override.yml up --abort-on-container-exit`
+4. Minimum reference scenario passes end-to-end when live provider auth is supplied
 
 ### Test scenarios
 
@@ -256,10 +257,10 @@ Create Docker-based E2E test infrastructure following the opencode-runtime patte
 
 ### Checklist
 
-- [x] Docker Compose E2E configuration with real Paseo (`docker-compose.e2e-live.yml` — Postgres + OpenCode runtime + control plane)
+- [x] Docker Compose E2E configuration with tracked repo-owned containers (`docker-compose.e2e-live.yml` — Postgres + Pluto runtime + Pluto platform)
 - [x] E2E test for minimum reference scenario (`live-agent.test.ts` — compile run, verify prompt delivery, phase governance, approval flow)
 - [ ] E2E test for failure paths (deferred — requires live OpenCode runtime to exercise)
-- [x] CI-runnable test pipeline (`LIVE_AGENT_E2E=1` to enable, Docker Compose orchestrates full stack)
+- [x] Local live test pipeline (`LIVE_AGENT_E2E=1` to enable, Docker Compose orchestrates the full stack when local provider auth is mounted)
 
 ---
 
@@ -335,7 +336,7 @@ Features 3, 4, and 5 can be developed in parallel once Feature 2 is complete.
 ### Gate 4: Full E2E validated
 
 - Features 4 and 5 pass all test scenarios
-- Minimum reference scenario works end-to-end in Docker
+- Minimum reference scenario works end-to-end in Docker when local provider auth is mounted into the runtime container
 - Operator UI tests pass in headless browser
 - Plan 002 Gate 3 and Plan 003 Gate 3 fully satisfied
 
@@ -347,7 +348,7 @@ The plan is complete when all of the following are true:
 - the control plane creates real agent sessions that execute playbooks
 - phase governance, approval gates, and artifact requirements work against real agents
 - recovery survives daemon restart with idempotent startup scan
-- E2E tests validate the minimum reference scenario
+- E2E tests validate the minimum reference scenario when local provider auth is supplied to the runtime container
 - browser tests validate operator flows
 - Plan 002 Gate 3 and Plan 003 Gates 3–4 are fully satisfied
 - all contracts, specs, and architecture docs remain consistent

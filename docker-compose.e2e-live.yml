@@ -1,13 +1,22 @@
 services:
   postgres-e2e:
-    extends:
-      file: ./docker-compose.yml
-      service: postgres-test
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: pluto_test
+      POSTGRES_PASSWORD: pluto_test
+      POSTGRES_DB: pluto_test
+    tmpfs:
+      - /var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U pluto_test"]
+      interval: 2s
+      timeout: 5s
+      retries: 10
 
-  opencode-runtime:
+  pluto-runtime:
     build:
-      context: ./.local/refCode/agent-cowork
-      dockerfile: opencode-runtime/Dockerfile
+      context: .
+      dockerfile: docker/pluto-runtime/Dockerfile
     working_dir: /workspace
     environment:
       PORT: 4096
@@ -20,18 +29,20 @@ services:
       timeout: 5s
       retries: 20
 
-  control-plane-e2e-live:
-    image: node:22-alpine
+  pluto-platform-e2e-live:
+    build:
+      context: .
+      dockerfile: docker/pluto-platform/Dockerfile
     working_dir: /workspace
     depends_on:
       postgres-e2e:
         condition: service_healthy
-      opencode-runtime:
+      pluto-runtime:
         condition: service_healthy
     environment:
       DATABASE_URL: postgres://pluto_test:pluto_test@postgres-e2e:5432/pluto_test
       TEST_DATABASE_URL: postgres://pluto_test:pluto_test@postgres-e2e:5432/pluto_test
-      OPENCODE_BASE_URL: http://opencode-runtime:4096
+      OPENCODE_BASE_URL: http://pluto-runtime:4096
       LIVE_AGENT_E2E: "1"
       PASEO_MODE: live
     volumes:
@@ -41,5 +52,5 @@ services:
         corepack enable &&
         pnpm install --frozen-lockfile &&
         pnpm --filter @pluto-agent-platform/control-plane db:push &&
-        pnpm --filter @pluto-agent-platform/control-plane test -- src/__tests__/e2e-docker/live-agent.test.ts
+        pnpm vitest run packages/control-plane/src/__tests__/e2e-docker/live-agent.test.ts
       "
