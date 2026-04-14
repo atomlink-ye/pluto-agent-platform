@@ -1,0 +1,45 @@
+services:
+  postgres-e2e:
+    extends:
+      file: ./docker-compose.yml
+      service: postgres-test
+
+  opencode-runtime:
+    build:
+      context: ./.local/refCode/agent-cowork
+      dockerfile: opencode-runtime/Dockerfile
+    working_dir: /workspace
+    environment:
+      PORT: 4096
+      OPENCODE_PORT: 4096
+    volumes:
+      - .:/workspace
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:4096/healthz"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  control-plane-e2e-live:
+    image: node:22-alpine
+    working_dir: /workspace
+    depends_on:
+      postgres-e2e:
+        condition: service_healthy
+      opencode-runtime:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgres://pluto_test:pluto_test@postgres-e2e:5432/pluto_test
+      TEST_DATABASE_URL: postgres://pluto_test:pluto_test@postgres-e2e:5432/pluto_test
+      OPENCODE_BASE_URL: http://opencode-runtime:4096
+      LIVE_AGENT_E2E: "1"
+      PASEO_MODE: live
+    volumes:
+      - .:/workspace
+    command: >-
+      sh -lc "
+        corepack enable &&
+        pnpm install --frozen-lockfile &&
+        pnpm --filter @pluto-agent-platform/control-plane db:push &&
+        pnpm --filter @pluto-agent-platform/control-plane test -- src/__tests__/e2e-docker/live-agent.test.ts
+      "
