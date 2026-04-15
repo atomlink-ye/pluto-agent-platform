@@ -23,6 +23,18 @@
     --spacing-card-lg: 1.5rem;
     --spacing-section: 1.5rem;
     --spacing-page: 2rem;
+
+    /* Chat surface tokens */
+    --color-chat-surface: theme(colors.white);
+    --color-chat-surface-dark: theme(colors.slate.900);
+    --color-chat-border: theme(colors.slate.200);
+    --color-chat-border-dark: theme(colors.slate.700);
+    --color-chat-bubble-user: theme(colors.blue.50);
+    --color-chat-bubble-assistant: theme(colors.white);
+    --color-chat-text: theme(colors.slate.800);
+    --color-chat-text-dark: theme(colors.slate.200);
+    --color-chat-text-muted: theme(colors.slate.400);
+    --color-chat-text-muted-dark: theme(colors.slate.500);
   }
 
   body {
