@@ -48,9 +48,9 @@ export function ChatSession({ agentId, runId, compact = false, onExpand, dark = 
                 Showing last 5 of {stream.items.length} messages
               </p>
             ) : null}
-            <div className="space-y-2">
+            <div className="space-y-3">
               {displayItems.map((item) => (
-                <StreamItemRenderer key={item.id} item={item} />
+                <StreamItemRenderer key={item.id} item={item} dark={dark} />
               ))}
             </div>
           </div>
@@ -80,6 +80,7 @@ export function ChatSession({ agentId, runId, compact = false, onExpand, dark = 
         hasOlderHistory={stream.hasOlderHistory}
         isLoadingHistory={stream.isLoadingHistory}
         onLoadOlder={stream.fetchOlderHistory}
+        dark={dark}
       />
       <ChatInputArea
         disabled={!stream.isWorking && (stream.agentState?.status === "done" || stream.agentState?.status === "error")}
