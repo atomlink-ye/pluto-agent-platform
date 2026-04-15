@@ -15,6 +15,14 @@ import { usePolling } from "../hooks/usePolling"
 import { useTeamActivity } from "../hooks/useTeamActivity"
 import { useToast } from "../hooks/useToast"
 
+function getSessionAgentId(session: { session_id?: string; id: string }) {
+  return session.session_id ?? session.id
+}
+
+function getSessionAgentLabel(session: { provider?: string; role_id?: string; session_id?: string; id: string }, index: number) {
+  return (session.role_id ?? session.provider ?? getSessionAgentId(session)) || `Agent ${index + 1}`
+}
+
 function getRunName(run: RunRecord) {
   return run.playbookName ?? run.playbook_name ?? run.playbook ?? "Unknown playbook"
 }
@@ -277,14 +285,41 @@ export function RunDetailPage() {
     () => normalizeQualityBar(run?.quality_bar ?? run?.harnessDetail?.quality_bar),
     [run?.harnessDetail?.quality_bar, run?.quality_bar],
   )
+  const runName = useMemo(() => (run ? getRunName(run) : "Run detail"), [run])
 
   const defaultAgentId = useMemo(() => {
-    const firstSession = detail?.sessions?.[0]
-    if (firstSession) {
-      return firstSession.id
+    const preferredSession =
+      detail?.sessions?.find((session) => session.status === "running") ??
+      detail?.sessions?.find((session) => session.status === "active") ??
+      detail?.sessions?.[0]
+
+    if (preferredSession) {
+      return getSessionAgentId(preferredSession)
     }
+
     return run?.id ?? "default"
   }, [detail?.sessions, run?.id])
+  const defaultAgentLabel = useMemo(() => {
+    const defaultSession = detail?.sessions?.find((session) => getSessionAgentId(session) === defaultAgentId)
+
+    if (!defaultSession) {
+      return defaultAgentId
+    }
+
+    return getSessionAgentLabel(defaultSession, detail?.sessions?.findIndex((session) => session.id === defaultSession.id) ?? 0)
+  }, [defaultAgentId, detail?.sessions])
+
+  const navigateToChat = useCallback(
+    (agentId: string, agentLabel?: string) => {
+      navigate(`/runs/${run?.id ?? id}/agents/${agentId}/chat`, {
+        state: {
+          agentLabel,
+          runName,
+        },
+      })
+    },
+    [id, navigate, run?.id, runName],
+  )
 
   const teamActivity = useTeamActivity({
     runId: run?.id ?? "",
@@ -293,8 +328,8 @@ export function RunDetailPage() {
           roles: run.harnessDetail.phases?.length
             ? detail?.sessions?.map((session, i) => ({
                   id: session.role_id ?? session.id,
-                  name: session.provider ?? session.id ?? `Agent ${i + 1}`,
-                  agentId: session.id,
+                  name: getSessionAgentLabel(session, i),
+                  agentId: getSessionAgentId(session),
                 }))
             : undefined,
           coordination: undefined,
@@ -531,7 +566,7 @@ export function RunDetailPage() {
 
         <TeamActivityFeed
           teamActivity={teamActivity}
-          onOpenAgent={(agentId) => navigate(`/runs/${run.id}/agents/${agentId}/chat`)}
+          onOpenAgent={(agentId) => navigateToChat(agentId, teamActivity.agents.find((agent) => agent.id === agentId)?.name)}
           dark
         />
 
@@ -560,7 +595,7 @@ export function RunDetailPage() {
               runId={run.id}
               compact
               dark
-              onExpand={() => navigate(`/runs/${run.id}/agents/${defaultAgentId}/chat`)}
+              onExpand={() => navigateToChat(defaultAgentId, defaultAgentLabel)}
             />
           </div>
         </Card>
