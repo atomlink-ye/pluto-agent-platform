@@ -136,7 +136,22 @@ RunSession links a governed run to one or more concrete runtime sessions.
 
 - preserve runtime linkage without turning runtime state into the product source of truth
 - support operator-visible recovery context
-- record whether a session is active, interrupted, resumable, or terminal when that information is available
+- record session lifecycle state
+
+### Current session status vocabulary
+
+Production code writes only two `RunSession.status` values today:
+
+- `active` — session is live and bound to a runtime agent
+- `failed` — session recovery failed; session is unrecoverable
+
+The following values appear in earlier documentation but are **not yet implemented** in production code:
+
+- `interrupted` — planned: session was interrupted by runtime failure
+- `resumed` — planned: session was resumed after interruption
+- `closed` — planned: session completed normally
+
+`RunSession.status` is currently an unconstrained `string` in contracts. See `run-contract.md` for the full status table and known debt notes.
 
 ## 7. Run Event
 
