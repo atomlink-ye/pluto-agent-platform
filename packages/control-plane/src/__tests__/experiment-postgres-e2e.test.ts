@@ -45,7 +45,7 @@ let runService: RunService
 let approvalService: ApprovalService
 let artifactService: ArtifactService
 
-describe("Experiment: Full stack with Postgres", () => {
+describe.skipIf(!process.env.DATABASE_URL)("Experiment: Full stack with Postgres", () => {
   beforeAll(() => {
     sql = postgres(TEST_DATABASE_URL, { max: 5 })
     db = drizzle(sql, { schema })

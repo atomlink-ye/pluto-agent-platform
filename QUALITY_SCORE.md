@@ -27,6 +27,14 @@ An iteration is acceptable only when all of the following are true:
 - no duplicate source of truth is introduced
 - terminology remains aligned with playbook / harness / run semantics
 
+### Beta gate (M2)
+
+The beta gate is defined in `docs/exec-plans/testing-and-evaluation-strategy.md`.
+
+For any pull request to merge, CI must be green for the required lane: build + typecheck + test.
+
+Documentation consistency remains a manual gate criterion alongside CI.
+
 ## Minimum quality bar for Phase 1 work
 
 - core domain behavior is evaluable
