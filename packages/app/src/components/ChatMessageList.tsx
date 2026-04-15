@@ -62,12 +62,9 @@ export function ChatMessageList({ items, isWorking, hasOlderHistory, isLoadingHi
 
       {showJumpButton ? (
         <div className="sticky bottom-4 flex justify-center">
-          <button
-            onClick={scrollToBottom}
-            className="rounded-full bg-white border border-slate-200 shadow-md px-3 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-50 transition-colors"
-          >
+          <Button variant="secondary" size="sm" onClick={scrollToBottom} className="rounded-full shadow-md">
             &#8595; Jump to bottom
-          </button>
+          </Button>
         </div>
       ) : null}
     </div>

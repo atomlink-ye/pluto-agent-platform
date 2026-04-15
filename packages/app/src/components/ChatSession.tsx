@@ -3,45 +3,52 @@ import { ChatInputArea } from "./ChatInputArea"
 import { ChatMessageList } from "./ChatMessageList"
 import { StreamItemRenderer } from "./StreamItemRenderer"
 import { Badge } from "./Badge"
+import { Button } from "./Button"
 
 export interface ChatSessionProps {
   agentId: string
   runId?: string
   compact?: boolean
   onExpand?: () => void
+  dark?: boolean
 }
 
-export function ChatSession({ agentId, runId, compact = false, onExpand }: ChatSessionProps) {
+export function ChatSession({ agentId, runId, compact = false, onExpand, dark = false }: ChatSessionProps) {
   const stream = useAgentStream({ agentId })
 
   const displayItems = compact ? stream.items.slice(-5) : stream.items
 
   if (compact) {
+    const containerClassName = dark
+      ? "space-y-3 rounded-xl border border-slate-800 bg-slate-900 p-5"
+      : "space-y-3 rounded-xl border border-slate-200 bg-white p-5"
+    const titleClassName = dark ? "text-sm font-medium text-slate-100" : "text-sm font-medium text-slate-700"
+    const emptyClassName = dark ? "text-sm text-slate-400" : "text-sm text-slate-500"
+    const noteClassName = dark ? "text-center text-xs text-slate-500" : "text-center text-xs text-slate-400"
+    const workingClassName = dark ? "flex items-center gap-1 text-xs text-slate-500" : "flex items-center gap-1 text-xs text-slate-400"
+
     return (
-      <div className="space-y-3 rounded-xl border border-slate-200 bg-white p-4">
+      <div className={containerClassName}>
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2">
-            <span className="text-sm font-medium text-slate-700">Agent Chat</span>
+            <span className={titleClassName}>Agent Chat</span>
             {stream.agentState ? (
               <Badge status={stream.agentState.status} />
             ) : null}
           </div>
           {onExpand ? (
-            <button
-              onClick={onExpand}
-              className="text-xs font-medium text-blue-600 hover:text-blue-700 transition-colors"
-            >
+            <Button variant={dark ? "secondary" : "ghost"} size="sm" onClick={onExpand} className={dark ? "border-slate-700 bg-slate-800 text-slate-200 hover:bg-slate-700 hover:text-white" : ""}>
               View full chat &#8594;
-            </button>
+            </Button>
           ) : null}
         </div>
 
         {displayItems.length === 0 ? (
-          <p className="text-sm text-slate-500">No conversation history yet.</p>
+          <p className={emptyClassName}>No conversation history yet.</p>
         ) : (
           <div className="space-y-2">
             {stream.items.length > 5 ? (
-              <p className="text-xs text-slate-400 text-center">
+              <p className={noteClassName}>
                 Showing last 5 of {stream.items.length} messages
               </p>
             ) : null}
@@ -54,7 +61,7 @@ export function ChatSession({ agentId, runId, compact = false, onExpand }: ChatS
         )}
 
         {stream.isWorking ? (
-          <div className="flex items-center gap-1 text-xs text-slate-400">
+          <div className={workingClassName}>
             <span className="h-1.5 w-1.5 rounded-full bg-blue-500 animate-pulse" />
             Agent is working...
           </div>

@@ -20,7 +20,7 @@ function ChatPageContent({ runId, agentId, onBack }: { runId: string; agentId: s
   const stream = useAgentStream({ agentId })
 
   return (
-    <div className="flex flex-col h-full">
+    <div className="flex h-full flex-col">
       {/* Header */}
       <div className="flex items-center gap-3 border-b border-slate-200 bg-white px-4 py-3">
         <Button variant="ghost" size="sm" onClick={onBack}>
@@ -34,7 +34,7 @@ function ChatPageContent({ runId, agentId, onBack }: { runId: string; agentId: s
             <Badge status={stream.agentState.status} />
           ) : null}
         </div>
-        <span className="text-xs text-slate-400 font-mono ml-auto">Run {runId}</span>
+        <span className="ml-auto font-mono text-xs text-slate-400">Run {runId}</span>
       </div>
 
       {/* Messages */}

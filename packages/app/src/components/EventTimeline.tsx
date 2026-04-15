@@ -1,4 +1,5 @@
 import type { EventRecord } from "../api"
+import { EmptyState } from "./EmptyState"
 
 export interface TimelineEvent {
   id?: string
@@ -13,6 +14,7 @@ export interface TimelineEvent {
 export interface EventTimelineProps {
   events: EventRecord[]
   showRaw?: boolean
+  dark?: boolean
 }
 
 function getEventType(event: TimelineEvent) {
@@ -70,10 +72,24 @@ function formatDisplayTime(value?: string) {
   return date.toLocaleTimeString()
 }
 
-export function EventTimeline({ events, showRaw = false }: EventTimelineProps) {
+export function EventTimeline({ events, showRaw = false, dark = false }: EventTimelineProps) {
   if (events.length === 0) {
-    return <p className="text-sm text-slate-500">No events yet.</p>
+    return (
+      <EmptyState
+        title="No events yet"
+        description="Run activity will appear here as the execution progresses."
+        className={dark ? "rounded-xl border border-slate-800 bg-slate-900/60 px-6 py-10 text-slate-300" : "rounded-xl border border-slate-200 bg-slate-50/80 px-6 py-10"}
+      />
+    )
   }
+
+  const separatorClassName = dark ? "bg-slate-800" : "bg-slate-200"
+  const titleClassName = dark ? "text-sm font-medium capitalize text-slate-200" : "text-sm font-medium capitalize text-slate-800"
+  const timeClassName = dark ? "font-mono text-xs text-slate-500" : "font-mono text-xs text-slate-400"
+  const messageClassName = dark ? "mt-0.5 text-sm text-slate-300" : "mt-0.5 text-sm text-slate-600"
+  const rawClassName = dark
+    ? "mt-1 overflow-x-auto rounded-lg border border-slate-800 bg-slate-900 p-2 font-mono text-xs text-slate-400"
+    : "mt-1 overflow-x-auto rounded-lg bg-slate-50 p-2 font-mono text-xs text-slate-500"
 
   return (
     <div className="space-y-0">
@@ -87,24 +103,24 @@ export function EventTimeline({ events, showRaw = false }: EventTimelineProps) {
             <div className="flex flex-col items-center">
               <div className={["mt-1 h-2.5 w-2.5 shrink-0 rounded-full", getDotClassName(type)].join(" ")} />
               {index < events.length - 1 ? (
-                <div className="my-0.5 w-px flex-1 bg-slate-200" />
+                <div className={["my-0.5 w-px flex-1", separatorClassName].join(" ")} />
               ) : null}
             </div>
 
             <div className="min-w-0 flex-1 pb-4">
               <div className="flex items-baseline gap-2">
-                <span className="text-sm font-medium capitalize text-slate-800">
+                <span className={titleClassName}>
                   {type.replace(/_/g, " ")}
                 </span>
                 {time ? (
-                  <span className="font-mono text-xs text-slate-400">{time}</span>
+                  <span className={timeClassName}>{time}</span>
                 ) : null}
               </div>
 
-              {message ? <p className="mt-0.5 text-sm text-slate-600">{message}</p> : null}
+              {message ? <p className={messageClassName}>{message}</p> : null}
 
               {showRaw ? (
-                <pre className="mt-1 overflow-x-auto rounded bg-slate-50 p-2 font-mono text-xs text-slate-500">
+                <pre className={rawClassName}>
                   {JSON.stringify(event, null, 2)}
                 </pre>
               ) : null}

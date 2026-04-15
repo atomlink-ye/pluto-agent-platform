@@ -68,7 +68,7 @@ function ToastIcon({ variant }: { variant: ToastVariant }) {
 
 export function Toast({ onDismiss, toast }: ToastProps) {
   return (
-    <div className="flex items-start gap-3 rounded-lg border border-slate-200 bg-white p-4 shadow-lg">
+    <div className="flex items-start gap-3 rounded-xl border border-slate-200 bg-white p-4 shadow-lg">
       <ToastIcon variant={toast.variant} />
       <div className="min-w-0 flex-1">
         <p className="text-sm font-medium text-slate-900">{toast.title}</p>

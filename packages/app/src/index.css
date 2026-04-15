@@ -16,6 +16,13 @@
     --color-warning: theme(colors.amber.600);
     --color-danger: theme(colors.red.600);
     --color-info: theme(colors.blue.500);
+    --radius-container: 0.75rem;
+    --radius-control: 0.5rem;
+    --radius-pill: 9999px;
+    --spacing-card: 1.25rem;
+    --spacing-card-lg: 1.5rem;
+    --spacing-section: 1.5rem;
+    --spacing-page: 2rem;
   }
 
   body {

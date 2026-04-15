@@ -112,15 +112,17 @@ function StatCard({
   value,
   to,
   accentClassName,
+  urgent,
 }: {
   label: string
   value: number
   to: string
   accentClassName: string
+  urgent?: boolean
 }) {
   return (
     <Link to={to} className="block">
-      <Card className={`border-l-4 p-4 transition-colors hover:border-slate-300 ${accentClassName}`}>
+      <Card className={`border-l-4 p-5 transition-colors hover:border-slate-300 ${accentClassName} ${urgent && value > 0 ? "border-amber-200 bg-amber-50/60" : ""}`}>
         <p className="text-xs font-medium uppercase tracking-wide text-slate-500">{label}</p>
         <p className="mt-3 text-2xl font-semibold tracking-tight text-slate-900">{value}</p>
       </Card>
@@ -133,14 +135,14 @@ function DashboardSkeleton() {
     <div className="space-y-6">
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
         {Array.from({ length: 4 }).map((_, index) => (
-          <Card key={index} className="p-4">
+          <Card key={index} className="p-5">
             <Skeleton width="w-1/2" height="h-4" />
             <Skeleton width="w-1/4" height="h-8" className="mt-4" />
           </Card>
         ))}
       </div>
 
-      <Card className="p-4">
+      <Card className="p-5">
         <Skeleton width="w-40" height="h-5" />
         <div className="mt-4 space-y-3">
           {Array.from({ length: 3 }).map((_, index) => (
@@ -323,28 +325,28 @@ export function DashboardPage() {
 
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
         <StatCard label="Active Runs" value={stats.activeRuns} to="/runs?status=running" accentClassName="border-l-blue-500" />
-        <StatCard label="Pending Approvals" value={stats.pendingApprovals} to="/approvals?status=pending" accentClassName="border-l-amber-500" />
+        <StatCard label="Pending Approvals" value={stats.pendingApprovals} to="/approvals?status=pending" accentClassName="border-l-amber-500" urgent />
         <StatCard label="Succeeded Today" value={stats.succeededToday} to="/runs?status=succeeded" accentClassName="border-l-emerald-500" />
         <StatCard label="Failed Today" value={stats.failedToday} to="/runs?status=failed" accentClassName="border-l-red-500" />
       </div>
 
       <section className="space-y-3">
         <div className="flex items-center justify-between">
-          <h2 className="text-lg font-semibold text-slate-800">Requires Attention</h2>
+          <h2 className="text-lg font-semibold text-slate-900">Requires Attention</h2>
           <Link to="/approvals" className="text-sm font-medium text-blue-600 hover:text-blue-700">
             View queue
           </Link>
         </div>
 
         {attentionItems.length === 0 ? (
-          <Card className="p-4">
+          <Card className="p-5">
             <p className="text-sm text-slate-500">Nothing urgent right now.</p>
           </Card>
         ) : (
           <div className="space-y-2">
             {attentionItems.map((item) => (
               <Link key={item.id} to={item.href} className="block">
-                <Card className={`p-4 transition-colors hover:border-slate-300 ${item.kind === "approval" ? "border-amber-200 bg-amber-50" : "border-red-200 bg-red-50"}`}>
+                <Card className={`p-5 transition-colors hover:border-slate-300 ${item.kind === "approval" ? "border-amber-200 bg-amber-50" : "border-red-200 bg-red-50"}`}>
                   <div className="flex items-start justify-between gap-3">
                     <div className="min-w-0">
                       <p className="text-sm font-medium text-slate-900">{item.title}</p>
@@ -364,7 +366,7 @@ export function DashboardPage() {
 
       <section className="space-y-3">
         <div className="flex items-center justify-between">
-          <h2 className="text-lg font-semibold text-slate-800">Recent Runs</h2>
+          <h2 className="text-lg font-semibold text-slate-900">Recent Runs</h2>
           <Link to="/runs" className="text-sm font-medium text-blue-600 hover:text-blue-700">
             View all runs
           </Link>

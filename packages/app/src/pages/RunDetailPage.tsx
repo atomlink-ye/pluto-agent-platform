@@ -120,7 +120,7 @@ function PhaseProgress({ currentPhase, phases }: { currentPhase?: string | null;
       <p className="text-sm text-slate-600">
         Current phase: <span className="font-medium text-slate-900">{currentPhase ?? "Unavailable"}</span>
       </p>
-      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+      <div className="flex items-start gap-0 overflow-x-auto pb-2">
         {phases.map((phase, index) => {
           const state =
             currentIndex === -1
@@ -132,19 +132,45 @@ function PhaseProgress({ currentPhase, phases }: { currentPhase?: string | null;
                   : "pending"
 
           return (
-            <div
-              key={phase}
-              className={[
-                "rounded-lg border p-3 text-sm",
-                state === "completed"
-                  ? "border-emerald-200 bg-emerald-50 text-emerald-800"
-                  : state === "active"
-                    ? "border-blue-200 bg-blue-50 text-blue-800"
-                    : "border-slate-200 bg-slate-50 text-slate-600",
-              ].join(" ")}
-            >
-              <p className="text-xs font-medium uppercase tracking-wide">Phase {index + 1}</p>
-              <p className="mt-1 font-medium">{phase}</p>
+            <div key={phase} className="flex items-start">
+              <div className="flex min-w-[140px] flex-col items-center">
+                <div
+                  className={[
+                    "flex h-8 w-8 items-center justify-center rounded-full text-sm font-semibold",
+                    state === "completed"
+                      ? "bg-emerald-100 text-emerald-700"
+                      : state === "active"
+                        ? "bg-blue-100 text-blue-700 ring-2 ring-blue-400 ring-offset-2"
+                        : "bg-slate-100 text-slate-400",
+                  ].join(" ")}
+                >
+                  {state === "completed" ? (
+                    <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" strokeWidth={2.5} stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M4.5 12.75l6 6 9-13.5" />
+                    </svg>
+                  ) : (
+                    index + 1
+                  )}
+                </div>
+                <p className={[
+                  "mt-2 text-center text-xs font-medium",
+                  state === "completed"
+                    ? "text-emerald-700"
+                    : state === "active"
+                      ? "text-blue-700"
+                      : "text-slate-500",
+                ].join(" ")}>
+                  {phase}
+                </p>
+              </div>
+              {index < phases.length - 1 ? (
+                <div
+                  className={[
+                    "mt-3.5 h-0.5 w-8 shrink-0",
+                    index < currentIndex ? "bg-emerald-300" : "bg-slate-200",
+                  ].join(" ")}
+                />
+              ) : null}
             </div>
           )
         })}
@@ -353,7 +379,7 @@ export function RunDetailPage() {
           <Card className="p-6">
             <div className="mb-3">
               <p className="text-xs font-medium uppercase tracking-wide text-slate-500">Business</p>
-              <h2 className="text-lg font-semibold text-slate-800">Current Phase</h2>
+              <h2 className="text-lg font-semibold text-slate-900">Current Phase</h2>
             </div>
             <PhaseProgress currentPhase={run.current_phase} phases={phases} />
           </Card>
@@ -377,7 +403,7 @@ export function RunDetailPage() {
           ) : null}
 
           <Card className="p-6">
-            <h2 className="text-lg font-semibold text-slate-800">Provided Inputs</h2>
+            <h2 className="text-lg font-semibold text-slate-900">Provided Inputs</h2>
             <details className="mt-3">
               <summary className="cursor-pointer text-sm font-medium text-slate-700">Show input payload</summary>
               <pre className="mt-3 overflow-x-auto rounded-lg bg-slate-50 p-3 text-sm text-slate-700">
@@ -387,10 +413,10 @@ export function RunDetailPage() {
           </Card>
 
           <Card className="p-6">
-            <h2 className="text-lg font-semibold text-slate-800">Outputs</h2>
+            <h2 className="text-lg font-semibold text-slate-900">Outputs</h2>
             <div className="mt-4 space-y-3">
               {detail.artifacts.length === 0 ? (
-                <p className="text-sm text-slate-500">No artifacts produced yet.</p>
+                <p className="text-sm italic text-slate-400">No artifacts produced yet.</p>
               ) : (
                 detail.artifacts.map((artifact) => (
                   <div key={artifact.id} className="rounded-lg border border-slate-200 bg-slate-50 p-3">
@@ -420,13 +446,13 @@ export function RunDetailPage() {
           <Card className="p-6">
             <div className="mb-3">
               <p className="text-xs font-medium uppercase tracking-wide text-slate-500">Governance</p>
-              <h2 className="text-lg font-semibold text-slate-800">Harness</h2>
+              <h2 className="text-lg font-semibold text-slate-900">Harness</h2>
             </div>
             <p className="text-sm font-medium text-slate-900">{getHarnessName(run)}</p>
             <div className="mt-4 space-y-2">
               <p className="text-xs font-medium uppercase tracking-wide text-slate-500">Quality Bar</p>
               {qualityBar.length === 0 ? (
-                <p className="text-sm text-slate-500">No quality bar attached.</p>
+                <p className="text-sm italic text-slate-400">No quality bar attached.</p>
               ) : (
                 qualityBar.map((item) => (
                   <p key={item} className="text-sm text-slate-700">
@@ -441,7 +467,7 @@ export function RunDetailPage() {
             <h2 className="text-lg font-semibold text-amber-900">Pending Approvals</h2>
             <div className="mt-4 space-y-3">
               {pendingApprovals.length === 0 ? (
-                <p className="text-sm text-amber-800">No pending approvals.</p>
+                <p className="text-sm italic text-slate-400">No pending approvals.</p>
               ) : (
                 pendingApprovals.map((approval) => (
                   <div key={approval.id} className="rounded-lg border border-amber-200 bg-white/70 p-4">
@@ -475,10 +501,10 @@ export function RunDetailPage() {
           </Card>
 
           <Card className="p-6">
-            <h2 className="text-lg font-semibold text-slate-800">Resolved Approvals</h2>
+            <h2 className="text-lg font-semibold text-slate-900">Resolved Approvals</h2>
             <div className="mt-4 space-y-3">
               {resolvedApprovals.length === 0 ? (
-                <p className="text-sm text-slate-500">No resolved approvals yet.</p>
+                <p className="text-sm italic text-slate-400">No resolved approvals yet.</p>
               ) : (
                 resolvedApprovals.map((approval) => (
                   <div key={approval.id} className="flex items-start justify-between gap-3 rounded-lg border border-slate-200 bg-slate-50 p-3">
@@ -506,6 +532,7 @@ export function RunDetailPage() {
         <TeamActivityFeed
           teamActivity={teamActivity}
           onOpenAgent={(agentId) => navigate(`/runs/${run.id}/agents/${agentId}/chat`)}
+          dark
         />
 
         <Card className="border-slate-800 bg-slate-900 p-6">
@@ -521,7 +548,7 @@ export function RunDetailPage() {
             </Button>
           </div>
           <div className="mt-4">
-            <EventTimeline events={detail.events} showRaw={showRawEvents} />
+            <EventTimeline events={detail.events} showRaw={showRawEvents} dark />
           </div>
         </Card>
 
@@ -532,6 +559,7 @@ export function RunDetailPage() {
               agentId={defaultAgentId}
               runId={run.id}
               compact
+              dark
               onExpand={() => navigate(`/runs/${run.id}/agents/${defaultAgentId}/chat`)}
             />
           </div>

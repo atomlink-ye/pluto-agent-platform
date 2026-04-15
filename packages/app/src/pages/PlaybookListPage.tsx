@@ -21,7 +21,7 @@ function getHarnesses(playbook: PlaybookListItem) {
 
 function PlaybookCardSkeleton() {
   return (
-    <Card className="p-4">
+    <Card className="p-5">
       <Skeleton width="w-2/3" height="h-5" />
       <Skeleton width="w-full" height="h-4" className="mt-3" />
       <Skeleton width="w-5/6" height="h-4" className="mt-2" />

@@ -9,9 +9,9 @@ export interface CardProps {
 
 export function Card({ variant = "default", children, className = "", onClick }: CardProps) {
   const variants = {
-    default: "rounded-lg border border-slate-200 bg-white",
-    highlighted: "rounded-lg border border-amber-200 bg-amber-50",
-    interactive: "cursor-pointer rounded-lg border border-slate-200 bg-white transition-all hover:border-slate-300 hover:shadow-sm",
+    default: "rounded-xl border border-slate-200 bg-white",
+    highlighted: "rounded-xl border border-amber-200 bg-amber-50",
+    interactive: "cursor-pointer rounded-xl border border-slate-200 bg-white transition-all hover:border-slate-300 hover:shadow-sm",
   }
   return (
     <div className={`${variants[variant]} ${className}`} onClick={onClick}>

@@ -284,7 +284,7 @@ export function PlaybookFormPage() {
 
       <div className="max-w-3xl space-y-6">
         <Card className="p-6">
-          <h2 className="text-lg font-semibold text-slate-800">Basic Information</h2>
+          <h2 className="text-lg font-semibold text-slate-900">Basic Information</h2>
           <div className="mt-4 space-y-4">
             <Input
               label="Name"
@@ -303,7 +303,7 @@ export function PlaybookFormPage() {
         </Card>
 
         <Card className="p-6">
-          <h2 className="text-lg font-semibold text-slate-800">Task Intent</h2>
+          <h2 className="text-lg font-semibold text-slate-900">Task Intent</h2>
           <div className="mt-4 space-y-4">
             <Textarea
               label="Goal"
@@ -339,7 +339,7 @@ export function PlaybookFormPage() {
         <Card className="p-6">
           <div className="flex items-center justify-between gap-3">
             <div>
-              <h2 className="text-lg font-semibold text-slate-800">Input Schema</h2>
+              <h2 className="text-lg font-semibold text-slate-900">Input Schema</h2>
               <p className="mt-1 text-sm text-slate-500">
                 Define the inputs this playbook requires when starting a run.
               </p>

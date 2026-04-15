@@ -232,7 +232,7 @@ export function PlaybookDetailPage() {
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
         <div className="space-y-4 lg:col-span-2">
           <Card className="p-6">
-            <h2 className="text-lg font-semibold text-slate-800">Task Intent</h2>
+            <h2 className="text-lg font-semibold text-slate-900">Task Intent</h2>
             <div className="mt-4 space-y-4">
               <DetailField label="Goal" value={playbook.goal ?? "No goal provided."} />
               <DetailField label="Instructions" value={playbook.instructions ?? "No instructions provided."} />
@@ -256,7 +256,7 @@ export function PlaybookDetailPage() {
 
         <div className="space-y-4">
           <Card className="p-6">
-            <h2 className="text-lg font-semibold text-slate-800">Input Schema</h2>
+            <h2 className="text-lg font-semibold text-slate-900">Input Schema</h2>
             <div className="mt-4 space-y-3">
               {inputSpecs.length === 0 ? (
                 <p className="text-sm text-slate-500">No inputs required.</p>
@@ -275,7 +275,7 @@ export function PlaybookDetailPage() {
           </Card>
 
           <Card className="p-6">
-            <h2 className="text-lg font-semibold text-slate-800">Attached Harnesses</h2>
+            <h2 className="text-lg font-semibold text-slate-900">Attached Harnesses</h2>
             <div className="mt-4 space-y-3">
               {attachedHarnesses.length === 0 ? (
                 <p className="text-sm text-slate-500">No harnesses attached.</p>
@@ -298,7 +298,7 @@ export function PlaybookDetailPage() {
       </div>
 
       <section className="space-y-3">
-        <h2 className="text-lg font-semibold text-slate-800">Recent Runs</h2>
+        <h2 className="text-lg font-semibold text-slate-900">Recent Runs</h2>
 
         {recentRuns.length === 0 ? (
           <Card className="p-4">
