@@ -1,162 +1,346 @@
-import { useEffect, useState } from "react"
-import { useParams, useNavigate } from "react-router-dom"
-import { api } from "../api"
+import { useCallback, useEffect, useMemo, useState } from "react"
+import { Link, useNavigate, useParams } from "react-router-dom"
+
+import { api, type HarnessSummary, type PlaybookRecord, type RunRecord } from "../api"
+import { Button } from "../components/Button"
+import { Card } from "../components/Card"
+import { EmptyState } from "../components/EmptyState"
+import { usePageChrome } from "../components/Layout"
+import { Skeleton } from "../components/Skeleton"
+import { StatusBadge } from "../components/StatusBadge"
+import { StartRunModal } from "./StartRunModal"
+
+interface InputSpec {
+  name: string
+  type?: string
+  required?: boolean
+  description?: string
+}
+
+interface ArtifactExpectation {
+  type: string
+  format?: string
+  description?: string
+}
+
+function normalizeInputs(inputs?: InputSpec[] | Record<string, unknown>): InputSpec[] {
+  if (!inputs) {
+    return []
+  }
+
+  if (Array.isArray(inputs)) {
+    return inputs
+  }
+
+  return Object.entries(inputs).map(([name, description]) => ({
+    name,
+    type: "string",
+    description: typeof description === "string" ? description : undefined,
+    required: false,
+  }))
+}
+
+function normalizeQualityBar(value?: string[] | string) {
+  if (!value) {
+    return []
+  }
+
+  return Array.isArray(value) ? value : [value]
+}
+
+function normalizeArtifacts(value?: ArtifactExpectation[] | string) {
+  if (!value) {
+    return []
+  }
+
+  if (typeof value === "string") {
+    return [{ type: value }]
+  }
+
+  return value
+}
+
+function PlaybookDetailSkeleton() {
+  return (
+    <div className="space-y-6">
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+        <div className="space-y-2">
+          <Skeleton width="w-64" height="h-8" />
+          <Skeleton width="w-96" height="h-4" />
+        </div>
+        <div className="flex gap-2">
+          <Skeleton width="w-24" height="h-10" />
+          <Skeleton width="w-24" height="h-10" />
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
+        <Card className="p-6 lg:col-span-2">
+          <Skeleton width="w-40" height="h-5" />
+          <div className="mt-4 space-y-4">
+            <Skeleton width="w-full" height="h-20" />
+            <Skeleton width="w-full" height="h-20" />
+          </div>
+        </Card>
+        <div className="space-y-4">
+          <Card className="p-6">
+            <Skeleton width="w-32" height="h-5" />
+            <Skeleton width="w-full" height="h-24" className="mt-4" />
+          </Card>
+          <Card className="p-6">
+            <Skeleton width="w-40" height="h-5" />
+            <Skeleton width="w-full" height="h-20" className="mt-4" />
+          </Card>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function DetailField({ label, value }: { label: string; value: string }) {
+  return (
+    <div>
+      <p className="text-xs font-medium uppercase tracking-wide text-slate-500">{label}</p>
+      <pre className="mt-1 whitespace-pre-wrap font-sans text-sm leading-relaxed text-slate-700">{value}</pre>
+    </div>
+  )
+}
 
 export function PlaybookDetailPage() {
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
-  const [playbook, setPlaybook] = useState<any>(null)
+  const [playbook, setPlaybook] = useState<PlaybookRecord | null>(null)
+  const [runs, setRuns] = useState<RunRecord[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
-  const [starting, setStarting] = useState(false)
+  const [showStartRun, setShowStartRun] = useState(false)
 
-  useEffect(() => {
-    if (!id) return
-    api.playbooks
-      .get(id)
-      .then(setPlaybook)
-      .catch((e) => setError(e.message))
-      .finally(() => setLoading(false))
+  const loadPlaybook = useCallback(async () => {
+    if (!id) {
+      setError("Missing playbook id")
+      setLoading(false)
+      return
+    }
+
+    try {
+      const [playbookData, runData] = await Promise.all([
+        api.playbooks.get(id),
+        api.runs.list(),
+      ])
+
+      let nextPlaybook = playbookData
+      if (!nextPlaybook.harness && nextPlaybook.harnessId) {
+        try {
+          const harness = await api.harnesses.get(nextPlaybook.harnessId)
+          nextPlaybook = { ...nextPlaybook, harness }
+        } catch {
+          nextPlaybook = { ...nextPlaybook }
+        }
+      }
+
+      setPlaybook(nextPlaybook)
+      setRuns(runData)
+      setError(null)
+    } catch (loadError) {
+      setError(loadError instanceof Error ? loadError.message : "Failed to load playbook")
+    } finally {
+      setLoading(false)
+    }
   }, [id])
 
-  const handleStartRun = async () => {
-    if (!playbook || !playbook.harnessId) return
-    setStarting(true)
-    try {
-      const run = await api.runs.create({
-        playbookId: playbook.id,
-        harnessId: playbook.harnessId,
-        inputs: {},
-      })
-      navigate(`/runs/${run.id}`)
-    } catch (e: any) {
-      setError(e.message)
-      setStarting(false)
+  useEffect(() => {
+    void loadPlaybook()
+  }, [loadPlaybook])
+
+  usePageChrome({
+    breadcrumbs: playbook
+      ? [
+          { label: "Playbooks", href: "/playbooks" },
+          { label: playbook.name },
+        ]
+      : [{ label: "Playbooks", href: "/playbooks" }, { label: "Details" }],
+    actions: playbook ? (
+      <>
+        <Button variant="secondary" onClick={() => navigate(`/playbooks/${playbook.id}/edit`)}>
+          Edit
+        </Button>
+        <Button onClick={() => setShowStartRun(true)}>Start Run</Button>
+      </>
+    ) : null,
+  })
+
+  const inputSpecs = useMemo(() => normalizeInputs(playbook?.inputs), [playbook?.inputs])
+  const qualityBar = useMemo(() => normalizeQualityBar(playbook?.quality_bar), [playbook?.quality_bar])
+  const artifacts = useMemo(() => normalizeArtifacts(playbook?.artifacts), [playbook?.artifacts])
+
+  const attachedHarnesses = useMemo(() => {
+    if (!playbook) {
+      return []
     }
+
+    if (Array.isArray(playbook.harnesses) && playbook.harnesses.length > 0) {
+      return playbook.harnesses
+    }
+
+    return playbook.harness ? [playbook.harness] : []
+  }, [playbook])
+
+  const recentRuns = useMemo(() => {
+    if (!playbook) {
+      return []
+    }
+
+      return runs
+      .filter((run) => {
+        const runPlaybook = run.playbook
+        const runPlaybookName = run.playbookName ?? run.playbook_name
+        return runPlaybook === playbook.id || runPlaybookName === playbook.name
+      })
+      .sort((left, right) => new Date(right.createdAt ?? 0).getTime() - new Date(left.createdAt ?? 0).getTime())
+      .slice(0, 5)
+  }, [playbook, runs])
+
+  if (loading) {
+    return <PlaybookDetailSkeleton />
   }
 
-  if (loading) return <p className="text-gray-500">Loading...</p>
-  if (error) return <p className="text-red-600">Error: {error}</p>
-  if (!playbook) return <p className="text-gray-500">Playbook not found.</p>
+  if (error) {
+    return (
+      <Card className="border-red-200 bg-red-50 p-4">
+        <p className="text-sm font-medium text-red-700">Failed to load playbook</p>
+        <p className="mt-1 text-sm text-red-600">{error}</p>
+        <div className="mt-4">
+          <Button variant="secondary" onClick={() => void loadPlaybook()}>
+            Retry
+          </Button>
+        </div>
+      </Card>
+    )
+  }
+
+  if (!playbook) {
+    return <EmptyState title="Playbook not found" description="The requested playbook could not be loaded." />
+  }
 
   return (
-    <div>
-      <div className="flex items-center justify-between mb-6">
-        <div>
-          <h2 className="text-xl font-semibold">{playbook.name}</h2>
-          {playbook.description && (
-            <p className="text-sm text-gray-500 mt-1">{playbook.description}</p>
-          )}
+    <div className="space-y-8">
+      <div>
+        <h1 className="text-2xl font-semibold tracking-tight text-slate-900">{playbook.name}</h1>
+        <p className="mt-1 text-sm text-slate-600">{playbook.description ?? "No description provided."}</p>
+      </div>
+
+      <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
+        <div className="space-y-4 lg:col-span-2">
+          <Card className="p-6">
+            <h2 className="text-lg font-semibold text-slate-800">Task Intent</h2>
+            <div className="mt-4 space-y-4">
+              <DetailField label="Goal" value={playbook.goal ?? "No goal provided."} />
+              <DetailField label="Instructions" value={playbook.instructions ?? "No instructions provided."} />
+              <DetailField
+                label="Expected Artifacts"
+                value={
+                  artifacts.length > 0
+                    ? artifacts
+                        .map((artifact) => artifact.description ?? artifact.type)
+                        .join("\n")
+                    : "No expected artifacts defined."
+                }
+              />
+              <DetailField
+                label="Quality Bar"
+                value={qualityBar.length > 0 ? qualityBar.join("\n") : "No quality bar defined."}
+              />
+            </div>
+          </Card>
         </div>
-        {playbook.harnessId && (
-          <button
-            onClick={handleStartRun}
-            disabled={starting}
-            className="px-4 py-2 bg-blue-600 text-white text-sm font-medium rounded-md hover:bg-blue-700 disabled:opacity-50 transition-colors"
-          >
-            {starting ? "Starting..." : "Start Run"}
-          </button>
-        )}
+
+        <div className="space-y-4">
+          <Card className="p-6">
+            <h2 className="text-lg font-semibold text-slate-800">Input Schema</h2>
+            <div className="mt-4 space-y-3">
+              {inputSpecs.length === 0 ? (
+                <p className="text-sm text-slate-500">No inputs required.</p>
+              ) : (
+                inputSpecs.map((input) => (
+                  <div key={input.name} className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+                    <div className="flex items-center justify-between gap-2">
+                      <p className="font-mono text-sm text-slate-900">{input.name}</p>
+                      <span className="text-xs text-slate-500">{input.type ?? "string"}</span>
+                    </div>
+                    <p className="mt-2 text-sm text-slate-600">{input.description ?? "No description provided."}</p>
+                  </div>
+                ))
+              )}
+            </div>
+          </Card>
+
+          <Card className="p-6">
+            <h2 className="text-lg font-semibold text-slate-800">Attached Harnesses</h2>
+            <div className="mt-4 space-y-3">
+              {attachedHarnesses.length === 0 ? (
+                <p className="text-sm text-slate-500">No harnesses attached.</p>
+              ) : (
+                attachedHarnesses.map((harness) => (
+                  <div key={harness.id} className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+                    <p className="text-sm font-medium text-slate-900">{harness.name}</p>
+                    <p className="mt-1 text-sm text-slate-600">{harness.description ?? "No description provided."}</p>
+                    <p className="mt-2 text-xs text-slate-500">
+                      {Array.isArray(harness.phases) && harness.phases.length > 0
+                        ? `${harness.phases.length} phases`
+                        : "Phases unavailable"}
+                    </p>
+                  </div>
+                ))
+              )}
+            </div>
+          </Card>
+        </div>
       </div>
 
-      <div className="grid grid-cols-1 gap-4">
-        {/* Business section */}
-        <section className="bg-white border border-gray-200 rounded-lg p-5">
-          <h3 className="text-sm font-semibold text-gray-500 uppercase tracking-wide mb-3">
-            Task Intent
-          </h3>
-          {playbook.goal && (
-            <div className="mb-3">
-              <dt className="text-xs font-medium text-gray-500">Goal</dt>
-              <dd className="text-sm text-gray-900 mt-0.5">{playbook.goal}</dd>
-            </div>
-          )}
-          {playbook.instructions && (
-            <div className="mb-3">
-              <dt className="text-xs font-medium text-gray-500">Instructions</dt>
-              <dd className="text-sm text-gray-900 mt-0.5 whitespace-pre-wrap">
-                {playbook.instructions}
-              </dd>
-            </div>
-          )}
-          {playbook.inputs && playbook.inputs.length > 0 && (
-            <div className="mb-3">
-              <dt className="text-xs font-medium text-gray-500">Inputs</dt>
-              <dd className="mt-1 space-y-1">
-                {playbook.inputs.map((input: any, i: number) => (
-                  <div key={i} className="text-sm">
-                    <span className="font-mono text-xs bg-gray-100 px-1 rounded">
-                      {input.name}
-                    </span>
-                    <span className="text-gray-500 ml-1">({input.type})</span>
-                    {input.required && <span className="text-red-500 ml-1">*</span>}
-                    {input.description && (
-                      <span className="text-gray-500 ml-2">— {input.description}</span>
-                    )}
-                  </div>
-                ))}
-              </dd>
-            </div>
-          )}
-          {playbook.artifacts && playbook.artifacts.length > 0 && (
-            <div className="mb-3">
-              <dt className="text-xs font-medium text-gray-500">Expected Artifacts</dt>
-              <dd className="mt-1 space-y-1">
-                {playbook.artifacts.map((a: any, i: number) => (
-                  <div key={i} className="text-sm text-gray-900">
-                    {a.type}
-                    {a.format && <span className="text-gray-500 ml-1">({a.format})</span>}
-                  </div>
-                ))}
-              </dd>
-            </div>
-          )}
-          {playbook.quality_bar && (
-            <div>
-              <dt className="text-xs font-medium text-gray-500">Quality Bar</dt>
-              <dd className="text-sm text-gray-900 mt-0.5">{playbook.quality_bar}</dd>
-            </div>
-          )}
-        </section>
+      <section className="space-y-3">
+        <h2 className="text-lg font-semibold text-slate-800">Recent Runs</h2>
 
-        {/* Harness section */}
-        {playbook.harness && (
-          <section className="bg-white border border-gray-200 rounded-lg p-5">
-            <h3 className="text-sm font-semibold text-gray-500 uppercase tracking-wide mb-3">
-              Governance Harness
-            </h3>
-            <div className="mb-3">
-              <dt className="text-xs font-medium text-gray-500">Name</dt>
-              <dd className="text-sm text-gray-900 mt-0.5">{playbook.harness.name}</dd>
+        {recentRuns.length === 0 ? (
+          <Card className="p-4">
+            <p className="text-sm text-slate-500">No runs yet for this playbook.</p>
+          </Card>
+        ) : (
+          <Card className="overflow-hidden">
+            <div className="overflow-x-auto">
+              <table className="min-w-full text-sm">
+                <thead className="bg-slate-50">
+                  <tr className="border-b border-slate-200">
+                    <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wide text-slate-500">Run</th>
+                    <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wide text-slate-500">Status</th>
+                    <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wide text-slate-500">Phase</th>
+                    <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wide text-slate-500">Started</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-200 bg-white">
+                  {recentRuns.map((run) => (
+                    <tr key={run.id} className="hover:bg-slate-50">
+                      <td className="px-4 py-3">
+                        <Link to={`/runs/${run.id}`} className="font-mono text-sm text-slate-900 hover:text-blue-600">
+                          {run.id}
+                        </Link>
+                      </td>
+                      <td className="px-4 py-3">
+                        <StatusBadge status={run.status} />
+                      </td>
+                      <td className="px-4 py-3 text-slate-600">{run.current_phase ?? "—"}</td>
+                      <td className="px-4 py-3 text-slate-600">
+                        {run.createdAt ? new Date(run.createdAt).toLocaleString() : "—"}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             </div>
-            {playbook.harness.description && (
-              <div className="mb-3">
-                <dt className="text-xs font-medium text-gray-500">Description</dt>
-                <dd className="text-sm text-gray-900 mt-0.5">{playbook.harness.description}</dd>
-              </div>
-            )}
-            <div>
-              <dt className="text-xs font-medium text-gray-500">Phases</dt>
-              <dd className="flex gap-2 mt-1">
-                {playbook.harness.phases.map((phase: string, i: number) => (
-                  <span
-                    key={i}
-                    className="text-xs bg-gray-100 text-gray-700 px-2 py-0.5 rounded"
-                  >
-                    {phase}
-                  </span>
-                ))}
-              </dd>
-            </div>
-          </section>
+          </Card>
         )}
+      </section>
 
-        {!playbook.harnessId && (
-          <p className="text-sm text-amber-600 bg-amber-50 border border-amber-200 rounded-lg px-4 py-3">
-            No harness attached. Attach a harness to start runs from this playbook.
-          </p>
-        )}
-      </div>
+      <StartRunModal open={showStartRun} onClose={() => setShowStartRun(false)} playbook={playbook} />
     </div>
   )
 }

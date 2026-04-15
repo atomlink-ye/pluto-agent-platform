@@ -1,93 +1,166 @@
-import { useEffect, useState } from "react"
-import { Link } from "react-router-dom"
+import { useCallback, useEffect, useMemo, useState } from "react"
+import { Link, useSearchParams } from "react-router-dom"
 
-import { api } from "../api"
-import { StatusBadge } from "../components/StatusBadge"
+import { api, type ApprovalQueueRecord } from "../api"
+import { Badge } from "../components/Badge"
+import { Button } from "../components/Button"
+import { Card } from "../components/Card"
+import { EmptyState } from "../components/EmptyState"
+import { usePageChrome } from "../components/Layout"
+import { Skeleton } from "../components/Skeleton"
+import { usePolling } from "../hooks/usePolling"
+import { useToast } from "../hooks/useToast"
 
-type ApprovalFilter = "all" | "pending" | "approved" | "denied" | "expired" | "canceled"
+type ApprovalFilter = "pending" | "approved" | "denied" | "all"
 
-interface ApprovalQueueItem {
-  id: string
-  action_class: string
-  title: string
-  status: string
-  createdAt: string
-  context?: {
-    phase?: string
-    reason?: string
-    stage_id?: string
-  }
-  resolution?: {
-    decision: string
-    resolved_by: string
-    note?: string
-  } | null
-  run: {
-    id: string
-    status: string
-    current_phase?: string | null
-  } | null
-  playbook: {
-    id: string
-    name: string
-  } | null
-}
-
-const FILTERS: Array<{ value: ApprovalFilter; label: string }> = [
+const FILTER_TABS: Array<{ value: ApprovalFilter; label: string }> = [
   { value: "pending", label: "Pending" },
-  { value: "all", label: "All statuses" },
   { value: "approved", label: "Approved" },
   { value: "denied", label: "Denied" },
-  { value: "expired", label: "Expired" },
-  { value: "canceled", label: "Canceled" },
+  { value: "all", label: "All" },
 ]
 
+function formatRelativeTime(value?: string) {
+  if (!value) {
+    return "—"
+  }
+
+  const timestamp = new Date(value).getTime()
+  if (Number.isNaN(timestamp)) {
+    return value
+  }
+
+  const deltaMinutes = Math.floor((Date.now() - timestamp) / 60000)
+  if (deltaMinutes < 1) {
+    return "just now"
+  }
+  if (deltaMinutes < 60) {
+    return `${deltaMinutes} min ago`
+  }
+
+  const deltaHours = Math.floor(deltaMinutes / 60)
+  if (deltaHours < 24) {
+    return `${deltaHours} hr ago`
+  }
+
+  const deltaDays = Math.floor(deltaHours / 24)
+  return `${deltaDays} day${deltaDays === 1 ? "" : "s"} ago`
+}
+
+function ApprovalTableSkeleton() {
+  return (
+    <Card className="overflow-hidden">
+      <div className="divide-y divide-slate-200">
+        {Array.from({ length: 6 }).map((_, index) => (
+          <div key={index} className="grid grid-cols-5 gap-4 px-4 py-4">
+            <Skeleton width="w-full" height="h-4" />
+            <Skeleton width="w-24" height="h-4" />
+            <Skeleton width="w-20" height="h-4" />
+            <Skeleton width="w-full" height="h-4" />
+            <Skeleton width="w-28" height="h-4" />
+          </div>
+        ))}
+      </div>
+    </Card>
+  )
+}
+
 export function ApprovalsPage() {
-  const [filter, setFilter] = useState<ApprovalFilter>("pending")
-  const [approvals, setApprovals] = useState<ApprovalQueueItem[]>([])
+  const { toast } = useToast()
+  const [searchParams, setSearchParams] = useSearchParams()
+  const [approvals, setApprovals] = useState<ApprovalQueueRecord[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [resolvingId, setResolvingId] = useState<string | null>(null)
 
-  useEffect(() => {
-    let canceled = false
+  const filter = (searchParams.get("status") as ApprovalFilter | null) ?? "pending"
 
-    const load = async () => {
-      setLoading(true)
+  const loadApprovals = useCallback(async () => {
+    try {
+      const data = await api.approvals.list()
+      setApprovals(data)
       setError(null)
+      return true
+    } catch (loadError) {
+      setError(loadError instanceof Error ? loadError.message : "Failed to load approvals")
+      return false
+    } finally {
+      setLoading(false)
+    }
+  }, [])
 
-      try {
-        const data = await api.approvals.list(filter === "all" ? undefined : filter)
-        if (!canceled) {
-          setApprovals(data)
-        }
-      } catch (e: any) {
-        if (!canceled) {
-          setError(e.message)
-        }
-      } finally {
-        if (!canceled) {
-          setLoading(false)
-        }
-      }
+  useEffect(() => {
+    void loadApprovals()
+  }, [loadApprovals])
+
+  usePolling(() => {
+    void loadApprovals()
+  }, 10000, filter === "pending" || approvals.some((approval) => approval.status === "pending"))
+
+  const filteredApprovals = useMemo(() => {
+    if (filter === "all") {
+      return approvals
     }
 
-    load()
+    return approvals.filter((approval) => approval.status === filter)
+  }, [approvals, filter])
 
-    return () => {
-      canceled = true
+  const counts = useMemo(() => {
+    return FILTER_TABS.reduce<Record<ApprovalFilter, number>>(
+      (accumulator, tab) => ({
+        ...accumulator,
+        [tab.value]: tab.value === "all" ? approvals.length : approvals.filter((approval) => approval.status === tab.value).length,
+      }),
+      { pending: 0, approved: 0, denied: 0, all: 0 },
+    )
+  }, [approvals])
+
+  const pendingCount = counts.pending
+
+  const handleRefresh = useCallback(async () => {
+    const ok = await loadApprovals()
+    if (ok) {
+      toast.success("Approvals refreshed")
+      return
     }
-  }, [filter])
 
-  const handleResolution = async (approvalId: string, decision: "approved" | "denied") => {
+    toast.error("Failed to refresh approvals")
+  }, [loadApprovals, toast])
+
+  const { refreshPendingApprovals } = usePageChrome({
+    breadcrumbs: [{ label: "Approvals" }],
+    actions: (
+      <Button variant="secondary" onClick={() => void handleRefresh()}>
+        Refresh
+      </Button>
+    ),
+  })
+
+  const handleResolve = async (approvalId: string, decision: "approved" | "denied") => {
+    const previousApprovals = approvals
+
     try {
       setResolvingId(approvalId)
-      setError(null)
+      setApprovals((currentApprovals) =>
+        currentApprovals.map((approval) =>
+          approval.id === approvalId
+            ? {
+                ...approval,
+                status: decision,
+              }
+            : approval,
+        ),
+      )
       await api.approvals.resolve(approvalId, { decision })
-      const data = await api.approvals.list(filter === "all" ? undefined : filter)
-      setApprovals(data)
-    } catch (e: any) {
-      setError(e.message)
+      await refreshPendingApprovals()
+      toast.success("Approval resolved")
+      await loadApprovals()
+    } catch (resolveError) {
+      setApprovals(previousApprovals)
+      toast.error(
+        "Failed to resolve approval",
+        resolveError instanceof Error ? resolveError.message : "Unknown error",
+      )
     } finally {
       setResolvingId(null)
     }
@@ -95,116 +168,150 @@ export function ApprovalsPage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
-        <div>
-          <h2 className="text-xl font-semibold">Approvals</h2>
-          <p className="mt-1 text-sm text-gray-500">
-            Review pending approval requests across runs and jump straight to the affected run.
-          </p>
+      <div>
+        <div className="flex items-center gap-3">
+          <h1 className="text-2xl font-semibold tracking-tight text-slate-900">Approvals</h1>
+          {pendingCount > 0 ? <Badge status="pending_approval">{pendingCount} pending</Badge> : null}
         </div>
-
-        <label className="flex flex-col gap-1 text-sm text-gray-600">
-          Status
-          <select
-            value={filter}
-            onChange={(event) => setFilter(event.target.value as ApprovalFilter)}
-            className="rounded-md border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900"
-          >
-            {FILTERS.map((option) => (
-              <option key={option.value} value={option.value}>
-                {option.label}
-              </option>
-            ))}
-          </select>
-        </label>
+        <p className="mt-1 text-sm text-slate-600">Resolve durable approval requests across runs.</p>
       </div>
 
-      {loading ? <p className="text-gray-500">Loading approvals...</p> : null}
-      {error ? <p className="text-red-600">Error: {error}</p> : null}
-
-      {!loading && !error && approvals.length === 0 ? (
-        <div className="rounded-lg border border-dashed border-gray-300 bg-white p-6 text-sm text-gray-500">
-          No approvals match this filter.
-        </div>
-      ) : null}
-
-      {!loading && !error && approvals.length > 0 ? (
-        <div className="space-y-3">
-          {approvals.map((approval) => (
-            <div key={approval.id} className="rounded-lg border border-gray-200 bg-white p-4">
-              <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
-                <div className="space-y-2">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <span className="text-sm font-semibold text-gray-900">{approval.title}</span>
-                    <StatusBadge status={approval.status} />
-                    <span className="rounded bg-gray-100 px-2 py-0.5 text-xs text-gray-600">
-                      {approval.action_class}
-                    </span>
-                  </div>
-
-                  <div className="flex flex-wrap items-center gap-3 text-xs text-gray-500">
-                    {approval.playbook ? (
-                      <Link
-                        to={`/playbooks/${approval.playbook.id}`}
-                        className="font-medium text-gray-700 hover:text-gray-900"
-                      >
-                        {approval.playbook.name}
-                      </Link>
-                    ) : null}
-                    {approval.run ? (
-                      <Link
-                        to={`/runs/${approval.run.id}`}
-                        className="font-mono text-gray-700 hover:text-gray-900"
-                      >
-                        Run {approval.run.id.slice(0, 8)}
-                      </Link>
-                    ) : null}
-                    {approval.run ? <StatusBadge status={approval.run.status} /> : null}
-                    {approval.run?.current_phase ? <span>Phase: {approval.run.current_phase}</span> : null}
-                  </div>
-
-                  {approval.context?.reason ? (
-                    <p className="text-sm text-gray-600">{approval.context.reason}</p>
-                  ) : null}
-
-                  <div className="flex flex-wrap items-center gap-3 text-xs text-gray-400">
-                    <span>Requested {new Date(approval.createdAt).toLocaleString()}</span>
-                    {approval.context?.phase ? <span>Context phase: {approval.context.phase}</span> : null}
-                    {approval.context?.stage_id ? <span>Stage: {approval.context.stage_id}</span> : null}
-                  </div>
-
-                  {approval.resolution ? (
-                    <p className="text-xs text-gray-500">
-                      Resolved: {approval.resolution.decision} by {approval.resolution.resolved_by}
-                      {approval.resolution.note ? ` - ${approval.resolution.note}` : ""}
-                    </p>
-                  ) : null}
-                </div>
-
-                {approval.status === "pending" ? (
-                  <div className="flex shrink-0 gap-2">
-                    <button
-                      type="button"
-                      onClick={() => handleResolution(approval.id, "approved")}
-                      disabled={resolvingId === approval.id}
-                      className="rounded bg-green-600 px-3 py-1.5 text-xs font-medium text-white transition-colors hover:bg-green-700 disabled:cursor-not-allowed disabled:opacity-60"
-                    >
-                      Approve
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => handleResolution(approval.id, "denied")}
-                      disabled={resolvingId === approval.id}
-                      className="rounded bg-red-600 px-3 py-1.5 text-xs font-medium text-white transition-colors hover:bg-red-700 disabled:cursor-not-allowed disabled:opacity-60"
-                    >
-                      Deny
-                    </button>
-                  </div>
-                ) : null}
-              </div>
-            </div>
+      <div className="-mx-4 overflow-x-auto border-b border-slate-200 px-4 sm:-mx-6 sm:px-6 lg:-mx-8 lg:px-8">
+        <div className="flex min-w-max gap-1">
+          {FILTER_TABS.map((tab) => (
+            <Button
+              key={tab.value}
+              className={[
+                "rounded-none border-b-2 px-3 py-2.5",
+                filter === tab.value
+                  ? "border-blue-600 text-blue-700"
+                  : "border-transparent text-slate-500 hover:border-slate-300 hover:text-slate-700",
+              ].join(" ")}
+              variant="ghost"
+              onClick={() => {
+                const nextParams = new URLSearchParams(searchParams)
+                nextParams.set("status", tab.value)
+                setSearchParams(nextParams)
+              }}
+            >
+              {tab.label}
+              {counts[tab.value] > 0 ? (
+                <span className="ml-1.5 rounded-full bg-slate-100 px-1.5 py-0.5 text-xs text-slate-600">
+                  {counts[tab.value]}
+                </span>
+              ) : null}
+            </Button>
           ))}
         </div>
+      </div>
+
+      {loading ? <ApprovalTableSkeleton /> : null}
+
+      {!loading && error ? (
+        <Card className="border-red-200 bg-red-50 p-4">
+          <p className="text-sm font-medium text-red-700">Failed to load approvals</p>
+          <p className="mt-1 text-sm text-red-600">{error}</p>
+          <div className="mt-4">
+            <Button variant="secondary" onClick={() => void handleRefresh()}>
+              Retry
+            </Button>
+          </div>
+        </Card>
+      ) : null}
+
+      {!loading && !error && filteredApprovals.length === 0 ? (
+        <EmptyState
+          title={filter === "pending" ? "All caught up" : "No approvals found"}
+          description={
+            filter === "pending"
+              ? "There are no pending approvals waiting on operator action."
+              : "No approvals match the current filter."
+          }
+        />
+      ) : null}
+
+      {!loading && !error && filteredApprovals.length > 0 ? (
+        <Card className="overflow-hidden">
+          <div className="overflow-x-auto">
+            <table className="min-w-full text-sm">
+              <thead className="bg-slate-50">
+                <tr className="border-b border-slate-200">
+                  <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wide text-slate-500">Run / Playbook</th>
+                  <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wide text-slate-500">Type</th>
+                  <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wide text-slate-500">Requested</th>
+                  <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wide text-slate-500">Context</th>
+                  <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wide text-slate-500">Actions</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-200 bg-white">
+                {filteredApprovals.map((approval) => (
+                  <tr
+                    key={approval.id}
+                    className={approval.status === "pending" ? "bg-amber-50/70" : "hover:bg-slate-50"}
+                  >
+                    <td className="px-4 py-3 align-top">
+                      <div className="space-y-1">
+                        {approval.playbook ? (
+                          <Link to={`/playbooks/${approval.playbook.id}`} className="font-medium text-slate-900 hover:text-blue-600">
+                            {approval.playbook.name}
+                          </Link>
+                        ) : (
+                          <span className="font-medium text-slate-900">Unknown playbook</span>
+                        )}
+                        {approval.run ? (
+                          <Link to={`/runs/${approval.run.id}`} className="block font-mono text-xs text-slate-500 hover:text-blue-600">
+                            {approval.run.id}
+                          </Link>
+                        ) : null}
+                      </div>
+                    </td>
+                    <td className="px-4 py-3 align-top">
+                      <div className="space-y-2">
+                        <p className="text-sm text-slate-700">{approval.title ?? approval.action_class.replace(/_/g, " ")}</p>
+                        <Badge status={approval.status} />
+                      </div>
+                    </td>
+                    <td className="px-4 py-3 align-top text-slate-600">{formatRelativeTime(approval.createdAt)}</td>
+                    <td className="max-w-sm px-4 py-3 align-top text-slate-600">
+                      <p className="line-clamp-3 text-sm">{approval.context?.reason ?? "No additional context provided."}</p>
+                      {approval.context?.phase ? (
+                        <p className="mt-1 text-xs text-slate-500">Phase: {approval.context.phase}</p>
+                      ) : null}
+                    </td>
+                    <td className="px-4 py-3 align-top">
+                      {approval.status === "pending" ? (
+                        <div className="flex gap-2">
+                          <Button
+                            size="sm"
+                            loading={resolvingId === approval.id}
+                            onClick={() => void handleResolve(approval.id, "approved")}
+                          >
+                            Approve
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="danger"
+                            disabled={resolvingId === approval.id}
+                            onClick={() => void handleResolve(approval.id, "denied")}
+                          >
+                            Deny
+                          </Button>
+                        </div>
+                      ) : (
+                        <div className="space-y-2">
+                          <Badge status={approval.status} />
+                          {approval.resolution?.resolved_by ? (
+                            <p className="text-xs text-slate-500">by {approval.resolution.resolved_by}</p>
+                          ) : null}
+                        </div>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </Card>
       ) : null}
     </div>
   )

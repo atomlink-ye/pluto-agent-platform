@@ -109,6 +109,16 @@ export function createApp(deps: AppDeps): express.Express {
     }
   })
 
+  app.put("/api/playbooks/:id", async (req: Request, res: Response) => {
+    try {
+      const playbook = await deps.playbookService.update(param(req, "id"), req.body)
+      res.json({ data: playbook })
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Invalid input"
+      res.status(message.includes("not found") ? 404 : 400).json({ error: message })
+    }
+  })
+
   // -----------------------------------------------------------------------
   // Roles
   // -----------------------------------------------------------------------
@@ -246,6 +256,16 @@ export function createApp(deps: AppDeps): express.Express {
       res.status(201).json({ data: run })
     } catch (err) {
       res.status(400).json({ error: err instanceof Error ? err.message : "Invalid input" })
+    }
+  })
+
+  app.post("/api/runs/:id/cancel", async (req: Request, res: Response) => {
+    try {
+      const run = await deps.runService.transition(param(req, "id"), "canceled")
+      res.json({ data: run })
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Invalid input"
+      res.status(message.includes("not found") ? 404 : 400).json({ error: message })
     }
   })
 

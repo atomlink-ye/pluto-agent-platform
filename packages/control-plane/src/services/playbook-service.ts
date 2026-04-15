@@ -34,4 +34,27 @@ export class PlaybookService {
   async list(): Promise<PlaybookRecord[]> {
     return this.playbookRepository.list()
   }
+
+  async update(id: string, input: PlaybookCreateInput): Promise<PlaybookRecord> {
+    const existing = await this.playbookRepository.getById(id)
+
+    if (!existing) {
+      throw new Error(`Playbook not found: ${id}`)
+    }
+
+    const playbook = PlaybookCreateSchema.parse(input)
+    const timestamp = new Date().toISOString()
+
+    const record: PlaybookRecord = {
+      ...existing,
+      ...playbook,
+      id: existing.id,
+      createdAt: existing.createdAt,
+      updatedAt: timestamp,
+      harnessId: existing.harnessId ?? null,
+      harness: existing.harness ?? null,
+    }
+
+    return this.playbookRepository.update(record)
+  }
 }
