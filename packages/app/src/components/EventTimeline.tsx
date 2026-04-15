@@ -13,7 +13,6 @@ export interface TimelineEvent {
 export interface EventTimelineProps {
   events: EventRecord[]
   showRaw?: boolean
-  tone?: "light" | "dark"
 }
 
 function getEventType(event: TimelineEvent) {
@@ -71,11 +70,9 @@ function formatDisplayTime(value?: string) {
   return date.toLocaleTimeString()
 }
 
-export function EventTimeline({ events, showRaw = false, tone = "light" }: EventTimelineProps) {
-  const isDark = tone === "dark"
-
+export function EventTimeline({ events, showRaw = false }: EventTimelineProps) {
   if (events.length === 0) {
-    return <p className="text-sm text-slate-400">No events yet.</p>
+    return <p className="text-sm text-slate-500">No events yet.</p>
   }
 
   return (
@@ -90,24 +87,24 @@ export function EventTimeline({ events, showRaw = false, tone = "light" }: Event
             <div className="flex flex-col items-center">
               <div className={["mt-1 h-2.5 w-2.5 shrink-0 rounded-full", getDotClassName(type)].join(" ")} />
               {index < events.length - 1 ? (
-                <div className={isDark ? "my-0.5 w-px flex-1 bg-slate-700" : "my-0.5 w-px flex-1 bg-slate-200"} />
+                <div className="my-0.5 w-px flex-1 bg-slate-200" />
               ) : null}
             </div>
 
             <div className="min-w-0 flex-1 pb-4">
               <div className="flex items-baseline gap-2">
-                <span className={isDark ? "text-sm font-medium capitalize text-slate-100" : "text-sm font-medium capitalize text-slate-800"}>
+                <span className="text-sm font-medium capitalize text-slate-800">
                   {type.replace(/_/g, " ")}
                 </span>
                 {time ? (
-                  <span className={isDark ? "font-mono text-xs text-slate-500" : "font-mono text-xs text-slate-400"}>{time}</span>
+                  <span className="font-mono text-xs text-slate-400">{time}</span>
                 ) : null}
               </div>
 
-              {message ? <p className={isDark ? "mt-0.5 text-sm text-slate-300" : "mt-0.5 text-sm text-slate-600"}>{message}</p> : null}
+              {message ? <p className="mt-0.5 text-sm text-slate-600">{message}</p> : null}
 
               {showRaw ? (
-                <pre className={isDark ? "mt-1 overflow-x-auto rounded bg-slate-950 p-2 font-mono text-xs text-slate-400" : "mt-1 overflow-x-auto rounded bg-slate-50 p-2 font-mono text-xs text-slate-500"}>
+                <pre className="mt-1 overflow-x-auto rounded bg-slate-50 p-2 font-mono text-xs text-slate-500">
                   {JSON.stringify(event, null, 2)}
                 </pre>
               ) : null}

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react"
-import { useParams } from "react-router-dom"
+import { useNavigate, useParams } from "react-router-dom"
 
 import { api, type RunDetailResponse, type RunRecord } from "../api"
 import { Badge } from "../components/Badge"
@@ -10,7 +10,9 @@ import { EmptyState } from "../components/EmptyState"
 import { EventTimeline } from "../components/EventTimeline"
 import { usePageChrome } from "../components/Layout"
 import { Skeleton } from "../components/Skeleton"
+import { TeamActivityFeed } from "../components/TeamActivityFeed"
 import { usePolling } from "../hooks/usePolling"
+import { useTeamActivity } from "../hooks/useTeamActivity"
 import { useToast } from "../hooks/useToast"
 
 function getRunName(run: RunRecord) {
@@ -153,6 +155,7 @@ function PhaseProgress({ currentPhase, phases }: { currentPhase?: string | null;
 
 export function RunDetailPage() {
   const { id } = useParams<{ id: string }>()
+  const navigate = useNavigate()
   const { toast } = useToast()
   const [detail, setDetail] = useState<RunDetailResponse | null>(null)
   const [loading, setLoading] = useState(true)
@@ -248,6 +251,30 @@ export function RunDetailPage() {
     () => normalizeQualityBar(run?.quality_bar ?? run?.harnessDetail?.quality_bar),
     [run?.harnessDetail?.quality_bar, run?.quality_bar],
   )
+
+  const defaultAgentId = useMemo(() => {
+    const firstSession = detail?.sessions?.[0]
+    if (firstSession) {
+      return firstSession.id
+    }
+    return run?.id ?? "default"
+  }, [detail?.sessions, run?.id])
+
+  const teamActivity = useTeamActivity({
+    runId: run?.id ?? "",
+    resolvedTeam: run?.harnessDetail
+      ? {
+          roles: run.harnessDetail.phases?.length
+            ? detail?.sessions?.map((session, i) => ({
+                  id: session.role_id ?? session.id,
+                  name: session.provider ?? session.id ?? `Agent ${i + 1}`,
+                  agentId: session.id,
+                }))
+            : undefined,
+          coordination: undefined,
+        }
+      : null,
+  })
 
   const handleResolveApproval = async (approvalId: string, decision: "approved" | "denied") => {
     if (!detail) {
@@ -476,6 +503,11 @@ export function RunDetailPage() {
           <h2 className="text-lg font-semibold text-white">Execution Detail</h2>
         </div>
 
+        <TeamActivityFeed
+          teamActivity={teamActivity}
+          onOpenAgent={(agentId) => navigate(`/runs/${run.id}/agents/${agentId}/chat`)}
+        />
+
         <Card className="border-slate-800 bg-slate-900 p-6">
           <div className="flex items-center justify-between gap-3">
             <h3 className="text-base font-medium text-slate-100">Event Timeline</h3>
@@ -489,14 +521,19 @@ export function RunDetailPage() {
             </Button>
           </div>
           <div className="mt-4">
-            <EventTimeline events={detail.events} showRaw={showRawEvents} tone="dark" />
+            <EventTimeline events={detail.events} showRaw={showRawEvents} />
           </div>
         </Card>
 
         <Card className="border-slate-800 bg-slate-900 p-6">
           <h3 className="text-base font-medium text-slate-100">Chat Session</h3>
           <div className="mt-4">
-            <ChatSession runId={run.id} sessions={detail.sessions} tone="dark" />
+            <ChatSession
+              agentId={defaultAgentId}
+              runId={run.id}
+              compact
+              onExpand={() => navigate(`/runs/${run.id}/agents/${defaultAgentId}/chat`)}
+            />
           </div>
         </Card>
 
