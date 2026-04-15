@@ -50,6 +50,16 @@ const CLAUDE_MODES: AgentProviderModeDefinition[] = [
   },
 ];
 
+const OPENCODE_MODES: AgentProviderModeDefinition[] = [
+  {
+    id: "build",
+    label: "Build",
+    description: "Default OpenCode runtime mode for the live quickstart",
+    icon: "ShieldAlert",
+    colorTier: "moderate",
+  },
+];
+
 export const AGENT_PROVIDER_DEFINITIONS: AgentProviderDefinition[] = [
   {
     id: "claude",
@@ -57,6 +67,13 @@ export const AGENT_PROVIDER_DEFINITIONS: AgentProviderDefinition[] = [
     description: "Anthropic's multi-tool assistant with MCP support, streaming, and deep reasoning",
     defaultModeId: "default",
     modes: CLAUDE_MODES,
+  },
+  {
+    id: "opencode",
+    label: "OpenCode",
+    description: "Remote OpenCode runtime for live Docker-backed governed runs",
+    defaultModeId: "build",
+    modes: OPENCODE_MODES,
   },
 ];
 

@@ -344,6 +344,8 @@ function buildSystemPrompt(
     sections.push(`### reject_handoff\nRejects a pending handoff request.\nParameters: { "handoff_id": "<handoff_id>", "reason": "<rejection_reason>" }`)
   }
 
+  sections.push(`### resume_run\nResumes a run after daemon restart by recovering its runtime session.\nParameters: { "runId": "${runId}" }`)
+
   return sections.join("\n\n")
 }
 

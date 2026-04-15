@@ -63,6 +63,7 @@ export interface AppDeps {
   teamService: TeamService
   runService: RunService
   runCompiler: RunCompiler
+  defaultRunProvider?: string
   approvalService: ApprovalService
   artifactService: ArtifactService
   phaseController?: Pick<PhaseController, "handleApprovalResolution">
@@ -229,12 +230,15 @@ export function createApp(deps: AppDeps): express.Express {
   app.post("/api/runs", async (req: Request, res: Response) => {
     try {
       const { playbookId, harnessId, inputs, teamId, provider, workingDirectory } = req.body
+      const resolvedProvider = typeof provider === "string" && provider.length > 0
+        ? provider
+        : deps.defaultRunProvider
       const run = await deps.runCompiler.compile({
         playbookId,
         harnessId,
         inputs: inputs ?? {},
         ...(typeof teamId === "string" && teamId.length > 0 ? { teamId } : {}),
-        ...(typeof provider === "string" && provider.length > 0 ? { provider } : {}),
+        ...(typeof resolvedProvider === "string" && resolvedProvider.length > 0 ? { provider: resolvedProvider } : {}),
         ...(typeof workingDirectory === "string" && workingDirectory.length > 0
           ? { workingDirectory }
           : {}),

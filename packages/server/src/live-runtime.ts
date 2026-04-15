@@ -32,7 +32,9 @@ import {
 } from "@pluto-agent-platform/control-plane"
 import {
   AgentManager as PaseoKernelAgentManager,
+  type AgentClient as PaseoAgentClient,
   ClaudeAgentClient,
+  OpenCodeAgentClient,
   createRootLogger,
   type LogLevel,
 } from "@pluto-agent-platform/paseo"
@@ -144,6 +146,7 @@ export async function createLiveRuntime(env: NodeJS.ProcessEnv = process.env): P
     teamService,
     runService,
     runCompiler,
+    defaultRunProvider: env.DEFAULT_RUN_PROVIDER,
     approvalService,
     artifactService,
     phaseController,
@@ -161,6 +164,7 @@ export async function createLiveRuntime(env: NodeJS.ProcessEnv = process.env): P
     phaseController,
     artifactService,
     handoffService,
+    recoveryService,
   })
 
   return {
@@ -178,10 +182,19 @@ function createAgentManager(env: NodeJS.ProcessEnv, mcpBaseUrl: string): AgentMa
   }
 
   const logger = createRootLogger({ level: parseLogLevel(env.LOG_LEVEL) })
+  const clients: Record<string, PaseoAgentClient> = {
+    claude: new ClaudeAgentClient({ logger }),
+  }
+
+  if (typeof env.OPENCODE_BASE_URL === "string" && env.OPENCODE_BASE_URL.length > 0) {
+    clients.opencode = new OpenCodeAgentClient({
+      baseUrl: env.OPENCODE_BASE_URL,
+      defaultModelId: env.OPENCODE_MODEL ?? "opencode/minimax-m2.5-free",
+    })
+  }
+
   const kernelManager = new PaseoKernelAgentManager({
-    clients: {
-      claude: new ClaudeAgentClient({ logger }),
-    },
+    clients,
     logger,
     mcpBaseUrl,
   })

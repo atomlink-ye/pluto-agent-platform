@@ -14,6 +14,7 @@ import type {
   ProviderRuntimeSettings,
 } from "./provider-launch-config.js";
 import { ClaudeAgentClient } from "./providers/claude-agent.js";
+import { OpenCodeAgentClient } from "./providers/opencode-agent.js";
 import {
   AGENT_PROVIDER_DEFINITIONS,
   getAgentProviderDefinition,
@@ -64,27 +65,56 @@ function createProviderClient(logger: Logger, runtimeSettings?: ProviderRuntimeS
   return new ClaudeAgentClient({ logger, runtimeSettings });
 }
 
+function createOpenCodeProviderClient(): AgentClient | null {
+  const baseUrl = process.env.OPENCODE_BASE_URL;
+  if (!baseUrl) {
+    return null;
+  }
+
+  return new OpenCodeAgentClient({
+    baseUrl,
+    defaultModelId: process.env.OPENCODE_MODEL ?? "opencode/minimax-m2.5-free",
+  });
+}
+
 export function buildProviderRegistry(
   logger: Logger,
   options?: BuildProviderRegistryOptions,
 ): Record<AgentProvider, ProviderDefinition> {
-  const baseDefinition = AGENT_PROVIDER_DEFINITIONS[0]!;
-  const override = options?.providerOverrides?.claude;
-  const definition = applyOverrideToDefinition(baseDefinition, override);
-  const runtimeSettings = options?.runtimeSettings?.claude ?? toRuntimeSettings(override);
-
-  return {
+  const definitions = Object.fromEntries(
+    AGENT_PROVIDER_DEFINITIONS.map((definition) => [definition.id, definition]),
+  ) as Record<string, AgentProviderDefinition>;
+  const claudeOverride = options?.providerOverrides?.claude;
+  const claudeDefinition = applyOverrideToDefinition(definitions.claude!, claudeOverride);
+  const claudeRuntimeSettings = options?.runtimeSettings?.claude ?? toRuntimeSettings(claudeOverride);
+  const registry: Record<string, ProviderDefinition> = {
     claude: {
-      ...definition,
-      createClient: (providerLogger) => createProviderClient(providerLogger, runtimeSettings),
+      ...claudeDefinition,
+      createClient: (providerLogger) => createProviderClient(providerLogger, claudeRuntimeSettings),
       fetchModels: async (modelOptions) =>
-        (await createProviderClient(logger, runtimeSettings).listModels(modelOptions)).map((model) =>
+        (await createProviderClient(logger, claudeRuntimeSettings).listModels(modelOptions)).map((model) =>
           mapModel("claude", model),
         ),
       fetchModes: async (modeOptions) =>
-        (await createProviderClient(logger, runtimeSettings).listModes?.(modeOptions)) ?? definition.modes,
+        (await createProviderClient(logger, claudeRuntimeSettings).listModes?.(modeOptions)) ?? claudeDefinition.modes,
     },
-  } as Record<AgentProvider, ProviderDefinition>;
+  };
+
+  const openCodeClient = createOpenCodeProviderClient();
+  if (openCodeClient && definitions.opencode) {
+    const openCodeDefinition = applyOverrideToDefinition(
+      definitions.opencode,
+      options?.providerOverrides?.opencode,
+    );
+    registry.opencode = {
+      ...openCodeDefinition,
+      createClient: () => createOpenCodeProviderClient() ?? openCodeClient,
+      fetchModels: async () => (await openCodeClient.listModels()).map((model) => mapModel("opencode", model)),
+      fetchModes: async () => (await openCodeClient.listModes?.()) ?? openCodeDefinition.modes,
+    };
+  }
+
+  return registry as Record<AgentProvider, ProviderDefinition>;
 }
 
 export function getProviderIds(

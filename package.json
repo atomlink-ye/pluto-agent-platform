@@ -8,6 +8,11 @@
   "scripts": {
     "build": "tsc -b",
     "dev": "sh -c 'trap \"kill 0\" EXIT; pnpm --filter @pluto-agent-platform/server dev:server & pnpm --filter @pluto-agent-platform/app dev'",
+    "docker:demo": "docker compose -f docker/compose.demo.yml up --build",
+    "docker:live": "docker compose -f docker/compose.yml -f docker/compose.auth.local.yml up --build",
+    "docker:e2e": "docker compose -f docker/compose.e2e.yml up --build --abort-on-container-exit --exit-code-from control-plane-e2e",
+    "docker:e2e:live": "docker compose -f docker/compose.e2e-live.yml -f docker/compose.auth.local.yml up --build --abort-on-container-exit --exit-code-from pluto-platform-e2e-live",
+    "docker:live:smoke": "docker compose -f docker/compose.yml -f docker/compose.auth.local.yml exec -T pluto-platform-live pnpm --filter @pluto-agent-platform/server exec tsx ../../docker/live-smoke.ts",
     "typecheck": "tsc -b",
     "test": "vitest run --passWithNoTests"
   },

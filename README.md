@@ -10,10 +10,10 @@ The core model is:
 
 ## Quick start
 
-The easiest out-of-box way to try the project is the seeded demo stack:
+The default one-command Docker startup now uses the real OpenCode runtime with the repo-owned MiniMax free-model config.
 
 ```bash
-docker compose up --build pluto-demo
+pnpm docker:live
 ```
 
 Then open:
@@ -21,26 +21,44 @@ Then open:
 - App UI: http://localhost:3000
 - API health: http://localhost:4000/api/health
 
-This path does **not** require provider auth. It starts the operator UI and the seeded demo API backend in fake runtime mode.
+This live path requires local OpenCode auth mounted into the runtime container via `docker/compose.auth.local.yml`:
 
-The demo image bundles the workspace and installs dependencies inside the image, so you do not need a local Node or pnpm setup just to try the project.
+- `${HOME}/.local/share/opencode/auth.json`
+- `${HOME}/.codex`
 
-## What you get in the demo
+It starts:
 
-The demo bootstraps sample data so open source users can explore the product immediately:
+- the operator UI
+- the live API backend in `PASEO_MODE=live`
+- Postgres for durable run state
+- the tracked Pluto OpenCode runtime container with the default model set to `opencode/minimax-m2.5-free`
 
-- playbooks
-- harnesses
-- runs in multiple lifecycle states
-- approvals
-- artifacts
-- a supervisor-led team run with session and handoff examples
+To exercise a real quick-try task after the stack is healthy, run:
 
-## Docker modes
+```bash
+pnpm docker:live:smoke
+```
 
-### Out-of-box demo
+The smoke task creates a tiny governed run that writes `.tmp/live-quickstart/hello-pluto.sh`, waits for a `run_summary` artifact, and prints the observed sessions + artifacts.
+The smoke run now uses the default team-lead + planner + generator + evaluator orchestration path, so the final script contains greetings collected from the whole team instead of a single agent.
 
-Recommended onboarding path: use the quick-start command above.
+## Alternate Docker modes
+
+### Real live quickstart (default)
+
+```bash
+pnpm docker:live
+```
+
+### Seeded fake-runtime demo
+
+If you want the old authless seeded demo instead of the live runtime path:
+
+```bash
+pnpm docker:demo
+```
+
+That path still starts the operator UI and a seeded fake-runtime API backend for exploration without provider auth.
 
 ### Live provider-backed Docker E2E
 
@@ -49,7 +67,7 @@ The live E2E stack uses tracked repo-owned Docker assets under:
 - `docker/pluto-runtime/`
 - `docker/pluto-platform/`
 
-It still requires local provider auth mounted through `docker-compose.runtime.override.yml`.
+It still requires local provider auth mounted through `docker/compose.auth.local.yml`.
 
 Host prerequisites:
 
@@ -59,7 +77,7 @@ Host prerequisites:
 Run it with:
 
 ```bash
-docker compose -f docker-compose.e2e-live.yml -f docker-compose.runtime.override.yml up --build --abort-on-container-exit --exit-code-from pluto-platform-e2e-live
+pnpm docker:e2e:live
 ```
 
 ## Current repository shape

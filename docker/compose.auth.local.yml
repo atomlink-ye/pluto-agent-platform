@@ -1,6 +1,6 @@
 services:
   pluto-runtime:
     volumes:
-      - ./docker/pluto-runtime/opencode.config.json:/tmp/opencode/default-opencode.json:ro
+      - ./pluto-runtime/opencode.config.json:/tmp/opencode/default-opencode.json:ro
       - ${HOME}/.local/share/opencode/auth.json:/root/.local/share/opencode/auth.json:ro
       - ${HOME}/.codex:/root/.codex:ro

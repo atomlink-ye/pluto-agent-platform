@@ -1,7 +1,7 @@
 services:
   pluto-demo:
     build:
-      context: .
+      context: ..
       dockerfile: docker/pluto-demo/Dockerfile
     working_dir: /workspace
     environment:

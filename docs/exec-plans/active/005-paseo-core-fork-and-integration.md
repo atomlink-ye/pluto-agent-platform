@@ -6,13 +6,13 @@ Fork the minimal Paseo kernel into this repository and wire it to the control pl
 
 ## Current status note
 
-Core features implemented. The repository now has a one-command Docker demo path for open source users and a separate live provider-backed Docker E2E path for deeper validation.
+Core features implemented. The repository now has a one-command Docker live quickstart for open source users, a seeded fake-runtime demo path, and a separate live provider-backed Docker E2E path for deeper validation.
 
-- **F1 (Paseo Core Package):** Complete. All excluded files integrated, provider-registry stripped to Claude-only.
+- **F1 (Paseo Core Package):** Complete. All excluded files integrated. Product-path live startup now wires Claude plus a remote OpenCode client for the Docker quickstart.
 - **F2 (Control-Plane Wiring):** Complete. PaseoAgentManager adapter, `PASEO_MODE=live|fake` bootstrap.
 - **F3 (Recovery Completion):** Complete. Startup scan, persistence handle resume, idempotent guard.
-- **F4 (E2E Test Infrastructure):** Complete for tracked packaging. Docker Compose now uses in-repo Pluto runtime/platform Docker assets; live provider execution still depends on local auth mounts via `docker-compose.runtime.override.yml`. `LIVE_AGENT_E2E=1` to enable.
-- **F4.1 (Open source demo UX):** Complete. `docker compose up --build pluto-demo` now starts the seeded UI + API demo path without provider auth.
+- **F4 (E2E Test Infrastructure):** Complete for tracked packaging. Docker Compose now lives under `docker/`; live provider execution still depends on local auth mounts via `docker/compose.auth.local.yml`. `LIVE_AGENT_E2E=1` to enable.
+- **F4.1 (Open source demo UX):** Complete. `pnpm docker:demo` starts the seeded UI + API demo path without provider auth, while `pnpm docker:live` starts the real OpenCode-backed quickstart.
 - **F5 (Web UI Tests):** Complete. Playwright + midscenejs, 4 operator flow tests. `UI_E2E=1` to enable.
 
 Remaining: F1 smoke test (deferred to live E2E), F4 failure path test, F5 approval resolution test.
@@ -26,13 +26,13 @@ Remaining: F1 smoke test (deferred to live E2E), F4 failure path test, F5 approv
 - Complete Plan 003 Feature 6: startup recovery scan, persistence handle resume, idempotent recovery
 - E2E integration test: minimum reference scenario with a real Paseo agent against Postgres
 - Docker-based E2E test infrastructure using tracked in-repo Pluto runtime/platform packaging for the live OpenCode E2E path
-- One-command Docker demo onboarding path for open source users using the seeded fake-runtime UI + API stack
+- One-command Docker onboarding path for open source users using the real OpenCode-backed UI + API stack, plus a retained seeded fake-runtime demo path
 - Web UI integration tests using midscenejs for operator flows
 
 ## Non-goals
 
 - Forking Paseo relay, speech, chat, file explorer, schedule, push notifications, or terminal management
-- Supporting providers beyond Claude in this plan (Codex/OpenCode/ACP deferred)
+- Supporting providers beyond Claude and OpenCode in this plan (Codex/ACP deferred)
 - Modifying Paseo's internal agent lifecycle or provider architecture
 - Building a new UI beyond what Plan 002 Feature 6 already delivered
 - Rich policy engine or org/project overlay hierarchy
@@ -240,7 +240,7 @@ Create Docker-based E2E test infrastructure using tracked in-repo Docker assets 
 
 1. Docker Compose configuration starts Postgres + Pluto platform + Pluto runtime, with provider auth injected through the local runtime override when running live turns
 2. E2E test creates a run and validates the full lifecycle
-3. Tests run locally via `docker compose -f docker-compose.e2e-live.yml -f docker-compose.runtime.override.yml up --build --abort-on-container-exit --exit-code-from pluto-platform-e2e-live`
+3. Tests run locally via `docker compose -f docker/compose.e2e-live.yml -f docker/compose.auth.local.yml up --build --abort-on-container-exit --exit-code-from pluto-platform-e2e-live`
 4. The repo-owned Pluto runtime image pins a known-good OpenCode CLI version and disables OpenCode autoupdate so the live slice stays reproducible across runs
 5. Minimum reference scenario passes end-to-end when live provider auth is supplied
 
@@ -260,7 +260,7 @@ Create Docker-based E2E test infrastructure using tracked in-repo Docker assets 
 
 ### Checklist
 
-- [x] Docker Compose E2E configuration with tracked repo-owned containers (`docker-compose.e2e-live.yml` — Postgres + Pluto runtime + Pluto platform)
+- [x] Docker Compose E2E configuration with tracked repo-owned containers (`docker/compose.e2e-live.yml` — Postgres + Pluto runtime + Pluto platform)
 - [x] E2E test for minimum reference scenario (`live-agent.test.ts` — compile run, verify prompt delivery, phase governance, approval flow)
 - [ ] E2E test for failure paths (deferred — requires live OpenCode runtime to exercise)
 - [x] Local live test pipeline (`LIVE_AGENT_E2E=1` to enable, Docker Compose orchestrates the full stack when local provider auth is mounted)

@@ -15,14 +15,14 @@ services:
 
   pluto-runtime:
     build:
-      context: .
+      context: ..
       dockerfile: docker/pluto-runtime/Dockerfile
     working_dir: /workspace
     environment:
       PORT: 4096
       OPENCODE_PORT: 4096
     volumes:
-      - .:/workspace
+      - ..:/workspace
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:4096/healthz"]
       interval: 5s
@@ -31,7 +31,7 @@ services:
 
   pluto-platform-e2e-live:
     build:
-      context: .
+      context: ..
       dockerfile: docker/pluto-platform/Dockerfile
     working_dir: /workspace
     depends_on:
@@ -47,7 +47,7 @@ services:
       PASEO_MODE: live
       CI: "true"
     volumes:
-      - .:/workspace
+      - ..:/workspace
     command: >-
       sh -lc "
         corepack enable &&

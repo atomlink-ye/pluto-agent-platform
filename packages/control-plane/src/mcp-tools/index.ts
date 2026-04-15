@@ -14,6 +14,7 @@ import type {
   HandoffRecord,
   HandoffResult,
 } from "../services/handoff-service.js"
+import type { RecoveryService } from "../services/recovery-service.js"
 
 export interface JsonSchemaString {
   type: "string"
@@ -146,6 +147,10 @@ export interface RejectHandoffInput {
   reason: string
 }
 
+export interface ResumeRunInput {
+  runId: string
+}
+
 export const createHandoffToolDefinition = {
   name: "create_handoff",
   description:
@@ -209,17 +214,38 @@ export const rejectHandoffToolDefinition = {
   },
 } satisfies ControlPlaneMcpToolDefinition<"reject_handoff">
 
+export const resumeRunToolDefinition = {
+  name: "resume_run",
+  description:
+    "Resume a run after a daemon restart by recovering its runtime session.",
+  inputSchema: {
+    type: "object",
+    description: "Input for resuming a run after daemon restart.",
+    properties: {
+      runId: {
+        type: "string",
+        description: "Run identifier to resume.",
+        minLength: 1,
+      },
+    },
+    required: ["runId"],
+    additionalProperties: false,
+  },
+} satisfies ControlPlaneMcpToolDefinition<"resume_run">
+
 export const controlPlaneMcpToolDefinitions = [
   declarePhaseToolDefinition,
   registerArtifactToolDefinition,
   createHandoffToolDefinition,
   rejectHandoffToolDefinition,
+  resumeRunToolDefinition,
 ] as const
 
 export interface CreateControlPlaneMcpToolsDeps {
   phaseController: Pick<PhaseController, "handlePhaseDeclaration">
   artifactService: Pick<ArtifactService, "register">
   handoffService?: Pick<HandoffService, "createHandoff" | "rejectHandoff">
+  recoveryService?: Pick<RecoveryService, "recoverRun">
 }
 
 export interface ControlPlaneMcpTools {
@@ -229,12 +255,14 @@ export interface ControlPlaneMcpTools {
     register_artifact: (input: unknown) => Promise<ArtifactRecord>
     create_handoff: (input: unknown) => Promise<HandoffResult>
     reject_handoff: (input: unknown) => Promise<HandoffRecord>
+    resume_run: (input: unknown) => Promise<"recovered" | "blocked" | "waiting_approval" | "skipped">
   }
   tools: readonly [
     ControlPlaneMcpTool<"declare_phase", PhaseTransitionResult>,
     ControlPlaneMcpTool<"register_artifact", ArtifactRecord>,
     ControlPlaneMcpTool<"create_handoff", HandoffResult>,
     ControlPlaneMcpTool<"reject_handoff", HandoffRecord>,
+    ControlPlaneMcpTool<"resume_run", "recovered" | "blocked" | "waiting_approval" | "skipped">,
   ]
 }
 
@@ -276,6 +304,17 @@ export async function handleRejectHandoff(
   return deps.handoffService.rejectHandoff(parsed.handoffId, parsed.reason)
 }
 
+export async function handleResumeRun(
+  input: unknown,
+  deps: CreateControlPlaneMcpToolsDeps,
+): Promise<"recovered" | "blocked" | "waiting_approval" | "skipped"> {
+  if (!deps.recoveryService) {
+    throw new Error("resume_run requires recoveryService")
+  }
+  const parsed = parseResumeRunInput(input)
+  return deps.recoveryService.recoverRun(parsed.runId)
+}
+
 export function createControlPlaneMcpTools(
   deps: CreateControlPlaneMcpToolsDeps,
 ): ControlPlaneMcpTools {
@@ -284,6 +323,7 @@ export function createControlPlaneMcpTools(
     register_artifact: (input: unknown) => handleRegisterArtifact(input, deps),
     create_handoff: (input: unknown) => handleCreateHandoff(input, deps),
     reject_handoff: (input: unknown) => handleRejectHandoff(input, deps),
+    resume_run: (input: unknown) => handleResumeRun(input, deps),
   }
 
   return {
@@ -305,6 +345,10 @@ export function createControlPlaneMcpTools(
       {
         ...rejectHandoffToolDefinition,
         handler: handlers.reject_handoff,
+      },
+      {
+        ...resumeRunToolDefinition,
+        handler: handlers.resume_run,
       },
     ],
   }
@@ -411,6 +455,15 @@ function parseRejectHandoffInput(input: unknown): RejectHandoffInput {
   return {
     handoffId: requireNonEmptyString(value, "handoffId", rejectHandoffToolDefinition.name),
     reason: requireNonEmptyString(value, "reason", rejectHandoffToolDefinition.name),
+  }
+}
+
+function parseResumeRunInput(input: unknown): ResumeRunInput {
+  const value = expectObject(input, resumeRunToolDefinition.name)
+  assertAllowedKeys(value, ["runId"], resumeRunToolDefinition.name)
+
+  return {
+    runId: requireNonEmptyString(value, "runId", resumeRunToolDefinition.name),
   }
 }
 

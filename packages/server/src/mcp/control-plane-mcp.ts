@@ -118,6 +118,8 @@ async function invokeToolHandler(
       return handlers.create_handoff(input)
     case "reject_handoff":
       return handlers.reject_handoff(input)
+    case "resume_run":
+      return handlers.resume_run(input)
   }
 }
 
