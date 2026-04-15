@@ -2,8 +2,8 @@ import { useAgentStream } from "../hooks/useAgentStream"
 import { ChatInputArea } from "./ChatInputArea"
 import { ChatMessageList } from "./ChatMessageList"
 import { StreamItemRenderer } from "./StreamItemRenderer"
-import { Badge } from "./Badge"
 import { Button } from "./Button"
+import { RuntimeStatusBar } from "./RuntimeStatusBar"
 
 export interface ChatSessionProps {
   agentId: string
@@ -25,16 +25,12 @@ export function ChatSession({ agentId, runId, compact = false, onExpand, dark = 
     const titleClassName = dark ? "text-sm font-medium text-slate-100" : "text-sm font-medium text-slate-700"
     const emptyClassName = dark ? "text-sm text-slate-400" : "text-sm text-slate-500"
     const noteClassName = dark ? "text-center text-xs text-slate-500" : "text-center text-xs text-slate-400"
-    const workingClassName = dark ? "flex items-center gap-1 text-xs text-slate-500" : "flex items-center gap-1 text-xs text-slate-400"
 
     return (
       <div className={containerClassName}>
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2">
             <span className={titleClassName}>Agent Chat</span>
-            {stream.agentState ? (
-              <Badge status={stream.agentState.status} />
-            ) : null}
           </div>
           {onExpand ? (
             <Button variant={dark ? "secondary" : "ghost"} size="sm" onClick={onExpand} className={dark ? "border-slate-700 bg-slate-800 text-slate-200 hover:bg-slate-700 hover:text-white" : ""}>
@@ -60,11 +56,12 @@ export function ChatSession({ agentId, runId, compact = false, onExpand, dark = 
           </div>
         )}
 
-        {stream.isWorking ? (
-          <div className={workingClassName}>
-            <span className="h-1.5 w-1.5 rounded-full bg-blue-500 animate-pulse" />
-            Agent is working...
-          </div>
+        {stream.connectionState !== "ready" || stream.agentState?.status !== "idle" ? (
+          <RuntimeStatusBar
+            agentStatus={stream.agentState?.status}
+            socketState={stream.connectionState}
+            className={dark ? "rounded-lg bg-slate-800/80 text-slate-300" : "rounded-lg bg-slate-50 text-slate-600"}
+          />
         ) : null}
       </div>
     )
@@ -72,6 +69,11 @@ export function ChatSession({ agentId, runId, compact = false, onExpand, dark = 
 
   return (
     <div className="flex flex-col h-full">
+      <RuntimeStatusBar
+        agentStatus={stream.agentState?.status}
+        socketState={stream.connectionState}
+        className={dark ? "border-b border-slate-800 bg-slate-900" : "border-b border-slate-200 bg-white"}
+      />
       <ChatMessageList
         items={stream.items}
         isWorking={stream.isWorking}
@@ -80,12 +82,13 @@ export function ChatSession({ agentId, runId, compact = false, onExpand, dark = 
         onLoadOlder={stream.fetchOlderHistory}
       />
       <ChatInputArea
-        disabled={!stream.isWorking && stream.agentState?.status === "done"}
+        disabled={!stream.isWorking && (stream.agentState?.status === "done" || stream.agentState?.status === "error")}
+        agentStatus={stream.agentState?.status}
         connectionState={stream.connectionState}
         onSend={async (text) => {
           const result = await stream.sendMessage(text)
           if (!result.accepted) {
-            console.error("Failed to send message:", result.error)
+            throw new Error(result.error ?? "Message rejected")
           }
         }}
       />

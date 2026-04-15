@@ -3,9 +3,9 @@ import { useLocation, useNavigate, useParams } from "react-router-dom"
 import { useAgentStream } from "../hooks/useAgentStream"
 import { ChatMessageList } from "../components/ChatMessageList"
 import { ChatInputArea } from "../components/ChatInputArea"
-import { Badge } from "../components/Badge"
 import { Button } from "../components/Button"
 import { usePageChrome } from "../components/Layout"
+import { RuntimeStatusBar } from "../components/RuntimeStatusBar"
 
 type ChatPageLocationState = { agentLabel?: string; runName?: string } | null
 
@@ -61,9 +61,6 @@ function ChatPageContent({
         <div className="min-w-0">
           <div className="flex items-center gap-2">
             <h1 className="truncate text-sm font-semibold text-slate-900">Agent Chat</h1>
-            {stream.agentState ? (
-              <Badge status={stream.agentState.status} />
-            ) : null}
           </div>
           <p className="truncate text-xs text-slate-500">
             <span className="font-medium text-slate-700">{agentLabel}</span>
@@ -78,6 +75,12 @@ function ChatPageContent({
         </div>
       </div>
 
+      <RuntimeStatusBar
+        agentStatus={stream.agentState?.status}
+        socketState={stream.connectionState}
+        className="border-b border-slate-200 bg-white"
+      />
+
       {/* Messages */}
       <ChatMessageList
         items={stream.items}
@@ -89,12 +92,13 @@ function ChatPageContent({
 
       {/* Input */}
       <ChatInputArea
-        disabled={!stream.isWorking && stream.agentState?.status === "done"}
+        disabled={!stream.isWorking && (stream.agentState?.status === "done" || stream.agentState?.status === "error")}
+        agentStatus={stream.agentState?.status}
         connectionState={stream.connectionState}
         onSend={async (text) => {
           const result = await stream.sendMessage(text)
           if (!result.accepted) {
-            console.error("Failed to send message:", result.error)
+            throw new Error(result.error ?? "Message rejected")
           }
         }}
       />
