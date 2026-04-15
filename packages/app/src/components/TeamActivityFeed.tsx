@@ -1,5 +1,6 @@
 import { useState } from "react"
 import type { TeamActivityState } from "../hooks/useTeamActivity"
+import { Button } from "./Button"
 
 interface TeamActivityFeedProps {
   teamActivity: TeamActivityState
@@ -75,8 +76,10 @@ export function TeamActivityFeed({ teamActivity, onOpenAgent, dark = false }: Te
 
   return (
     <div className={containerClassName}>
-      <button
+      <Button
         type="button"
+        variant="ghost"
+        size="sm"
         onClick={() => setExpanded(!expanded)}
         className={headerClassName}
       >
@@ -92,21 +95,23 @@ export function TeamActivityFeed({ teamActivity, onOpenAgent, dark = false }: Te
           ) : null}
         </div>
         <span className={caretClassName}>{expanded ? "\u25BE" : "\u25B8"}</span>
-      </button>
+      </Button>
 
       {expanded ? (
         <div className={contentClassName}>
           <div className="flex flex-wrap gap-2">
             {agents.map((agent) => (
-              <button
+              <Button
                 key={agent.id}
                 type="button"
+                variant="ghost"
+                size="sm"
                 onClick={() => onOpenAgent?.(agent.id)}
                 className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-medium transition-colors ${agentStatusStyles[agent.status] ?? agentStatusStyles.idle} ${onOpenAgent ? "cursor-pointer hover:opacity-80" : "cursor-default"}`}
               >
                 <span className={`h-1.5 w-1.5 rounded-full ${agent.status === "running" ? "bg-blue-500 animate-pulse" : agent.status === "done" ? "bg-emerald-500" : agent.status === "error" ? "bg-red-500" : "bg-slate-400"}`} />
                 {agent.name}
-              </button>
+              </Button>
             ))}
           </div>
 
