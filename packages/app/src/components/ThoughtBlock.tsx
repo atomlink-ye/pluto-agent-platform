@@ -1,12 +1,23 @@
 import type { ThoughtItem } from "../types/paseo"
 
-export function ThoughtBlock({ item }: { item: ThoughtItem }) {
+export function ThoughtBlock({ item, dark }: { item: ThoughtItem; dark?: boolean }) {
+  const containerClass = dark
+    ? "max-w-[75%] rounded-lg bg-slate-800/50 border border-slate-700 p-3"
+    : "max-w-[75%] rounded-lg bg-slate-50 border border-slate-200 p-3"
+  const labelClass = dark
+    ? "flex items-center gap-2 text-xs text-slate-400 mb-1"
+    : "flex items-center gap-2 text-xs text-slate-500 mb-1"
+  const spinnerClass = dark ? "h-3.5 w-3.5 animate-spin text-slate-500" : "h-3.5 w-3.5 animate-spin text-slate-400"
+  const bodyClass = dark
+    ? "text-sm text-slate-400 italic whitespace-pre-wrap"
+    : "text-sm text-slate-500 italic whitespace-pre-wrap"
+
   return (
     <div className="flex justify-start">
-      <div className="max-w-[75%] rounded-lg bg-slate-50 border border-slate-200 p-3">
-        <div className="flex items-center gap-2 text-xs text-slate-500 mb-1">
+      <div className={containerClass}>
+        <div className={labelClass}>
           {item.status === "loading" ? (
-            <svg className="h-3.5 w-3.5 animate-spin text-slate-400" viewBox="0 0 24 24" fill="none">
+            <svg className={spinnerClass} viewBox="0 0 24 24" fill="none">
               <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
               <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
             </svg>
@@ -17,7 +28,7 @@ export function ThoughtBlock({ item }: { item: ThoughtItem }) {
           )}
           <span className="font-medium">Thinking</span>
         </div>
-        <p className="text-sm text-slate-500 italic whitespace-pre-wrap">{item.text}</p>
+        <p className={bodyClass}>{item.text}</p>
       </div>
     </div>
   )
