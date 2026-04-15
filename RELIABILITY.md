@@ -15,13 +15,40 @@ The system should be:
 
 ## Core reliability requirements
 
-## Current implementation note
+## Current implementation status
 
-The current repository has durable run, approval, artifact, and session records, but **full startup recovery is not complete yet**.
+### Startup recovery
 
-- targeted recovery for a known run exists in `RecoveryService.recoverRun()`
-- the top-level startup sweep in `RecoveryService.recover()` remains partial/scaffolded
-- resumability is therefore a current reliability gap, not a completed guarantee
+The startup recovery sweep is **implemented and active**. `RecoveryService.recover()` runs once during server startup and performs a full scan of all non-terminal runs.
+
+The recovery process for each non-terminal run (`recoverRun()`):
+
+1. Skips runs that are already terminal (`failed`, `succeeded`, `canceled`, `archived`)
+2. Reconstructs current state from the event log via `projectRunStateFromEvents()`
+3. Returns `waiting_approval` immediately for runs in that state (no agent rebinding needed)
+4. Checks for an active `RunSession` — if none exists, blocks the run
+5. If the runtime agent still exists, re-tracks and re-binds it
+6. If the agent is gone but a persistence handle exists, attempts session resurrection via `resumeFrom`
+7. If no recovery path exists, blocks the run with an operator-visible reason
+
+### Recovery operation outcomes
+
+Each `recoverRun()` call returns one of four outcomes:
+
+| Outcome | Meaning |
+|---|---|
+| `recovered` | Agent successfully re-bound or resurrected via persistence handle |
+| `blocked` | No active session, agent gone with no persistence handle, or resurrection failed |
+| `waiting_approval` | Run was in `waiting_approval` state — no agent needed |
+| `skipped` | Run does not exist or is already terminal |
+
+The aggregate `RecoveryResult` groups run IDs by these outcomes.
+
+### Resumability and interruption visibility — current gaps
+
+- **Run-level recovery** works as described above: the system can re-bind surviving agents or resurrect sessions from persistence handles
+- **Session-level interruption tracking** is not yet implemented: `RunSession.status` only records `active` and `failed` — there is no `interrupted`, `resumed`, or `closed` status in production code today (see known debt in `run-contract.md`)
+- **Operator-visible interruption history** is partially available: recovery events are logged, and blocked runs include a `blockerReason`, but there is no dedicated interruption timeline or session-level state history
 
 ### 1. Runs must remain operator-legible
 
@@ -67,7 +94,7 @@ An approval request or artifact registration must not disappear because a client
 - operator can see whether a run is resumable or terminal
 - interrupt and resume semantics are explicit enough to evaluate
 
-Until startup recovery is completed, the last two items remain an active gap rather than a fully met property.
+The startup recovery sweep meets the first four items. The fifth item — interrupt and resume semantics — is partially met at the run level (recovery can re-bind or resurrect agents) but remains a gap at the session level (no `interrupted`/`resumed` session status tracking).
 
 ## Reliability anti-patterns
 
