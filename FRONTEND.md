@@ -65,6 +65,23 @@ Must clearly separate:
 2. governance state
 3. operator/debug detail
 
+The operator/debug section includes:
+
+- **Team Activity** — multi-agent coordination visibility (agent status chips, coordination mode, handoff feed). Collapsed by default when idle, expands when handoffs are present.
+- **Event Timeline** — chronological run events
+- **Agent Chat** — compact preview of the active agent's conversation with a link to the full chat page
+
+### Agent chat
+
+Each run's agent session offers a full-page interactive chat view (`/runs/:id/agents/:agentId/chat`) backed by the Paseo WebSocket protocol. The chat surfaces:
+
+- real-time messages, tool calls, and thinking
+- interactive message input
+- full conversation history with pagination
+- connection state feedback (reconnecting, error)
+
+The chat view is secondary to the run-first model — operators reach it through the Run Detail page, not through primary navigation.
+
 ### Approval surfaces
 
 - pending approvals should be explicit and high visibility

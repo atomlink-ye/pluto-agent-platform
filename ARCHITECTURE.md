@@ -88,15 +88,15 @@ Illustrative direction:
 
 ```text
 packages/
-├── server/            # forked Paseo daemon and server integration surface
-├── app/               # operator-facing UI built on the forked client shell
-├── cli/               # inherited or adapted CLI surface
+├── paseo/             # forked Paseo kernel (agent manager, providers, WebSocket, MCP)
+├── server/            # server integration surface, REST API, live bootstrap
+├── app/               # operator-facing UI (React + Tailwind, WebSocket client)
 ├── contracts/         # shared schemas, DTOs, domain contracts
-├── control-plane/     # run lifecycle, approvals, artifacts, projections
-└── website/           # optional documentation or site surface later
+├── control-plane/     # run lifecycle, approvals, artifacts, projections, runtime adapter
+└── cli/               # inherited or adapted CLI surface
 ```
 
-The precise package split can stay small at first. The key rule is architectural separation by responsibility, not package count.
+The UI connects to the Paseo kernel via WebSocket (`/ws`) for real-time agent chat and stream events, and to the server via REST for durable product state. The key rule is architectural separation by responsibility, not package count.
 
 ## Execution authority boundary
 

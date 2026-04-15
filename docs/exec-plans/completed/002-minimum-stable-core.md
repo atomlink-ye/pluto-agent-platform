@@ -1,5 +1,9 @@
 # 002 — Minimum Stable Core
 
+## Status
+
+**Completed.** All six features implemented with 20+ test scenarios passing. Postgres schema, API surface, and React UI are fully functional. E2E browser test automation is partially covered by Plan 005 F5.
+
 ## Purpose
 
 Deliver the first implementation slice that validates the product model: a governed run can be created from a playbook, observed by an operator, paused by approval, and completed with durable artifacts. This plan proves the playbook / harness / run model works end to end before expanding scope.

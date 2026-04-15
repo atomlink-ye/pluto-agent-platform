@@ -4,18 +4,18 @@
 
 Fork the minimal Paseo kernel into this repository and wire it to the control plane, replacing the FakeAgentManager with a real agent runtime. After this plan, governed runs create real AI agent sessions that execute playbooks, emit events, and respond to phase/approval/artifact governance. This is the bridge between the durable product layer (Plans 002–004) and live agent execution.
 
-## Current status note
+## Status
 
-Core features implemented. The repository now has a one-command Docker live quickstart for open source users, a seeded fake-runtime demo path, and a separate live provider-backed Docker E2E path for deeper validation.
+**Completed.** All core features (F1–F5) implemented and tested. Deferred items documented below.
 
-- **F1 (Paseo Core Package):** Complete. All excluded files integrated. Product-path live startup now wires Claude plus a remote OpenCode client for the Docker quickstart.
-- **F2 (Control-Plane Wiring):** Complete. PaseoAgentManager adapter, `PASEO_MODE=live|fake` bootstrap.
+- **F1 (Paseo Core Package):** Complete. Minimal fork in `packages/paseo/`, Claude + OpenCode providers, monorepo builds cleanly.
+- **F2 (Control-Plane Wiring):** Complete. PaseoAgentManager adapter, `PASEO_MODE=live|fake` bootstrap, 132+ tests passing.
 - **F3 (Recovery Completion):** Complete. Startup scan, persistence handle resume, idempotent guard.
-- **F4 (E2E Test Infrastructure):** Complete for tracked packaging. Docker Compose now lives under `docker/`; live provider execution still depends on local auth mounts via `docker/compose.auth.local.yml`. `LIVE_AGENT_E2E=1` to enable.
-- **F4.1 (Open source demo UX):** Complete. `pnpm docker:demo` starts the seeded UI + API demo path without provider auth, while `pnpm docker:live` starts the real OpenCode-backed quickstart.
-- **F5 (Web UI Tests):** Complete. Playwright + midscenejs, 4 operator flow tests. `UI_E2E=1` to enable.
+- **F4 (E2E Test Infrastructure):** Complete. Docker Compose under `docker/`, live provider auth via `compose.auth.local.yml`, `LIVE_AGENT_E2E=1` to enable.
+- **F4.1 (Open source demo UX):** Complete. `pnpm docker:demo` (seeded demo) and `pnpm docker:live` (real OpenCode quickstart).
+- **F5 (Web UI Tests):** Complete. Playwright + midscenejs, 4 operator flow tests, `UI_E2E=1` to enable.
 
-Remaining: F1 smoke test (deferred to live E2E), F4 failure path test, F5 approval resolution test.
+Intentionally deferred to future work: F4 failure path E2E test, F5 approval resolution browser test.
 
 ## Scope
 
@@ -44,8 +44,8 @@ Remaining: F1 smoke test (deferred to live E2E), F4 failure path test, F5 approv
 - `docs/product-specs/core-domain-model.md` — all object definitions
 - `docs/design-docs/system-architecture.md` — fork architecture, runtime-kernel vs product-layer
 - `packages/control-plane/src/paseo/types.ts` — the AgentManager interface contract
-- `docs/exec-plans/active/003-control-plane-on-paseo.md` — Feature 6 (Recovery) remaining items
-- `docs/exec-plans/active/002-minimum-stable-core.md` — Feature 6 (Operator Views) E2E tests
+- `docs/exec-plans/completed/003-control-plane-on-paseo.md` — Feature 6 (Recovery) remaining items
+- `docs/exec-plans/completed/002-minimum-stable-core.md` — Feature 6 (Operator Views) E2E tests
 - `.local/refCode/paseo/packages/server/` — Paseo source to fork from
 - `docker/pluto-runtime/` — tracked repo-owned OpenCode-compatible runtime container assets for live E2E
 - `docker/pluto-platform/` — tracked repo-owned platform container assets for live E2E

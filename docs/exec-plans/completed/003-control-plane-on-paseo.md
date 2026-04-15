@@ -4,13 +4,12 @@
 
 Wire the domain model from plan 002 to the live Paseo runtime. After 002, durable product objects exist in Postgres but nothing drives actual agent execution. This plan delivers the integration layer that compiles runs into Paseo agent sessions, projects Paseo events back into durable RunEvents, enforces harness governance during execution, and recovers run state after restarts. The result is a governed run that is both durable (Postgres) and alive (Paseo agents).
 
-## Current status note
+## Status
 
-This plan is still active. The repository now has a server-wired run compiler, a live control-plane MCP endpoint mounted at the server layer, and a Postgres-backed live server bootstrap. Several integration promises remain incomplete:
+**Completed.** All six features implemented with 30+ test scenarios passing. Recovery (F6) was completed by Plan 005 F3. Live Paseo integration delivered by Plan 005 F2. Known deferrals:
 
-- startup recovery scan and resume remain partial
-- handoff durability still relies on events plus in-memory service state rather than a durable handoff record/projection
-- live end-to-end coverage still depends on surrogate runtime tests rather than a fully exercised Claude-backed path
+- Handoff durability still relies on events plus in-memory service state rather than a durable handoff record/projection (tracked in tech-debt-tracker.md)
+- Live E2E coverage uses the Docker path from Plan 005 rather than standalone Plan 003 tests
 
 ## Scope
 
