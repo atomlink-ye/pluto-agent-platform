@@ -297,9 +297,13 @@ export function RunDetailPage() {
       return getSessionAgentId(preferredSession)
     }
 
-    return run?.id ?? "default"
-  }, [detail?.sessions, run?.id])
+    return null
+  }, [detail?.sessions])
   const defaultAgentLabel = useMemo(() => {
+    if (!defaultAgentId) {
+      return null
+    }
+
     const defaultSession = detail?.sessions?.find((session) => getSessionAgentId(session) === defaultAgentId)
 
     if (!defaultSession) {
@@ -590,13 +594,20 @@ export function RunDetailPage() {
         <Card className="border-slate-800 bg-slate-900 p-6">
           <h3 className="text-base font-medium text-slate-100">Chat Session</h3>
           <div className="mt-4">
-            <ChatSession
-              agentId={defaultAgentId}
-              runId={run.id}
-              compact
-              dark
-              onExpand={() => navigateToChat(defaultAgentId, defaultAgentLabel)}
-            />
+            {defaultAgentId ? (
+              <ChatSession
+                key={defaultAgentId}
+                agentId={defaultAgentId}
+                runId={run.id}
+                compact
+                dark
+                onExpand={() => navigateToChat(defaultAgentId, defaultAgentLabel ?? undefined)}
+              />
+            ) : (
+              <div className="rounded-xl border border-slate-800 bg-slate-900 p-5 text-sm text-slate-400">
+                No agent chat available yet.
+              </div>
+            )}
           </div>
         </Card>
 

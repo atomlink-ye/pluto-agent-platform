@@ -49,19 +49,51 @@ The following list reflects the event names that are currently emitted by the co
 ### Phase and stage events
 
 - `phase.entered`
-- `phase.exited`
 - `phase.rejected`
 - `phase.timeout`
-- `stage.created`
 - `stage.started`
 - `stage.completed`
 - `stage.failed`
-- `stage.skipped`
-- `stage.blocked`
 
-### Session and role events
+### Session and handoff events
 
 - `session.created`
+- `handoff.created`
+- `handoff.accepted`
+- `handoff.rejected`
+
+### Governance events
+
+- `approval.requested`
+- `approval.resolved`
+
+### Artifact events
+
+- `artifact.created`
+- `artifact.registered`
+
+## Legacy and reserved event names
+
+### Consumed for replay or projection but not currently emitted
+
+The following event names are **not emitted** by current code but are still consumed by projection logic for backward compatibility or state reconstruction support.
+
+- `run.initialized` — projector sets status to `initializing`
+- `run.started` — projector sets status to `running`
+- `run.succeeded` — projector sets status to `succeeded`
+- `run.canceled` — projector sets status to `canceled`
+- `run.archived` — projector sets status to `archived`
+- `phase.exited` — projector clears `current_phase`
+
+### Reserved — not emitted, not consumed
+
+The following documented names are reserved for future expansion and currently have no emitter:
+
+#### Phase, stage, and session placeholders
+
+- `stage.created`
+- `stage.skipped`
+- `stage.blocked`
 - `session.started`
 - `session.status_changed`
 - `session.interrupted`
@@ -69,60 +101,24 @@ The following list reflects the event names that are currently emitted by the co
 - `session.closed`
 - `role.assigned`
 - `role.released`
-
-### Coordination events
-
-- `handoff.created`
-- `handoff.accepted`
-- `handoff.rejected`
 - `room.created`
 - `room.message_posted`
 - `room.summary_emitted`
 - `heartbeat.checked`
-
-### Tool and action events
-
 - `tool.started`
 - `tool.finished`
 - `tool.failed`
 - `action.started`
 - `action.finished`
 - `action.failed`
-
-### Governance events
-
-- `approval.requested`
-- `approval.resolved`
 - `policy.blocked`
 - `policy.allowed`
 - `retry.scheduled`
-
-### Artifact events
-
-- `artifact.created`
 - `artifact.updated`
-- `artifact.registered`
-
-### Operator events
-
 - `operator.run_canceled`
 - `operator.run_retried`
 
-## Legacy and reserved event names
-
-### Legacy — consumed by projector but no longer emitted
-
-The following event names are **not emitted** by current code but **are consumed** by `projectRunStateFromEvents()` for backward-compatible replay of historical event logs. They must not be removed from the projector until all historical events have been migrated or replaying pre-migration runs is no longer required.
-
-- `run.initialized` — projector sets status to `initializing`
-- `run.started` — projector sets status to `running`
-- `run.succeeded` — projector sets status to `succeeded`
-- `run.canceled` — projector sets status to `canceled`
-- `run.archived` — projector sets status to `archived`
-
-### Reserved — not emitted, not consumed
-
-The following names are reserved for future expansion but have no current emitter or consumer:
+#### Reserved contract names
 
 - `run.phase_changed`
 - `run.blocked`
