@@ -149,6 +149,8 @@ Required lane:
 - test must pass
 - CI must be green
 
+The required build and typecheck lanes are package-change-aware. CI may skip dedicated package build/typecheck runs when a branch does not touch that package directory or shared root TypeScript/dependency inputs (`pnpm-lock.yaml`, `package-lock.json`, `tsconfig.json`, `tsconfig.base.json`). This keeps the required lanes focused on changed workspace areas while the test lane continues to guard behavior and integration.
+
 Excluded from the required lane:
 
 - Docker integration tests

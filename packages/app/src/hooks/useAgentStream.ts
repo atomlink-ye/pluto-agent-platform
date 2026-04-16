@@ -42,6 +42,26 @@ export function useAgentStream(options: AgentStreamOptions): AgentStreamHandle {
 
   const pendingRequestsRef = useRef<Map<string, (msg: WsServerMessage) => void>>(new Map())
   const oldestCursorRef = useRef<TimelineCursor | null>(null)
+  const historyTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const activeAgentIdRef = useRef(agentId)
+  const requestEpochRef = useRef(0)
+  const lastFetchedKeyRef = useRef<string | null>(null)
+
+  useEffect(() => {
+    activeAgentIdRef.current = agentId
+    requestEpochRef.current += 1
+    pendingRequestsRef.current.clear()
+    if (historyTimeoutRef.current) {
+      clearTimeout(historyTimeoutRef.current)
+      historyTimeoutRef.current = null
+    }
+    oldestCursorRef.current = null
+    lastFetchedKeyRef.current = null
+    setItems([])
+    setAgentState(null)
+    setHasOlderHistory(false)
+    setIsLoadingHistory(false)
+  }, [agentId])
 
   // Subscribe to agent_state
   useEffect(() => {
@@ -91,19 +111,20 @@ export function useAgentStream(options: AgentStreamOptions): AgentStreamHandle {
   }, [socket])
 
   // Auto-fetch timeline when socket becomes ready (including after reconnect)
-  const lastFetchedStateRef = useRef<string | null>(null)
   useEffect(() => {
     if (!autoFetchTimeline || socket.state !== "ready") {
       // Reset when socket loses ready state so reconnect triggers a re-fetch
       if (socket.state !== "ready") {
-        lastFetchedStateRef.current = null
+        lastFetchedKeyRef.current = null
       }
       return
     }
-    if (lastFetchedStateRef.current === "ready") return
-    lastFetchedStateRef.current = "ready"
+    const fetchKey = `${agentId}:${socket.state}`
+    if (lastFetchedKeyRef.current === fetchKey) return
+    lastFetchedKeyRef.current = fetchKey
 
     const requestId = crypto.randomUUID()
+    const requestEpoch = requestEpochRef.current
     const req: FetchTimelineRequest = {
       type: "fetch_agent_timeline_request",
       agentId,
@@ -113,6 +134,10 @@ export function useAgentStream(options: AgentStreamOptions): AgentStreamHandle {
     }
 
     pendingRequestsRef.current.set(requestId, (msg) => {
+      if (requestEpoch !== requestEpochRef.current || activeAgentIdRef.current !== agentId) {
+        return
+      }
+
       const resp = msg as FetchTimelineResponse
       const newItems = resp.rows.map((r) => r.item)
       setItems((prev) => {
@@ -143,6 +168,7 @@ export function useAgentStream(options: AgentStreamOptions): AgentStreamHandle {
     setIsLoadingHistory(true)
 
     const requestId = crypto.randomUUID()
+    const requestEpoch = requestEpochRef.current
     const req: FetchTimelineRequest = {
       type: "fetch_agent_timeline_request",
       agentId,
@@ -154,11 +180,22 @@ export function useAgentStream(options: AgentStreamOptions): AgentStreamHandle {
 
     const timeout = setTimeout(() => {
       pendingRequestsRef.current.delete(requestId)
-      setIsLoadingHistory(false)
+      if (requestEpoch === requestEpochRef.current && activeAgentIdRef.current === agentId) {
+        historyTimeoutRef.current = null
+        setIsLoadingHistory(false)
+      }
     }, 10000)
+    historyTimeoutRef.current = timeout
 
     pendingRequestsRef.current.set(requestId, (msg) => {
       clearTimeout(timeout)
+      if (historyTimeoutRef.current === timeout) {
+        historyTimeoutRef.current = null
+      }
+      if (requestEpoch !== requestEpochRef.current || activeAgentIdRef.current !== agentId) {
+        return
+      }
+
       const resp = msg as FetchTimelineResponse
       const newItems = resp.rows.map((r) => r.item)
       setItems((prev) => {
