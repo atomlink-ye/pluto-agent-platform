@@ -6,7 +6,7 @@
     "packages/*"
   ],
   "scripts": {
-    "build": "tsc -b",
+    "build": "node ./scripts/typecheck-workspace.mjs --mode=build",
     "dev": "sh -c 'trap \"kill 0\" EXIT; pnpm --filter @pluto-agent-platform/server dev:server & pnpm --filter @pluto-agent-platform/app dev'",
     "demo": "docker compose -f docker/compose.yml -f docker/compose.auth.local.yml up --build",
     "demo:fake": "docker compose -f docker/compose.demo.yml up --build",
@@ -14,7 +14,7 @@
     "demo:live:smoke": "docker compose -f docker/compose.yml -f docker/compose.auth.local.yml exec -T pluto-platform-live pnpm --filter @pluto-agent-platform/server exec tsx ../../docker/live-smoke.ts",
     "docker:e2e": "docker compose -f docker/compose.e2e.yml up --build --abort-on-container-exit --exit-code-from control-plane-e2e",
     "docker:e2e:live": "docker compose -f docker/compose.e2e-live.yml -f docker/compose.auth.local.yml up --build --abort-on-container-exit --exit-code-from pluto-platform-e2e-live",
-    "typecheck": "tsc -b",
+    "typecheck": "node ./scripts/typecheck-workspace.mjs --mode=typecheck",
     "test": "vitest run --passWithNoTests"
   },
   "devDependencies": {

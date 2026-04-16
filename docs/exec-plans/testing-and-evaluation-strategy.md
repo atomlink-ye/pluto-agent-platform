@@ -138,6 +138,33 @@ Phase 1 should include explicit evaluation coverage for:
 - the run detail view exposes phase, blocker, approvals, artifacts, and recovery-relevant state
 - approval handling and terminal outcomes remain operator-legible
 
+## Beta Gate
+
+The beta gate is the minimum CI quality bar for M2 milestone work.
+
+Required lane:
+
+- build must pass
+- typecheck must pass
+- test must pass
+- CI must be green
+
+The required build and typecheck lanes are package-change-aware. CI may skip dedicated package build/typecheck runs when a branch does not touch that package directory or shared root TypeScript/dependency inputs (`pnpm-lock.yaml`, `package-lock.json`, `tsconfig.json`, `tsconfig.base.json`). This keeps the required lanes focused on changed workspace areas while the test lane continues to guard behavior and integration.
+
+Excluded from the required lane:
+
+- Docker integration tests
+- live-agent E2E tests
+- UI E2E tests
+
+These remain separate optional lanes and do not block the beta gate.
+
+The beta gate is enforced on pull requests, not only on merged commits.
+
+This aligns with EDD by making CI green necessary but not sufficient. Documentation consistency remains a stated gate criterion and is still checked manually under the repository's EDD rules.
+
+Database integration tests skip when `DATABASE_URL` is absent so CI can stay green without requiring a Postgres service container.
+
 ## Success bar
 
 The repository is progressing correctly only if implementation quality and documentation quality rise together.

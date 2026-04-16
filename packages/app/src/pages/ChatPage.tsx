@@ -1,23 +1,55 @@
-import { useParams, useNavigate } from "react-router-dom"
+import { useMemo } from "react"
+import { useLocation, useNavigate, useParams } from "react-router-dom"
 import { useAgentStream } from "../hooks/useAgentStream"
 import { ChatMessageList } from "../components/ChatMessageList"
 import { ChatInputArea } from "../components/ChatInputArea"
-import { Badge } from "../components/Badge"
 import { Button } from "../components/Button"
+import { usePageChrome } from "../components/Layout"
+import { RuntimeStatusBar } from "../components/RuntimeStatusBar"
+
+type ChatPageLocationState = { agentLabel?: string; runName?: string } | null
 
 export function ChatPage() {
   const { id: runId, agentId } = useParams<{ id: string; agentId: string }>()
   const navigate = useNavigate()
+  const location = useLocation()
+  const state = (location.state as ChatPageLocationState | undefined) ?? null
 
   if (!runId || !agentId) {
     return <p className="p-6 text-sm text-slate-500">Missing run or agent ID.</p>
   }
 
-  return <ChatPageContent runId={runId} agentId={agentId} onBack={() => navigate(`/runs/${runId}`)} />
+  return (
+    <ChatPageContent
+      runId={runId}
+      agentId={agentId}
+      state={state}
+      onBack={() => navigate(`/runs/${runId}`)}
+    />
+  )
 }
 
-function ChatPageContent({ runId, agentId, onBack }: { runId: string; agentId: string; onBack: () => void }) {
+function ChatPageContent({
+  runId,
+  agentId,
+  state,
+  onBack,
+}: {
+  runId: string
+  agentId: string
+  state: ChatPageLocationState
+  onBack: () => void
+}) {
   const stream = useAgentStream({ agentId })
+  const agentLabel = state?.agentLabel ?? stream.agentState?.name ?? agentId
+  const runName = state?.runName ?? runId
+  const runReference = useMemo(() => {
+    return runName === runId ? `Run ${runId}` : `${runName} · ${runId}`
+  }, [runId, runName])
+
+  usePageChrome({
+    breadcrumbs: [{ label: "Runs", href: "/runs" }, { label: runName, href: `/runs/${runId}` }, { label: "Agent Chat" }],
+  })
 
   return (
     <div className="flex h-full flex-col">
@@ -26,16 +58,28 @@ function ChatPageContent({ runId, agentId, onBack }: { runId: string; agentId: s
         <Button variant="ghost" size="sm" onClick={onBack}>
           &#8592; Back
         </Button>
-        <div className="flex items-center gap-2">
-          <h1 className="text-sm font-semibold text-slate-900">
-            {stream.agentState?.name ?? agentId}
-          </h1>
+        <div className="min-w-0">
+          <div className="flex items-center gap-2">
+            <h1 className="truncate text-sm font-semibold text-slate-900">Agent Chat</h1>
+          </div>
+          <p className="truncate text-xs text-slate-500">
+            <span className="font-medium text-slate-700">{agentLabel}</span>
+            <span className="px-1.5 text-slate-300">•</span>
+            <span>{runReference}</span>
+          </p>
+        </div>
+        <div className="ml-auto flex items-center gap-2">
           {stream.agentState ? (
-            <Badge status={stream.agentState.status} />
+            <span className="hidden text-xs text-slate-500 sm:inline">{stream.agentState.name ?? agentLabel}</span>
           ) : null}
         </div>
-        <span className="ml-auto font-mono text-xs text-slate-400">Run {runId}</span>
       </div>
+
+      <RuntimeStatusBar
+        agentStatus={stream.agentState?.status}
+        socketState={stream.connectionState}
+        className="border-b border-slate-200 bg-white"
+      />
 
       {/* Messages */}
       <ChatMessageList
@@ -48,12 +92,13 @@ function ChatPageContent({ runId, agentId, onBack }: { runId: string; agentId: s
 
       {/* Input */}
       <ChatInputArea
-        disabled={!stream.isWorking && stream.agentState?.status === "done"}
+        disabled={!stream.isWorking && (stream.agentState?.status === "done" || stream.agentState?.status === "error")}
+        agentStatus={stream.agentState?.status}
         connectionState={stream.connectionState}
         onSend={async (text) => {
           const result = await stream.sendMessage(text)
           if (!result.accepted) {
-            console.error("Failed to send message:", result.error)
+            throw new Error(result.error ?? "Message rejected")
           }
         }}
       />

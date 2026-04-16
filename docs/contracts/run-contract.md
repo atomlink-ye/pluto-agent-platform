@@ -135,7 +135,7 @@ persistence_handle: provider_session_001
 role_id: analyst
 provider: claude
 mode_id: default
-status: running
+status: active
 ```
 
 ### Top-level fields
@@ -150,7 +150,28 @@ status: running
 | `role_id` | no | string | assigned role |
 | `provider` | no | string | runtime provider |
 | `mode_id` | no | string | provider mode or preset |
-| `status` | yes | string | active, interrupted, resumed, closed, etc. |
+| `status` | yes | string | see RunSession status values below |
+
+### RunSession status values
+
+**Current production values:**
+
+| Value | Meaning |
+|---|---|
+| `active` | Session is live and bound to a runtime agent |
+| `failed` | Session recovery failed; session is unrecoverable |
+
+These are the only two values written by production code today.
+
+**Planned (not yet implemented):**
+
+| Value | Meaning | Status |
+|---|---|---|
+| `interrupted` | Session was interrupted by runtime failure | planned |
+| `resumed` | Session was resumed after interruption | planned |
+| `closed` | Session completed normally | planned |
+
+**Known debt:** `RunSession.status` is typed as `string` in contracts, not a union type or enum. This allows any value to be stored without validation. Constraining the type is deferred to a future contract-tightening issue.
 
 ## PolicySnapshot
 
@@ -171,6 +192,18 @@ requirements:
 ### Purpose
 
 PolicySnapshot captures the effective governed policy applied to a specific run after combining harness defaults and higher-level overlays.
+
+## Known compatibility debt — UI status aliases
+
+The operator UI accepts and normalizes several status aliases that diverge from canonical contract values. These are compatibility shims, not canonical vocabulary.
+
+| UI alias | Canonical value | Context |
+|---|---|---|
+| `pending_approval` | `waiting_approval` | Both accepted in filter and display; UI shows "pending approval" for either |
+| `cancelled` (double-L) | `canceled` (single-L) | UI accepts both; displays "cancelled" regardless of stored spelling |
+| `running` (session) | `active` | `RunDetailPage` checks for both `running` and `active` when selecting the default session |
+
+These aliases exist in `Badge.tsx` (label overrides and style mapping), `RunListPage.tsx` (filter matching), and `RunDetailPage.tsx` (session lookup). They are not part of the canonical contract and should be consolidated in a future UI normalization pass.
 
 ## Contract rules
 

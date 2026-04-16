@@ -66,7 +66,7 @@ async function seedRun() {
   return { playbook: savedPlaybook, harness: savedHarness, run: savedRun }
 }
 
-describe("Database Foundation (Plan 003 F1)", () => {
+describe.skipIf(!process.env.DATABASE_URL)("Database Foundation (Plan 003 F1)", () => {
   beforeAll(() => {
     sql = postgres(TEST_DATABASE_URL, { max: 5 })
     db = drizzle(sql, { schema })

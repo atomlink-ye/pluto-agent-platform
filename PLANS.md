@@ -39,6 +39,12 @@ Every active plan should include:
 5. evaluation gates
 6. completion criteria
 
+## Pull request discipline
+
+- integration-branch PRs must not be treated as issue-closing events unless they target the default branch
+- the final PR that merges work into `main` should include GitHub closing keywords for each shipped issue (`Closes #123`, `Fixes #123`, `Resolves #123`)
+- if work lands through stacked or integration branches, repeat the closing keywords in the final default-branch PR body; intermediate PRs to non-default branches will not auto-close the issues
+
 ## Relationship to design and specs
 
 - Design tells you **why** and the boundary you must respect
