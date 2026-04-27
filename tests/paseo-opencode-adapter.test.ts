@@ -44,6 +44,61 @@ describe("PaseoOpenCodeAdapter — log text extraction", () => {
     const raw = "[User] hi\n[Thought] empty";
     expect(PaseoOpenCodeAdapter.extractAssistantTextFromLogs(raw)).toBe("");
   });
+
+  it("strips an echoed multi-line user prompt before assistant text", () => {
+    const echoed = [
+      "Instructions from the Team Lead:",
+      "Say hello as the planner.",
+      "",
+      "Reply with your contribution only.",
+    ].join("\n");
+    const raw = [
+      "[User]",
+      echoed,
+      "Hello from planner.",
+      "[Thought] done",
+    ].join("\n");
+    expect(PaseoOpenCodeAdapter.extractAssistantTextFromLogs(raw, echoed)).toBe(
+      "Hello from planner.",
+    );
+  });
+
+  it("strips a compact echoed SUMMARIZE marker before final markdown", () => {
+    const raw = [
+      "[User]",
+      "SUMMARIZE",
+      "## Hello team",
+      "lead: hello",
+      "[Thought] done",
+    ].join("\n");
+    expect(PaseoOpenCodeAdapter.extractAssistantTextFromLogs(raw, "SUMMARIZE | details")).toBe(
+      "## Hello team\nlead: hello",
+    );
+  });
+
+  it("strips an echoed worker prompt even when paseo omits the role system prompt", () => {
+    const fullPrompt = [
+      "You are the planner.",
+      "",
+      "Instructions from the Team Lead:",
+      "Plan a hello file.",
+      "",
+      "Reply with your contribution only. Keep it concise (under 15 lines).",
+    ].join("\n");
+    const raw = [
+      "[User]",
+      "Instructions from the Team Lead:",
+      "Plan a hello file.",
+      "",
+      "Reply with your contribution only. Keep it concise (under 15 lines).",
+      "Plan: four hello lines.",
+      "[Thought] I should not leak this thought.",
+      "This reasoning line should also be dropped.",
+    ].join("\n");
+    expect(PaseoOpenCodeAdapter.extractAssistantTextFromLogs(raw, fullPrompt)).toBe(
+      "Plan: four hello lines.",
+    );
+  });
 });
 
 describe("PaseoOpenCodeAdapter — protocol with mocked runner", () => {

@@ -264,7 +264,7 @@ export class FakeAdapter implements PaseoTeamAdapter {
     lines.push(`Goal: ${task.prompt}`);
     lines.push("");
     lines.push("## Worker contributions");
-    for (const [roleId, output] of contributions.entries()) {
+    for (const [roleId, output] of Array.from(contributions.entries())) {
       lines.push(`### ${roleId}`);
       lines.push(output);
       lines.push("");

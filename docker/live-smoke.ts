@@ -26,7 +26,7 @@
  */
 import { mkdir, readFile } from "node:fs/promises";
 import { resolve } from "node:path";
-import process from "node:process";
+import * as process from "node:process";
 
 import { FakeAdapter } from "../src/adapters/fake/index.js";
 import { PaseoOpenCodeAdapter } from "../src/adapters/paseo-opencode/index.js";
@@ -140,10 +140,11 @@ async function main() {
     eventsPath: `${store.runDir(result.runId)}/events.jsonl`,
   };
 
-  if (result.status !== "completed") {
+  if (result.status !== "completed" || !result.artifact) {
     console.error(JSON.stringify({ status: "failed", failure: result.failure?.message, summary }, null, 2));
     process.exit(1);
   }
+  const finalArtifact = result.artifact;
 
   // Assertions on the artifact content.
   const artifactMd = await readFile(`${store.runDir(result.runId)}/artifact.md`, "utf8");
@@ -153,6 +154,27 @@ async function main() {
     console.error(
       JSON.stringify(
         { status: "assertion_failed", message: "artifact missing required roles", missing, summary },
+        null,
+        2,
+      ),
+    );
+    process.exit(1);
+  }
+
+
+  const leakedProtocol = finalArtifact.contributions.filter((c) =>
+    c.output.includes("Instructions from the Team Lead:") ||
+    c.output.includes("Reply with your contribution only"),
+  );
+  if (leakedProtocol.length > 0) {
+    console.error(
+      JSON.stringify(
+        {
+          status: "assertion_failed",
+          message: "worker output leaked adapter prompt protocol",
+          roles: leakedProtocol.map((c) => c.roleId),
+          summary,
+        },
         null,
         2,
       ),
