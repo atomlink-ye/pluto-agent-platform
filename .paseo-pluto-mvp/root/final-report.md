@@ -193,7 +193,23 @@ No paid-model code paths exist anywhere in this implementation.
 
 ## 8. Commits on `paseo/pluto-mvp-alpha-root`
 
-Commits will be added at this snapshot when the user authorizes (commit list to be appended after `git commit` runs). Implementation snapshot is staged but not yet committed at the time this report was first written; see the appended Commits subsection below for the final list.
+Branch is local-only; nothing has been pushed to `origin`.
+
+```
+73b71f7  docs(mvp-alpha): add Root Manager status, task tree, integration plan, final report
+54bf470  feat(mvp-alpha): scaffold Pluto agent team control plane
+1b76267  init                                                      # base from origin/main
+```
+
+Two commits were created on top of `origin/main`:
+
+1. **`54bf470` — feat(mvp-alpha): scaffold Pluto agent team control plane.**
+   The full implementation snapshot (skeleton, contract, adapters, orchestrator, CLI, Docker, docs, tests). Staged via explicit file paths only; `.env`, `.pluto/`, `.tmp/`, `dist/` are gitignored and never tracked.
+
+2. **`73b71f7` — docs(mvp-alpha): add Root Manager status, task tree, integration plan, final report.**
+   The `.paseo-pluto-mvp/root/` output contract (this report and its siblings).
+
+(Note: the report you are reading was written **before** the commits ran; the hashes above are the post-commit truth, recorded after both commits succeeded — see the worktree's `git log --oneline -5` for verification.)
 
 ## 9. Suggested Project Management status updates
 
