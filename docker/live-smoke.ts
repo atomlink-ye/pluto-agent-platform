@@ -40,16 +40,12 @@ interface BlockerReport {
 
 async function preflight(): Promise<BlockerReport | null> {
   if (ADAPTER_KIND === "fake") return null;
-  const probe = await DEFAULT_RUNNER.exec("paseo", ["--version"]).catch((e) => ({
-    stdout: "",
-    stderr: String(e),
-    exitCode: -1 as number | null,
-  }));
-  if (probe.exitCode !== 0) {
+  const baseUrl = process.env["OPENCODE_BASE_URL"];
+  if (!baseUrl) {
     return {
       status: "blocker",
-      reason: "paseo CLI unavailable",
-      hint: "Install paseo on PATH or rerun with PLUTO_LIVE_ADAPTER=fake.",
+      reason: "OPENCODE_BASE_URL unset",
+      hint: "Point at the OpenCode runtime, e.g. http://pluto-runtime:4096.",
     };
   }
   const provider = process.env["PASEO_PROVIDER"] ?? "opencode/minimax-m2.5-free";
@@ -60,12 +56,16 @@ async function preflight(): Promise<BlockerReport | null> {
       hint: "Set PASEO_PROVIDER to a paseo provider alias that targets the OpenCode runtime.",
     };
   }
-  const baseUrl = process.env["OPENCODE_BASE_URL"];
-  if (!baseUrl) {
+  const probe = await DEFAULT_RUNNER.exec("paseo", ["--version"]).catch((e) => ({
+    stdout: "",
+    stderr: String(e),
+    exitCode: -1 as number | null,
+  }));
+  if (probe.exitCode !== 0) {
     return {
       status: "blocker",
-      reason: "OPENCODE_BASE_URL unset",
-      hint: "Point at the OpenCode runtime, e.g. http://pluto-runtime:4096.",
+      reason: "paseo CLI unavailable",
+      hint: "Install paseo on PATH or rerun with PLUTO_LIVE_ADAPTER=fake.",
     };
   }
   return null;
