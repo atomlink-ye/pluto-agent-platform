@@ -15,11 +15,13 @@
     "test:watch": "vitest",
     "build": "tsc -p tsconfig.build.json",
     "submit": "tsx src/cli/submit.ts",
+    "smoke:fake": "PLUTO_LIVE_ADAPTER=fake tsx docker/live-smoke.ts",
+    "smoke:live": "PLUTO_LIVE_ADAPTER=paseo-opencode tsx docker/live-smoke.ts",
     "docker:build": "docker compose -f docker/compose.yml build",
     "docker:up": "docker compose -f docker/compose.yml up -d",
     "docker:down": "docker compose -f docker/compose.yml down -v",
     "docker:live": "tsx docker/live-smoke.ts",
-    "docker:smoke": "docker compose -f docker/compose.yml up -d --build && tsx docker/live-smoke.ts"
+    "smoke:docker": "docker compose -f docker/compose.yml up -d --build && OPENCODE_BASE_URL=${OPENCODE_BASE_URL:-http://localhost:4096} PLUTO_LIVE_ADAPTER=paseo-opencode tsx docker/live-smoke.ts"
   },
   "devDependencies": {
     "@types/node": "^20.14.0",

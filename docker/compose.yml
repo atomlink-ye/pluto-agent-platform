@@ -1,18 +1,26 @@
-# Pluto MVP-alpha minimal compose stack.
+# Pluto MVP-alpha Docker compose.
 #
-# Two services:
-#   pluto-runtime   — OpenCode `web` server, default model `opencode/minimax-m2.5-free`.
-#   pluto-mvp       — Pluto control plane: runs the live smoke script against pluto-runtime.
+# IMPORTANT — architectural reality:
+#   Paseo CLI is distributed only as a macOS app bundle today (the binary
+#   on $PATH is a shell wrapper around /Applications/Paseo.app). It cannot
+#   be installed inside a Linux Docker container. Therefore the live
+#   PaseoOpenCodeAdapter MUST run on the host (where the Paseo daemon and
+#   provider CLIs live), not inside a container.
+#
+#   This compose file is intentionally lean: it brings up only the OpenCode
+#   web runtime (an optional debug UI / HTTP endpoint). Pluto's live smoke
+#   does NOT depend on this container — `paseo run --provider opencode/...`
+#   spawns the host opencode CLI, not the runtime web server. We keep the
+#   container so operators can inspect OpenCode UI at http://localhost:4096
+#   and so the legacy auth-mount workflow (compose.auth.local.yml) still
+#   composes cleanly.
 #
 # Mounts:
-#   - The repo is mounted into both containers at /workspace so artifacts written
-#     by the team are visible on the host.
-#   - OpenCode auth is OPTIONAL and only mounted if compose.auth.local.yml is layered.
-#     Do NOT commit credentials. See README "Auth mount" section.
+#   - The repo is mounted at /workspace (handy if you want to run smokes
+#     from a host shell that uses container paths in env vars).
 #
 # Secrets:
 #   - .env.example uses placeholders only. Real .env is gitignored.
-
 services:
   pluto-runtime:
     build:
@@ -28,26 +36,7 @@ services:
     ports:
       - "${OPENCODE_PORT:-4096}:4096"
     healthcheck:
-      test: ["CMD", "sh", "-c", "wget -qO- http://localhost:4096/healthz || curl -fsS http://localhost:4096/ >/dev/null"]
+      test: ["CMD", "sh", "-c", "wget -qO- http://localhost:4096/healthz >/dev/null 2>&1 || wget -qO- http://localhost:4096/ >/dev/null 2>&1"]
       interval: 5s
       timeout: 5s
       retries: 30
-
-  pluto-mvp:
-    build:
-      context: ..
-      dockerfile: docker/pluto-mvp/Dockerfile
-    image: pluto-mvp/pluto-mvp:alpha
-    working_dir: /workspace
-    depends_on:
-      pluto-runtime:
-        condition: service_healthy
-    environment:
-      OPENCODE_BASE_URL: ${OPENCODE_BASE_URL:-http://pluto-runtime:4096}
-      OPENCODE_MODEL: ${OPENCODE_MODEL:-opencode/minimax-m2.5-free}
-      PASEO_PROVIDER: ${PASEO_PROVIDER:-opencode/minimax-m2.5-free}
-      PLUTO_DATA_DIR: /workspace/.pluto
-      PLUTO_LIVE_ARTIFACT_PATH: ${PLUTO_LIVE_ARTIFACT_PATH:-/workspace/.tmp/live-quickstart/hello-pluto.md}
-    volumes:
-      - ..:/workspace
-    command: ["node", "/usr/local/bin/pluto-mvp-entrypoint.cjs"]

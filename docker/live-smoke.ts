@@ -7,9 +7,18 @@
  *   - At least 2 worker sessions completed.
  *   - The final artifact references each contributing role.
  *
+ * Architecture note:
+ *   The Paseo CLI is a macOS app bundle and cannot be installed inside a
+ *   Linux Docker container. Therefore live mode runs on the HOST (where the
+ *   Paseo daemon and provider CLIs live). The OpenCode runtime container in
+ *   docker/compose.yml is optional and is only useful as the OpenCode web UI
+ *   debug endpoint. The live adapter does not require it to be running.
+ *
  * Preconditions (see .paseo-pluto-mvp/root/integration-plan.md):
- *   - paseo CLI on PATH with a working OpenCode-targeted provider.
- *   - OpenCode runtime reachable at $OPENCODE_BASE_URL.
+ *   - paseo CLI reachable on $PATH (host).
+ *   - $OPENCODE_BASE_URL set to declare you are explicitly running the live
+ *     adapter — kept as a deterministic safety gate even though the paseo →
+ *     opencode CLI path does not call the OpenCode HTTP server.
  *   - Free model available: $OPENCODE_MODEL (default opencode/minimax-m2.5-free).
  *
  * If preconditions are missing this script prints a structured BLOCKER report
@@ -25,12 +34,26 @@ import { DEFAULT_RUNNER } from "../src/adapters/paseo-opencode/process-runner.js
 import { DEFAULT_TEAM, RunStore, TeamRunService } from "../src/orchestrator/index.js";
 import type { PaseoTeamAdapter } from "../src/contracts/adapter.js";
 
-const WORKSPACE = resolve(process.env["PLUTO_LIVE_WORKSPACE"] ?? "/workspace/.tmp/live-quickstart");
+const WORKSPACE = resolve(
+  process.env["PLUTO_LIVE_WORKSPACE"] ?? `${process.cwd()}/.tmp/live-quickstart`,
+);
 const DATA_DIR = resolve(process.env["PLUTO_DATA_DIR"] ?? `${WORKSPACE}/.pluto`);
 const ARTIFACT_PATH = process.env["PLUTO_LIVE_ARTIFACT_PATH"] ?? `${WORKSPACE}/hello-pluto.md`;
-const ADAPTER_KIND = (process.env["PLUTO_LIVE_ADAPTER"] ?? "paseo-opencode") as
-  | "paseo-opencode"
-  | "fake";
+const ADAPTER_KIND: "paseo-opencode" | "fake" = (() => {
+  // Two equivalent ways to opt in to fake mode:
+  //   PLUTO_LIVE_ADAPTER=fake   (the canonical knob)
+  //   PLUTO_FAKE_LIVE=1         (a convenience flag used by external gates)
+  if (
+    process.env["PLUTO_FAKE_LIVE"] === "1" ||
+    process.env["PLUTO_FAKE_LIVE"]?.toLowerCase() === "true"
+  ) {
+    return "fake";
+  }
+  const v = (process.env["PLUTO_LIVE_ADAPTER"] ?? "paseo-opencode") as
+    | "paseo-opencode"
+    | "fake";
+  return v === "fake" ? "fake" : "paseo-opencode";
+})();
 
 interface BlockerReport {
   status: "blocker";

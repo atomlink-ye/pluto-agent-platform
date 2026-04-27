@@ -14,40 +14,57 @@ import { DEFAULT_RUNNER, type ProcessRunner } from "./process-runner.js";
 /**
  * Live adapter that drives Paseo CLI agents whose model runtime is OpenCode.
  *
- * Status: best-effort scaffold. End-to-end execution requires:
- *   - `paseo` CLI on PATH with a working provider that targets OpenCode.
- *   - OpenCode runtime reachable at $OPENCODE_BASE_URL using
- *     `opencode/minimax-m2.5-free` (or another free profile).
- *   - lead/worker session prompts cooperating with the line-based protocol.
+ * Confirmed working invariants on this host (2026-04-27):
+ *   - paseo provider alias `opencode` is `available`, default mode `build`.
+ *   - `opencode/minimax-m2.5-free` returns deterministic responses end-to-end.
+ *   - paseo CLI is a macOS app-bundle binary (not Linux-installable) — this
+ *     adapter only works from the host that runs the paseo daemon.
  *
- * See `.paseo-pluto-mvp/root/integration-plan.md` for what's missing.
+ * CLI surface used (verified empirically):
+ *   - `paseo run --detach --json --provider <id> --mode build --cwd <abs> --title <t> "<prompt>"`
+ *     → JSON `{ "agentId": "...", "status": "created", ... }`.
+ *   - `paseo wait --timeout <s> --json <id>`
+ *     → JSON `{ "agentId": "...", "status": "idle", "message": "..." }`.
+ *   - `paseo logs <id> --filter text --tail <n>` (NOT JSON-emitting)
+ *     → plain text in the form
+ *         [User] <prompt>
+ *         <assistant text>
+ *         [Thought] <reasoning>
+ *   - `paseo logs <id> --follow --filter text` for streaming text.
+ *   - `paseo send <id> "<msg>"` blocks until the agent is idle (default).
+ *   - `paseo inspect <id> --json` returns metadata only — does NOT include
+ *     conversation text. Do not use it to extract output.
+ *   - `paseo delete <id>` for teardown (no `--force` flag).
  *
  * Protocol contract with the lead agent:
  *   - The lead prompt instructs the lead to emit, on its own line, markers
  *     of the form:
- *         WORKER_REQUEST: <roleId> :: <instructions>
- *     once for each non-lead role in dispatch order.
+ *         WORKER_REQUEST: <roleId> :: <one-line instructions>
+ *     once for each non-lead role in dispatch order, BEFORE going idle.
  *   - The lead's final summary, after orchestrator sends a SUMMARIZE message,
- *     is delivered as the agent's final stdout text and surfaced as a
+ *     is delivered as the agent's last assistant text and surfaced as a
  *     `lead_message` event with payload `{ kind: "summary", markdown }`.
- *
- * Worker output is captured by reading the worker session's final text after
- * `paseo wait` returns.
  */
 export interface PaseoOpenCodeAdapterOptions {
   paseoBin?: string;
+  /** Paseo provider/model string. Defaults to opencode/minimax-m2.5-free. */
   provider?: string;
-  /** Working directory passed to paseo as --cwd. */
+  /** Working directory passed to paseo as --cwd (must be absolute). */
   workspaceCwd?: string;
   /** Override exec/spawn for tests. */
   runner?: ProcessRunner;
-  /** Defaults for thinking/mode flags. */
+  /** Optional thinking flag value. */
   thinking?: string;
+  /** Defaults to "build" — the mode opencode-provider expects. */
   mode?: string;
-  /** ms to wait for worker outputs after `paseo wait` returns. */
-  workerSettleMs?: number;
+  /** Per-agent wait timeout in seconds. */
+  waitTimeoutSec?: number;
+  /** Tail size when reading agent logs. */
+  logsTail?: number;
   /** ms to give a follow stream to drain before disposing. */
   followDrainMs?: number;
+  /** Delete agents in endRun (default true). */
+  deleteAgentsOnEnd?: boolean;
   /** Clock + idGen overrides for tests. */
   clock?: () => Date;
   idGen?: () => string;
@@ -61,6 +78,8 @@ interface RunState {
   leadAgentId?: string;
   followers: Array<{ dispose: () => Promise<void> }>;
   workerAgentIds: Map<string, string>; // roleId → paseo agent id
+  /** First-text-line cursor per worker so we can attribute the assistant turn. */
+  workerLogCursors: Map<string, number>;
 }
 
 const WORKER_REQUEST_RE = /^WORKER_REQUEST:\s*([a-zA-Z0-9_-]+)\s*::\s*(.*)$/;
@@ -71,9 +90,11 @@ export class PaseoOpenCodeAdapter implements PaseoTeamAdapter {
   private readonly workspaceCwd?: string;
   private readonly runner: ProcessRunner;
   private readonly thinking?: string;
-  private readonly mode?: string;
-  private readonly workerSettleMs: number;
+  private readonly mode: string;
+  private readonly waitTimeoutSec: number;
+  private readonly logsTail: number;
   private readonly followDrainMs: number;
+  private readonly deleteAgentsOnEnd: boolean;
   private readonly clock: () => Date;
   private readonly idGen: () => string;
   private runs = new Map<string, RunState>();
@@ -87,9 +108,11 @@ export class PaseoOpenCodeAdapter implements PaseoTeamAdapter {
     this.workspaceCwd = opts.workspaceCwd;
     this.runner = opts.runner ?? DEFAULT_RUNNER;
     this.thinking = opts.thinking;
-    this.mode = opts.mode ?? "bypassPermissions";
-    this.workerSettleMs = opts.workerSettleMs ?? 1_500;
+    this.mode = opts.mode ?? "build";
+    this.waitTimeoutSec = opts.waitTimeoutSec ?? 180;
+    this.logsTail = opts.logsTail ?? 200;
     this.followDrainMs = opts.followDrainMs ?? 250;
+    this.deleteAgentsOnEnd = opts.deleteAgentsOnEnd ?? true;
     this.clock = opts.clock ?? (() => new Date());
     this.idGen = opts.idGen ?? (() => randomUUID());
   }
@@ -105,6 +128,7 @@ export class PaseoOpenCodeAdapter implements PaseoTeamAdapter {
       cursor: 0,
       followers: [],
       workerAgentIds: new Map(),
+      workerLogCursors: new Map(),
     });
   }
 
@@ -115,11 +139,9 @@ export class PaseoOpenCodeAdapter implements PaseoTeamAdapter {
   }): Promise<AgentSession> {
     const run = this.expectRun(input.runId);
     const prompt = this.buildLeadPrompt(input.task, input.role, run.team);
-    const args = this.runArgs({
-      title: `Pluto MVP-alpha Lead [${input.runId}]`,
-    });
+    const args = this.runArgs({ title: `Pluto MVP-alpha Lead [${input.runId}]` });
     const result = await this.runner.exec(this.bin, [...args, prompt], {
-      cwd: this.workspaceCwd ?? input.task.workspacePath,
+      cwd: this.runCwd(run),
     });
     if (result.exitCode !== 0) {
       throw new Error(
@@ -138,10 +160,10 @@ export class PaseoOpenCodeAdapter implements PaseoTeamAdapter {
       type: "lead_started",
       roleId: input.role.id,
       sessionId: agentId,
-      payload: { provider: this.provider, paseoAgentId: agentId },
+      payload: { provider: this.provider, paseoAgentId: agentId, mode: this.mode },
     });
 
-    // Subscribe to lead text stream and translate WORKER_REQUEST markers.
+    // Subscribe to the lead's text stream and translate WORKER_REQUEST markers.
     const follower = this.runner.follow(
       this.bin,
       ["logs", agentId, "--follow", "--filter", "text"],
@@ -165,7 +187,7 @@ export class PaseoOpenCodeAdapter implements PaseoTeamAdapter {
       title: `Pluto MVP-alpha Worker [${input.role.id}] [${input.runId}]`,
     });
     const result = await this.runner.exec(this.bin, [...args, prompt], {
-      cwd: this.workspaceCwd ?? run.task.workspacePath,
+      cwd: this.runCwd(run),
     });
     if (result.exitCode !== 0) {
       throw new Error(
@@ -187,22 +209,17 @@ export class PaseoOpenCodeAdapter implements PaseoTeamAdapter {
       payload: { paseoAgentId: agentId, instructions: input.instructions },
     });
 
-    // Block until the worker is idle, then read its final output.
-    const wait = await this.runner.exec(this.bin, ["wait", agentId, "--json"], {
-      cwd: this.workspaceCwd ?? run.task.workspacePath,
-    });
+    const wait = await this.runner.exec(
+      this.bin,
+      ["wait", agentId, "--timeout", String(this.waitTimeoutSec), "--json"],
+      { cwd: this.runCwd(run) },
+    );
     if (wait.exitCode !== 0) {
       throw new Error(
         `paseo_worker_wait_failed:${input.role.id} exit=${wait.exitCode} stderr=${wait.stderr.slice(0, 400)}`,
       );
     }
-    await delay(this.workerSettleMs);
-    const inspect = await this.runner.exec(
-      this.bin,
-      ["inspect", agentId, "--json"],
-      { cwd: this.workspaceCwd ?? run.task.workspacePath },
-    );
-    const output = this.extractFinalText(inspect.stdout) ?? "";
+    const output = await this.fetchAgentText(agentId, run);
 
     this.appendEvent(input.runId, {
       type: "worker_completed",
@@ -219,10 +236,20 @@ export class PaseoOpenCodeAdapter implements PaseoTeamAdapter {
     if (run.leadAgentId !== input.sessionId) {
       throw new Error(`paseo_adapter_unknown_session:${input.sessionId}`);
     }
+    // Default `paseo send` blocks until the agent is idle. That's exactly the
+    // behavior we want for SUMMARIZE — the lead must produce its final reply
+    // before we read it.
+    //
+    // We collapse newlines into " | " so `paseo logs --filter text` renders
+    // the operator turn as a single `[User] …` line. Without this, the
+    // assistant-text extractor can't tell where multi-line user message body
+    // ends and assistant text begins (paseo only tags `[User]` / `[Thought]`,
+    // not assistant turns).
+    const wireMessage = input.message.replace(/\r?\n+/g, " | ");
     const result = await this.runner.exec(
       this.bin,
-      ["send", input.sessionId, input.message],
-      { cwd: this.workspaceCwd ?? run.task.workspacePath },
+      ["send", input.sessionId, wireMessage],
+      { cwd: this.runCwd(run) },
     );
     if (result.exitCode !== 0) {
       throw new Error(
@@ -230,16 +257,14 @@ export class PaseoOpenCodeAdapter implements PaseoTeamAdapter {
       );
     }
     if (input.message.includes("SUMMARIZE")) {
-      // Wait for the lead to settle, then read its final text and emit summary event.
-      await this.runner.exec(this.bin, ["wait", input.sessionId, "--json"], {
-        cwd: this.workspaceCwd ?? run.task.workspacePath,
-      });
-      const inspect = await this.runner.exec(
+      // Belt-and-suspenders: also explicitly wait, in case `send` returned
+      // before the streaming completion landed.
+      await this.runner.exec(
         this.bin,
-        ["inspect", input.sessionId, "--json"],
-        { cwd: this.workspaceCwd ?? run.task.workspacePath },
+        ["wait", input.sessionId, "--timeout", String(this.waitTimeoutSec), "--json"],
+        { cwd: this.runCwd(run) },
       );
-      const markdown = this.extractFinalText(inspect.stdout) ?? "";
+      const markdown = await this.fetchAgentText(input.sessionId, run);
       this.appendEvent(input.runId, {
         type: "lead_message",
         roleId: run.team.leadRoleId,
@@ -273,9 +298,23 @@ export class PaseoOpenCodeAdapter implements PaseoTeamAdapter {
       }
     }
     run.followers = [];
+    if (this.deleteAgentsOnEnd) {
+      const ids = [run.leadAgentId, ...run.workerAgentIds.values()].filter(
+        (x): x is string => Boolean(x),
+      );
+      for (const id of ids) {
+        await this.runner
+          .exec(this.bin, ["delete", id], { cwd: this.runCwd(run) })
+          .catch(() => undefined);
+      }
+    }
   }
 
   // ---------- helpers ----------
+
+  private runCwd(run: RunState): string {
+    return this.workspaceCwd ?? run.task.workspacePath;
+  }
 
   private runArgs(opts: { title: string }): string[] {
     const args = [
@@ -285,7 +324,7 @@ export class PaseoOpenCodeAdapter implements PaseoTeamAdapter {
       "--provider",
       this.provider,
       "--mode",
-      this.mode ?? "bypassPermissions",
+      this.mode,
       "--title",
       opts.title,
     ];
@@ -301,35 +340,67 @@ export class PaseoOpenCodeAdapter implements PaseoTeamAdapter {
       const parsed = JSON.parse(trimmed);
       if (typeof parsed === "string") return parsed;
       if (parsed && typeof parsed === "object") {
-        if (typeof parsed.id === "string") return parsed.id;
         if (typeof parsed.agentId === "string") return parsed.agentId;
+        if (typeof parsed.id === "string") return parsed.id;
+        if (typeof parsed.Id === "string") return parsed.Id;
       }
     } catch {
-      // fall through to regex fallback
+      /* fall through */
     }
-    const m = trimmed.match(/"id"\s*:\s*"([^"]+)"/);
+    const m = trimmed.match(/"(?:agentId|id|Id)"\s*:\s*"([^"]+)"/);
     return m ? m[1] : undefined;
   }
 
-  private extractFinalText(stdout: string): string | undefined {
-    const trimmed = stdout.trim();
-    if (!trimmed) return undefined;
-    try {
-      const parsed = JSON.parse(trimmed);
-      if (typeof parsed === "string") return parsed;
-      if (parsed && typeof parsed === "object") {
-        if (typeof parsed.finalText === "string") return parsed.finalText;
-        if (typeof parsed.output === "string") return parsed.output;
-        if (typeof parsed.lastText === "string") return parsed.lastText;
-        if (typeof parsed.summary === "string") return parsed.summary;
-      }
-    } catch {
-      return trimmed;
+  /**
+   * Read the agent's most recent assistant text via `paseo logs --filter text`.
+   * The CLI emits plain text in the format:
+   *   [User] <prompt>
+   *   <assistant text...>
+   *   [Thought] <reasoning>
+   *
+   * We strip lines that start with `[Tag]` and keep the rest. If multiple
+   * user/assistant turns exist, we slice from the LAST `[User] ...` marker.
+   */
+  private async fetchAgentText(agentId: string, run: RunState): Promise<string> {
+    const result = await this.runner.exec(
+      this.bin,
+      ["logs", agentId, "--filter", "text", "--tail", String(this.logsTail)],
+      { cwd: this.runCwd(run) },
+    );
+    if (result.exitCode !== 0) {
+      throw new Error(
+        `paseo_logs_failed:${agentId} exit=${result.exitCode} stderr=${result.stderr.slice(0, 400)}`,
+      );
     }
-    return trimmed;
+    return PaseoOpenCodeAdapter.extractAssistantTextFromLogs(result.stdout);
+  }
+
+  static extractAssistantTextFromLogs(rawLogs: string): string {
+    const lines = rawLogs.split(/\r?\n/);
+    // Find the index of the last [User] line; assistant text is after it.
+    let lastUserIdx = -1;
+    for (let i = lines.length - 1; i >= 0; i--) {
+      if (lines[i]?.startsWith("[User]")) {
+        lastUserIdx = i;
+        break;
+      }
+    }
+    const slice = lastUserIdx >= 0 ? lines.slice(lastUserIdx + 1) : lines;
+    const kept: string[] = [];
+    for (const line of slice) {
+      if (/^\[[A-Za-z][^\]]*\]/.test(line)) continue; // drop [User], [Thought], [Tool], …
+      kept.push(line);
+    }
+    // Trim trailing blank lines without collapsing meaningful blanks inside.
+    while (kept.length > 0 && kept[kept.length - 1]!.trim().length === 0) {
+      kept.pop();
+    }
+    return kept.join("\n").trimStart();
   }
 
   private onLeadLogLine(runId: string, leadId: string, raw: string) {
+    // `paseo logs --follow --filter text` emits plain text lines, NOT JSON.
+    // We still defensively try JSON-shaped lines.
     let text = raw;
     try {
       const parsed = JSON.parse(raw);
@@ -337,7 +408,7 @@ export class PaseoOpenCodeAdapter implements PaseoTeamAdapter {
         text = parsed.text;
       }
     } catch {
-      // raw text — keep as-is
+      /* keep raw */
     }
     for (const line of text.split(/\r?\n/)) {
       const m = line.match(WORKER_REQUEST_RE);
@@ -358,12 +429,16 @@ export class PaseoOpenCodeAdapter implements PaseoTeamAdapter {
     const lines = [
       role.systemPrompt,
       "",
-      "PROTOCOL: For each worker you want dispatched, emit a single line in",
-      "the exact format (no surrounding code fences, no JSON):",
-      "  WORKER_REQUEST: <roleId> :: <one-line instructions>",
-      `Dispatch order MUST be: ${workerRoles.map((r) => r.id).join(", ")}.`,
-      "After all workers are reported back, the orchestrator will send",
-      "a 'SUMMARIZE' message. Reply with the final markdown artifact.",
+      "PROTOCOL — read carefully:",
+      "1. Do NOT do the workers' jobs yourself.",
+      "2. Emit one line per worker you want dispatched, in EXACTLY this format",
+      "   (no surrounding code fences, no JSON, one line per worker):",
+      "       WORKER_REQUEST: <roleId> :: <one-line instructions>",
+      `3. Dispatch order MUST be: ${workerRoles.map((r) => r.id).join(", ")}.`,
+      "4. After emitting all WORKER_REQUEST lines, STOP. Do not produce a",
+      "   summary yet. The orchestrator will reply with a 'SUMMARIZE' message.",
+      "5. When SUMMARIZE arrives, reply with the final markdown artifact:",
+      "   include each worker role by name and their contribution.",
       "",
       `Task title: ${task.title}`,
       `Goal: ${task.prompt}`,
@@ -379,8 +454,10 @@ export class PaseoOpenCodeAdapter implements PaseoTeamAdapter {
     return [
       role.systemPrompt,
       "",
-      `Instructions from the Team Lead:`,
+      "Instructions from the Team Lead:",
       instructions,
+      "",
+      "Reply with your contribution only. Keep it concise (under 15 lines).",
     ].join("\n");
   }
 
