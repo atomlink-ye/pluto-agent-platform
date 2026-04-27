@@ -26,6 +26,7 @@ import { DEFAULT_TEAM, RunStore, TeamRunService } from "../src/orchestrator/inde
 import type { PaseoTeamAdapter } from "../src/contracts/adapter.js";
 
 const WORKSPACE = resolve(process.env["PLUTO_LIVE_WORKSPACE"] ?? "/workspace/.tmp/live-quickstart");
+const DATA_DIR = resolve(process.env["PLUTO_DATA_DIR"] ?? `${WORKSPACE}/.pluto`);
 const ARTIFACT_PATH = process.env["PLUTO_LIVE_ARTIFACT_PATH"] ?? `${WORKSPACE}/hello-pluto.md`;
 const ADAPTER_KIND = (process.env["PLUTO_LIVE_ADAPTER"] ?? "paseo-opencode") as
   | "paseo-opencode"
@@ -84,7 +85,7 @@ async function main() {
       ? new FakeAdapter({ team: DEFAULT_TEAM })
       : new PaseoOpenCodeAdapter({ workspaceCwd: WORKSPACE });
 
-  const store = new RunStore({ dataDir: process.env["PLUTO_DATA_DIR"] ?? "/workspace/.pluto" });
+  const store = new RunStore({ dataDir: DATA_DIR });
   const service = new TeamRunService({
     adapter,
     team: DEFAULT_TEAM,
