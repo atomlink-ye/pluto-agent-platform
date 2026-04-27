@@ -58,6 +58,7 @@ export type AgentEventType =
   | "worker_completed"
   | "lead_message"
   | "worker_message"
+  | "orchestrator_underdispatch_fallback"
   | "artifact_created"
   | "run_completed"
   | "run_failed";

@@ -6,6 +6,7 @@ dist/
 .pluto/
 .tmp/
 .tmpartifacts/
+.opencode-serve.json
 
 .env
 .env.local

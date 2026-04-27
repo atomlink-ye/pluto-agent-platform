@@ -25,6 +25,11 @@ export interface TeamRunServiceOptions {
   idGen?: () => string;
   /** Clock override (tests). */
   clock?: () => Date;
+  /**
+   * Grace period before the orchestrator deterministically dispatches worker
+   * roles that a stochastic live lead forgot to request. Set low in tests.
+   */
+  underdispatchFallbackMs?: number;
 }
 
 export class TeamRunService {
@@ -33,6 +38,7 @@ export class TeamRunService {
   private readonly store: RunStore;
   private readonly timeoutMs: number;
   private readonly pumpIntervalMs: number;
+  private readonly underdispatchFallbackMs: number;
   private readonly idGen: () => string;
   private readonly clock: () => Date;
 
@@ -42,6 +48,7 @@ export class TeamRunService {
     this.store = opts.store ?? new RunStore();
     this.timeoutMs = opts.timeoutMs ?? 10 * 60 * 1000;
     this.pumpIntervalMs = opts.pumpIntervalMs ?? 25;
+    this.underdispatchFallbackMs = opts.underdispatchFallbackMs ?? 15_000;
     this.idGen = opts.idGen ?? (() => randomUUID());
     this.clock = opts.clock ?? (() => new Date());
   }
@@ -90,12 +97,51 @@ export class TeamRunService {
         role: leadRole,
       });
 
-      const expectedWorkers = this.team.roles.filter((r) => r.kind === "worker").length;
+      const expectedWorkerRoles = this.team.roles.filter((r) => r.kind === "worker");
+      const expectedWorkers = expectedWorkerRoles.length;
       const requiredCompletions = Math.max(task.minWorkers, expectedWorkers);
 
       let summarized = false;
       let leadSummaryMd: string | undefined;
       const startedAt = Date.now();
+      let lastProgressAt = startedAt;
+      let fallbackTriggered = false;
+
+      const maybeDispatchUnderdispatchFallback = async () => {
+        if (fallbackTriggered || summarized) return;
+        if (contributions.length >= requiredCompletions) return;
+        if (Date.now() - lastProgressAt < this.underdispatchFallbackMs) return;
+
+        const alreadyHandled = new Set([
+          ...Array.from(workersDispatched.values()),
+          ...contributions.map((c) => c.roleId),
+        ]);
+        const missingRoles = expectedWorkerRoles.filter((r) => !alreadyHandled.has(r.id));
+        if (missingRoles.length === 0) return;
+
+        fallbackTriggered = true;
+        await emit("orchestrator_underdispatch_fallback", {
+          missingRoles: missingRoles.map((r) => r.id),
+          dispatchedRoles: Array.from(workersDispatched.values()),
+          completedRoles: contributions.map((c) => c.roleId),
+          reason: "lead_underdispatched_required_workers",
+        });
+
+        for (const role of missingRoles) {
+          workersDispatched.add(role.id);
+          await this.adapter.createWorkerSession({
+            runId,
+            role,
+            instructions: [
+              `Fallback assignment for ${role.name}.`,
+              `Task: ${task.title}`,
+              `Goal: ${task.prompt}`,
+              "Return a concise contribution for the final artifact.",
+            ].join("\n"),
+          });
+        }
+        lastProgressAt = Date.now();
+      };
 
       while (true) {
         if (Date.now() - startedAt > this.timeoutMs) {
@@ -103,10 +149,12 @@ export class TeamRunService {
         }
         const batch = await this.adapter.readEvents({ runId });
         if (batch.length === 0) {
+          await maybeDispatchUnderdispatchFallback();
           if (leadSummaryMd !== undefined) break;
           await delay(this.pumpIntervalMs);
           continue;
         }
+        lastProgressAt = Date.now();
 
         for (const ev of batch) {
           await recordAdapterEvent(ev);
@@ -142,6 +190,8 @@ export class TeamRunService {
             }
           }
         }
+
+        await maybeDispatchUnderdispatchFallback();
 
         if (
           !summarized &&

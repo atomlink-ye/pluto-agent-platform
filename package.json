@@ -21,7 +21,8 @@
     "docker:up": "docker compose -f docker/compose.yml up -d",
     "docker:down": "docker compose -f docker/compose.yml down -v",
     "docker:live": "tsx docker/live-smoke.ts",
-    "smoke:docker": "docker compose -f docker/compose.yml up -d --build && OPENCODE_BASE_URL=${OPENCODE_BASE_URL:-http://localhost:4096} PLUTO_LIVE_ADAPTER=paseo-opencode tsx docker/live-smoke.ts"
+    "smoke:docker": "docker compose -f docker/compose.yml up -d --build && OPENCODE_BASE_URL=${OPENCODE_BASE_URL:-http://localhost:4096} PLUTO_LIVE_ADAPTER=paseo-opencode tsx docker/live-smoke.ts",
+    "verify": "node scripts/verify.mjs"
   },
   "devDependencies": {
     "@types/node": "^20.14.0",

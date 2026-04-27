@@ -1,0 +1,89 @@
+# AGENTS.md — Pluto MVP-alpha Agent Guidance
+
+Quick reference for agents joining this repo. Keep changes focused and observable.
+
+## Repo Map
+
+```
+src/
+  contracts/      #types + PaseoTeamAdapter interface
+  orchestrator/   #TeamRunService, RunStore, static team config
+  adapters/
+    fake/                #in-process deterministic adapter
+    paseo-opencode/      #live adapter (Paseo CLI + OpenCode)
+  cli/submit.ts         #pnpm submit CLI
+
+tests/            #vitest specs (unit + E2E)
+docker/           #compose.yml, runtime, live-smoke.ts
+docs/            #harness.md, testing-and-evals.md, mvp-alpha.md, qa-checklist.md
+scripts/         #verify.mjs
+evals/           #cases, rubrics, goldens, reports, datasets
+```
+
+## Source-of-Truth Order
+
+1. **package.json** — canonical scripts, dependencies
+2. **src/contracts/adapter.ts** — adapter interface (only seam to runtime)
+3. **docs/mvp-alpha.md** — object contracts, acceptance criteria
+4. **docker/live-smoke.ts** — live behavior, artifact quality guards
+5. **QUALITY_SCORE.md** — quality dimensions and PR gates
+6. **RELIABILITY.md** — timeout, retry, cleanup policy
+
+## Task Workflow
+
+1. Understand the change and identify affected files.
+2. Run fast gates: `pnpm typecheck && pnpm test`.
+3. Implement changes. Keep changes minimal and focused.
+4. Add regression test in `tests/` (not `evals/`).
+5. Run full verify: `pnpm verify`.
+6. Update docs only if behavior changed.
+
+## Canonical Commands
+
+```bash
+# Fast local gates (no Docker, no live runtime)
+pnpm typecheck          #TypeScript strict
+pnpm test               #vitest run
+pnpm build              #dist/ output
+pnpm smoke:fake         #fake adapter E2E
+
+# Full verify (includes fast gates + no-endpoint blocker)
+pnpm verify
+
+# Live smoke (requires OPENCODE_BASE_URL)
+pnpm smoke:live         #host Paseo + OpenCode
+pnpm smoke:docker      #Docker stack + live smoke
+```
+
+## Placement Rules
+
+| What | Where | Notes |
+|------|-------|-------|
+| Unit tests | `tests/*.test.ts` | Fast, no I/O, deterministic |
+| Integration/smoke | `tests/*.test.ts` or `docker/live-smoke.ts` | Use fake adapter |
+| Live E2E | `docker/live-smoke.ts` | Requires OPENCODE_BASE_URL |
+| Eval cases | `evals/cases/` | Model/workflow quality |
+| Rubrics | `evals/rubrics/` | Scoring criteria |
+| Golden outputs | `evals/goldens/` | Reference artifacts |
+| Eval reports | `evals/reports/` | Generated evidence |
+| Datasets | `evals/datasets/` | Test data |
+
+> **Never mix tests/ and evals/.** `tests/` protects correctness; `evals/` protects model/agent/workflow quality.
+
+## Documentation Sync Rules
+
+- Behavior change → update docs/harness.md summary
+- Contract change → update docs/mvp-alpha.md and src/contracts/
+- Quality criteria change → update QUALITY_SCORE.md
+- Reliability policy change → update RELIABILITY.md
+- Never duplicate docs. Point to canonical sources.
+
+## Forbidden Actions
+
+- **Do not** commit secrets, tokens, .env files, Feishu/Lark IDs, or connection strings.
+- **Do not** use paid models without explicit authorization.
+- **Do not** add DB/Redis dependencies (unit tests must stay offline).
+- **Do not** remove artifact quality guards in live-smoke.ts.
+- **Do not** modify legacy branch.
+- **Do not** merge PR #60 (leave as draft).
+- **Do not** force-push.

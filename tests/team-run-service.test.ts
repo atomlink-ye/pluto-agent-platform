@@ -7,7 +7,8 @@ import { FakeAdapter } from "@/adapters/fake/index.js";
 import { DEFAULT_TEAM } from "@/orchestrator/team-config.js";
 import { RunStore } from "@/orchestrator/run-store.js";
 import { TeamRunService } from "@/orchestrator/team-run-service.js";
-import type { TeamTask } from "@/contracts/types.js";
+import type { AgentEvent, AgentRoleConfig, AgentSession, TeamConfig, TeamTask } from "@/contracts/types.js";
+import type { PaseoTeamAdapter } from "@/contracts/adapter.js";
 
 let workDir: string;
 
@@ -26,6 +27,87 @@ const buildTask = (id: string): TeamTask => ({
   workspacePath: workDir,
   minWorkers: 2,
 });
+
+class PlannerOnlyLeadAdapter implements PaseoTeamAdapter {
+  private events: AgentEvent[] = [];
+  private cursor = 0;
+  private runId = "";
+  private team!: TeamConfig;
+
+  async startRun(input: { runId: string; task: TeamTask; team: TeamConfig }): Promise<void> {
+    this.runId = input.runId;
+    this.team = input.team;
+  }
+
+  async createLeadSession(input: {
+    runId: string;
+    task: TeamTask;
+    role: AgentRoleConfig;
+  }): Promise<AgentSession> {
+    this.events.push(
+      this.event("lead_started", input.role.id, "lead-session", { provider: "test" }),
+      this.event("worker_requested", "planner", "lead-session", {
+        targetRole: "planner",
+        instructions: "Planner only request from a stochastic lead.",
+      }),
+    );
+    return { sessionId: "lead-session", role: input.role };
+  }
+
+  async createWorkerSession(input: {
+    runId: string;
+    role: AgentRoleConfig;
+    instructions: string;
+  }): Promise<AgentSession> {
+    const sessionId = `${input.role.id}-session`;
+    this.events.push(
+      this.event("worker_started", input.role.id, sessionId, { instructions: input.instructions }),
+      this.event("worker_completed", input.role.id, sessionId, {
+        output: `hello from ${input.role.id}`,
+      }),
+    );
+    return { sessionId, role: input.role };
+  }
+
+  async sendMessage(input: { runId: string; sessionId: string; message: string }): Promise<void> {
+    void input;
+    this.events.push(
+      this.event("lead_message", this.team.leadRoleId, "lead-session", {
+        kind: "summary",
+        markdown: "hello from lead\nhello from planner\nhello from generator\nhello from evaluator",
+      }),
+    );
+  }
+
+  async readEvents(): Promise<AgentEvent[]> {
+    const next = this.events.slice(this.cursor);
+    this.cursor = this.events.length;
+    return next;
+  }
+
+  async waitForCompletion(): Promise<AgentEvent[]> {
+    return this.readEvents();
+  }
+
+  async endRun(): Promise<void> {}
+
+  private event(
+    type: AgentEvent["type"],
+    roleId: AgentEvent["roleId"],
+    sessionId: string,
+    payload: Record<string, unknown>,
+  ): AgentEvent {
+    return {
+      id: `${type}-${this.events.length}`,
+      runId: this.runId,
+      ts: new Date().toISOString(),
+      type,
+      roleId,
+      sessionId,
+      payload,
+    };
+  }
+}
 
 describe("TeamRunService with FakeAdapter (E2E)", () => {
   it("dispatches at least 2 workers and writes a final artifact", async () => {
@@ -74,6 +156,30 @@ describe("TeamRunService with FakeAdapter (E2E)", () => {
     expect(artifactMd).toContain("planner");
     expect(artifactMd).toContain("generator");
     expect(artifactMd).toContain("evaluator");
+  });
+
+  it("falls back to dispatch missing workers when a live lead under-dispatches", async () => {
+    const adapter = new PlannerOnlyLeadAdapter();
+    const store = new RunStore({ dataDir: join(workDir, ".pluto") });
+    const service = new TeamRunService({
+      adapter,
+      team: DEFAULT_TEAM,
+      store,
+      pumpIntervalMs: 1,
+      timeoutMs: 250,
+      underdispatchFallbackMs: 1,
+    });
+
+    const result = await service.run(buildTask("t-underdispatch-fallback"));
+
+    expect(result.status).toBe("completed");
+    const roles = result.artifact!.contributions.map((c) => c.roleId);
+    expect(roles).toEqual(["planner", "generator", "evaluator"]);
+    const eventsRaw = await readFile(
+      join(workDir, ".pluto", "runs", result.runId, "events.jsonl"),
+      "utf8",
+    );
+    expect(eventsRaw).toContain("orchestrator_underdispatch_fallback");
   });
 
   it("rejects tasks with minWorkers < 2", async () => {

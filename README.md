@@ -50,6 +50,18 @@ pnpm smoke:docker
 
 Both paths use `opencode/minimax-m2.5-free` by default. Do **not** switch to a paid model without explicit authorization (see `docs/qa-checklist.md`).
 
+### Verification
+
+Run the full verify command (fast local gates):
+
+```bash
+pnpm verify
+```
+
+This runs: `pnpm typecheck && pnpm test && pnpm build && pnpm smoke:fake && no-endpoint-blocker-check`.
+
+See `scripts/verify.mjs` for details.
+
 If your OpenCode account requires login, layer the auth-only compose file:
 
 ```bash
