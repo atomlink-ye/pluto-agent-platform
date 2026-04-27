@@ -11,7 +11,7 @@ Operator: Pluto MVP-alpha Paseo Claude Root Manager (single-agent execution; no 
 - Reference branch (read-only): `legacy` @ `dd90f4d`
 - Push: NOT performed (per "不要直接 force push main"; PR creation also deferred until Link confirms remote workflow).
 
-Commits will be appended once the implementation snapshot is staged below — see §8 for the actual commit list.
+Commits are listed in §8; this report also includes a Hermes post-run verification/fix note for the host-path smoke script.
 
 ## 2. Implementation summary
 
@@ -150,6 +150,26 @@ $ PLUTO_LIVE_WORKSPACE=$PWD/.tmp/live-quickstart \
 # exit code 2 (intentional, distinct from generic failure exit 1)
 ```
 
+### 5.1 Hermes external verification note
+
+After the Root Manager finished, Hermes re-ran the core gates from outside the manager session. The external verifier found one host-only smoke-script issue: fake live smoke defaulted run storage to `/workspace/.pluto`, which is correct inside Docker but wrong for host-path runs that only set `PLUTO_LIVE_WORKSPACE`.
+
+That issue was fixed in commit `8e21fd8` by making host fake smoke default `PLUTO_DATA_DIR` to `${PLUTO_LIVE_WORKSPACE}/.pluto` while preserving explicit `PLUTO_DATA_DIR` overrides.
+
+A second external rerun found that the missing-endpoint blocker path could still spend time probing the Paseo CLI before returning `OPENCODE_BASE_URL unset`. Commit `f6163f7` reordered preflight so the missing OpenCode endpoint is reported immediately and deterministically before any Paseo CLI probe.
+
+External post-fix results:
+
+```text
+PLUTO_LIVE_ADAPTER=fake pnpm exec tsx docker/live-smoke.ts        # status: ok
+PLUTO_LIVE_ADAPTER=paseo-opencode pnpm exec tsx docker/live-smoke.ts # status: blocker, reason: OPENCODE_BASE_URL unset, exit 2
+pnpm typecheck                                                    # success
+pnpm test                                                         # 2 files / 8 tests passed
+pnpm build                                                        # success
+```
+
+This does not unblock live Paseo/OpenCode execution; it only makes the fake host smoke path reproducible and keeps the live blocker deterministic.
+
 ```text
 $ grep -RIn -E "(sk-[A-Za-z0-9]{16,}|api[_-]?key|secret|token|password|BEGIN.*PRIVATE)" \
     --include="*.ts" --include="*.json" --include="*.md" --include="*.yml" --include="*.sh" \
@@ -195,13 +215,16 @@ No paid-model code paths exist anywhere in this implementation.
 
 Branch is local-only; nothing has been pushed to `origin`.
 
-```
+```text
+f6163f7  fix(mvp-alpha): short-circuit live smoke without OpenCode endpoint
+8e21fd8  fix(mvp-alpha): make host fake live smoke use workspace data dir
+6a88d19  docs(mvp-alpha): append actual commit hashes to final-report
 73b71f7  docs(mvp-alpha): add Root Manager status, task tree, integration plan, final report
 54bf470  feat(mvp-alpha): scaffold Pluto agent team control plane
 1b76267  init                                                      # base from origin/main
 ```
 
-Two commits were created on top of `origin/main`:
+Five implementation/report commits currently exist on top of `origin/main` before this final Hermes report-note commit:
 
 1. **`54bf470` — feat(mvp-alpha): scaffold Pluto agent team control plane.**
    The full implementation snapshot (skeleton, contract, adapters, orchestrator, CLI, Docker, docs, tests). Staged via explicit file paths only; `.env`, `.pluto/`, `.tmp/`, `dist/` are gitignored and never tracked.
@@ -209,7 +232,16 @@ Two commits were created on top of `origin/main`:
 2. **`73b71f7` — docs(mvp-alpha): add Root Manager status, task tree, integration plan, final report.**
    The `.paseo-pluto-mvp/root/` output contract (this report and its siblings).
 
-(Note: the report you are reading was written **before** the commits ran; the hashes above are the post-commit truth, recorded after both commits succeeded — see the worktree's `git log --oneline -5` for verification.)
+3. **`6a88d19` — docs(mvp-alpha): append actual commit hashes to final-report.**
+   Root Manager post-commit report update containing the first implementation/doc commit hashes.
+
+4. **`8e21fd8` — fix(mvp-alpha): make host fake live smoke use workspace data dir.**
+   Hermes external verification fix: host fake live smoke now defaults `PLUTO_DATA_DIR` to `${PLUTO_LIVE_WORKSPACE}/.pluto`, avoiding writes to `/workspace/.pluto` when running outside Docker while preserving `PLUTO_DATA_DIR` override.
+
+5. **`f6163f7` — fix(mvp-alpha): short-circuit live smoke without OpenCode endpoint.**
+   Hermes external verification fix: the expected missing-endpoint blocker path now returns `OPENCODE_BASE_URL unset` before probing Paseo, avoiding host-specific Paseo CLI hangs during preflight.
+
+(Note: this section reflects the branch state after Hermes external verification before the final docs update. Verify the exact final branch tip with `git log --oneline -7`.)
 
 ## 9. Suggested Project Management status updates
 
