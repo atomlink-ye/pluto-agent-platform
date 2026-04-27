@@ -1,0 +1,53 @@
+# Pluto MVP-alpha minimal compose stack.
+#
+# Two services:
+#   pluto-runtime   — OpenCode `web` server, default model `opencode/minimax-m2.5-free`.
+#   pluto-mvp       — Pluto control plane: runs the live smoke script against pluto-runtime.
+#
+# Mounts:
+#   - The repo is mounted into both containers at /workspace so artifacts written
+#     by the team are visible on the host.
+#   - OpenCode auth is OPTIONAL and only mounted if compose.auth.local.yml is layered.
+#     Do NOT commit credentials. See README "Auth mount" section.
+#
+# Secrets:
+#   - .env.example uses placeholders only. Real .env is gitignored.
+
+services:
+  pluto-runtime:
+    build:
+      context: ..
+      dockerfile: docker/pluto-runtime/Dockerfile
+    image: pluto-mvp/pluto-runtime:alpha
+    working_dir: /workspace
+    environment:
+      OPENCODE_PORT: ${OPENCODE_PORT:-4096}
+      OPENCODE_MODEL: ${OPENCODE_MODEL:-opencode/minimax-m2.5-free}
+    volumes:
+      - ..:/workspace
+    ports:
+      - "${OPENCODE_PORT:-4096}:4096"
+    healthcheck:
+      test: ["CMD", "sh", "-c", "wget -qO- http://localhost:4096/healthz || curl -fsS http://localhost:4096/ >/dev/null"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+
+  pluto-mvp:
+    build:
+      context: ..
+      dockerfile: docker/pluto-mvp/Dockerfile
+    image: pluto-mvp/pluto-mvp:alpha
+    working_dir: /workspace
+    depends_on:
+      pluto-runtime:
+        condition: service_healthy
+    environment:
+      OPENCODE_BASE_URL: ${OPENCODE_BASE_URL:-http://pluto-runtime:4096}
+      OPENCODE_MODEL: ${OPENCODE_MODEL:-opencode/minimax-m2.5-free}
+      PASEO_PROVIDER: ${PASEO_PROVIDER:-opencode/minimax-m2.5-free}
+      PLUTO_DATA_DIR: /workspace/.pluto
+      PLUTO_LIVE_ARTIFACT_PATH: ${PLUTO_LIVE_ARTIFACT_PATH:-/workspace/.tmp/live-quickstart/hello-pluto.md}
+    volumes:
+      - ..:/workspace
+    command: ["node", "/usr/local/bin/pluto-mvp-entrypoint.cjs"]
