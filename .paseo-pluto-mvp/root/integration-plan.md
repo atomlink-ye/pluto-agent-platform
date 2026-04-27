@@ -1,10 +1,32 @@
 # Integration Plan — Live Paseo + OpenCode Adapter
 
-> Status: scaffold present (`src/adapters/paseo-opencode/`), live execution **gated** on the preconditions below. Fake adapter and Docker harness are independent of these gates.
+> Status as of iteration 2 (2026-04-27): live smoke is **working end-to-end** on host with the Paseo daemon and `opencode/minimax-m2.5-free`. The adapter and Docker stack reflect the architectural reality below.
 
-## 1. The protocol Pluto uses
+## 1. Architectural reality (verified)
 
-Pluto does not assume the lead has a "delegate" tool. Instead, it asks the lead to emit a **line-based marker** in its own stdout:
+- **Paseo CLI is a macOS app bundle.** `/Users/<user>/.local/bin/paseo` is a thin shell wrapper that invokes `/Applications/Paseo.app/Contents/MacOS/Paseo`. There is no Linux binary distribution today, so Paseo cannot be installed inside a Linux Docker container.
+- **The Paseo daemon runs on the host** (default `127.0.0.1:6767`). Provider CLIs (`claude`, `codex`, `opencode`) are spawned by the daemon as host processes.
+- **`paseo provider ls --json`** reports `opencode` as `available` with default mode `build` and modes `Build, Plan, Orchestrator`.
+- **`opencode/minimax-m2.5-free`** returns deterministic responses end-to-end via `paseo run --provider opencode/minimax-m2.5-free --mode build`. This is the model used by every live agent.
+- **`paseo logs <id> --filter text`** emits plain text in the form
+  ```
+  [User] <prompt>
+  <assistant text>
+  [Thought] <reasoning>
+  ```
+  Assistant turns are NOT tagged. There is no `--json` mode for `logs`.
+- **`paseo inspect <id> --json`** returns metadata only (no conversation text).
+- **`paseo wait`** uses `--timeout <seconds>` (NOT `--wait-timeout`).
+
+Implications:
+
+1. The live PaseoOpenCodeAdapter must **run on the host** that owns the Paseo daemon.
+2. The OpenCode runtime container in `docker/compose.yml` is **optional** — it serves the OpenCode web UI on port 4096 for debugging, but the live adapter does not need it because `paseo run --provider opencode/...` invokes the host `opencode` CLI directly.
+3. The previous `pluto-mvp` Linux container was structurally infeasible and has been removed from compose.
+
+## 2. The protocol Pluto uses with the lead
+
+Pluto does not assume the lead has a "delegate" tool. The lead emits **one line per worker** in plain text:
 
 ```
 WORKER_REQUEST: <roleId> :: <one-line instructions>
@@ -12,57 +34,66 @@ WORKER_REQUEST: <roleId> :: <one-line instructions>
 
 The orchestrator subscribes to the lead's text stream via `paseo logs <id> --follow --filter text` and translates each marker into an internal `worker_requested` event.
 
-After all workers report back, Pluto sends `paseo send <leadId> "All workers have reported. SUMMARIZE..."`. The lead's next text reply is treated as the final artifact markdown (`lead_message`, `kind="summary"`).
+After all workers report back, Pluto sends `paseo send <leadId> "<single-line summary request>"`. The lead's reply is the final artifact markdown. The adapter:
 
-Worker output is captured by reading the worker session's final text after `paseo wait <agentId>` returns.
+- Collapses multi-line summary requests into a single line (`/\r?\n+/g → " | "`) so `paseo logs` renders the operator turn as a single `[User] …` line. Without that, the assistant-text extractor cannot disambiguate user-message body from assistant text (paseo only tags `[User]` / `[Thought]`).
+- Reads the lead's final text via `paseo logs <id> --filter text --tail N` after `paseo send` (and a defensive `paseo wait`) returns. The extractor slices from the last `[User]` line and drops `[Tag]` lines.
 
-This protocol is intentionally LLM-friendly so it works whether the model is Claude, Codex, or OpenCode — provided the lead can emit arbitrary text.
+## 3. CLI surface used by the adapter
 
-## 2. What the live adapter needs to actually run
+| Adapter call | Paseo CLI |
+| --- | --- |
+| spawn lead/worker | `paseo run --detach --json --provider opencode/minimax-m2.5-free --mode build --cwd <abs> --title <t> "<prompt>"` |
+| stream lead text | `paseo logs <id> --follow --filter text` |
+| wait for idle | `paseo wait <id> --timeout <s> --json` |
+| send follow-up | `paseo send <id> "<single-line msg>"` (default blocks until idle) |
+| read final text | `paseo logs <id> --filter text --tail <N>` |
+| teardown | `paseo delete <id>` (no `--force` flag) |
 
-### 2.1 paseo provider for OpenCode
+Defaults set in the adapter:
 
-`paseo run --provider <id>` defaults to `claude`. The live MVP asks paseo to spawn agents that hit the OpenCode runtime configured with `opencode/minimax-m2.5-free`.
+- `provider = opencode/minimax-m2.5-free` (env `PASEO_PROVIDER`).
+- `mode = build` (the OpenCode-provider default; do NOT use `bypassPermissions`, which is a Claude-provider mode).
+- `waitTimeoutSec = 180`, `logsTail = 200`.
 
-- **Required**: a paseo provider alias whose execution path is the local OpenCode runtime (`opencode web` server on `OPENCODE_BASE_URL`).
-- **Suggested name**: `opencode/minimax-m2.5-free` (matches `PASEO_PROVIDER` in `.env.example`).
-- **Open question**: paseo CLI on this host does not advertise an `opencode` provider out of the box. Either (a) configure paseo to register one, or (b) route around paseo and call the OpenCode HTTP API directly.
+## 4. Live smoke entry points
 
-Until (a) is in place, `paseo run --provider opencode/minimax-m2.5-free` will fail. This is the dominant blocker for live smoke.
+```
+pnpm smoke:fake     → in-process FakeAdapter, offline, instant
+pnpm smoke:live     → host paseo + opencode (requires OPENCODE_BASE_URL set)
+pnpm smoke:docker   → bring up pluto-runtime container, then run smoke:live
+                      (the container is optional — it just exposes the OpenCode
+                      web UI on http://localhost:4096 for debugging)
+```
 
-### 2.2 OpenCode auth + free model availability
+`docker/live-smoke.ts` keeps a deterministic preflight: when `OPENCODE_BASE_URL` is unset, it short-circuits with `{"status":"blocker","reason":"OPENCODE_BASE_URL unset",…}` and exits with code 2 BEFORE probing the Paseo CLI (commit `f6163f7`). `pnpm smoke:docker` injects `OPENCODE_BASE_URL=http://localhost:4096` automatically. `PLUTO_FAKE_LIVE=1` is honored as a synonym for `PLUTO_LIVE_ADAPTER=fake`.
 
-- The Docker runtime image installs `opencode-ai@1.4.3` (legacy default).
-- `opencode/minimax-m2.5-free` requires login to the relevant OpenCode account at runtime. Auth is mounted into the container at `~/.config/opencode/` (see `docker/compose.auth.local.yml` style; not committed, only documented).
-- Free model availability is provider-side; if MiniMax 2.5 free is rate-limited or removed, switch to another free profile (do NOT switch to paid) and document the change in `final-report.md`.
+## 5. What changed in iteration 2 (Docker live closure)
 
-### 2.3 paseo daemon
+- `pluto-mvp` Linux service removed from `docker/compose.yml` (paseo not installable in Linux). `docker/pluto-mvp/` deleted.
+- `pluto-runtime` container kept as the optional OpenCode debug endpoint.
+- `PaseoOpenCodeAdapter`:
+  - default `mode` flipped from `bypassPermissions` to `build`.
+  - text extraction switched from `paseo inspect --json` to `paseo logs --filter text`.
+  - `paseo wait` now passes `--timeout <s>`.
+  - SUMMARIZE message is normalized to a single line.
+  - Static `extractAssistantTextFromLogs` exposed for unit testing.
+  - Idempotent `paseo delete` cleanup in `endRun`.
+- `live-smoke.ts` defaults `WORKSPACE` to `${cwd}/.tmp/live-quickstart` (host-friendly) and accepts `PLUTO_FAKE_LIVE=1`.
+- New unit suite `tests/paseo-opencode-adapter.test.ts` covers log parsing + adapter protocol against a mocked process runner.
+- README, qa-checklist, and this plan updated.
 
-`paseo run` requires the paseo daemon (`paseo daemon status`). The Docker image needs paseo on PATH and either runs `paseo start` in entrypoint OR mounts the host paseo socket. MVP-alpha docs the second option (host paseo, mount socket via `/var/run/paseo.sock` or similar) so we don't ship a paseo build inside the container.
+## 6. Risks still tracked
 
-### 2.4 Workspace mount
-
-Lead and worker `--cwd` must point at a path visible inside the container if running in Docker (`/workspace`). The CLI defaults to `.tmp/pluto-cli` for host-mode runs.
-
-## 3. Risk register
-
-| Risk | Severity | Mitigation |
+| Risk | Severity | Notes |
 | --- | --- | --- |
-| paseo lacks an opencode provider alias | High | Document in this file; either register a provider or replace adapter with direct OpenCode HTTP client |
-| Lead model ignores `WORKER_REQUEST` protocol | Medium | Strong system prompt, evaluator role validates; if the model still drops it, fall back to "orchestrator dispatches statically" mode (lead just produces plan) |
-| Free model unavailable | Medium | Don't auto-fail — emit blocker in final report and keep fake adapter passing |
-| Worker `paseo wait` deadlocks | Low | Per-worker timeout via `--wait-timeout`; orchestrator-level `timeoutMs` catches the whole run |
-| stdout JSON shape from `paseo inspect --json` differs from assumed `finalText` field | Medium | Adapter falls back to raw stdout; integration tests must pin the actual shape |
+| Lead model ignores `WORKER_REQUEST` markers | Medium | Strong system prompt + the orchestrator emits `team_run_underdispatched` if fewer workers reported than required |
+| Free model rate limit / removal | Medium | Default is `opencode/minimax-m2.5-free`; if it disappears, do NOT switch to paid — declare blocker |
+| Paseo CLI surface drift | Low | Empirical CLI usage is documented in adapter's top-of-file comment; one place to refresh |
+| Multi-line user message bleeding into assistant text | Closed | Adapter normalizes `paseo send` payload to one line |
+| paseo OS distribution change (e.g. linux build appears) | Low | Compose is structured so a future linux paseo binary could re-introduce the `pluto-mvp` service without breaking host-mode |
 
-## 4. What to do if live integration is blocked
+## 7. Path to richer live tests
 
-1. Mark Project Management item "Implement live Paseo/OpenCode adapter" as **Blocked** with reason: "no paseo provider for opencode runtime on this host".
-2. Mark "Create Docker live smoke for Team Lead agent team" as **Blocked** with the same root cause.
-3. Keep "Initialize / Define adapter / Implement Team Lead orchestrator / Package Paseo + OpenCode runtime in Docker / Write README + QA checklist" as **Done** — they do not depend on live runtime.
-4. Final-report must print a single-paragraph "live smoke blocker" section identifying paseo provider config as the gating step.
-
-## 5. Path forward
-
-Smallest unblock: configure paseo with a custom provider that executes `opencode run --model opencode/minimax-m2.5-free` inside the runtime container. Once that exists, Pluto's existing adapter should work end-to-end with no code change beyond the provider name in `.env`.
-
-If paseo doesn't yet support OpenCode providers as a first-class concept, the alternative implementation is to write `OpenCodeHttpAdapter` against the OpenCode HTTP API directly. The contract (`PaseoTeamAdapter`) does not need to change.
+- Today the smoke validates: lead session, ≥2 worker contributions, artifact references each role. That matches the MVP-alpha contract.
+- Next steps when warranted: add a second smoke that exercises iterative lead/worker conversation (multiple SUMMARIZE → revision rounds), stricter artifact JSON-schema validation, and parallel worker dispatch.

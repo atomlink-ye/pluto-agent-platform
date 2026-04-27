@@ -16,6 +16,8 @@ Run after every meaningful change. Mark `[x]` only when the actual command succe
 
 ## 3. Docker stack
 
+> Note: only the OpenCode runtime container is built. The previous `pluto-mvp` Linux service was structurally infeasible (Paseo CLI is a macOS app bundle and cannot be installed in a Linux container) and was removed.
+
 - [ ] `docker compose -f docker/compose.yml build` succeeds with no auth files baked in.
 - [ ] `docker compose -f docker/compose.yml up -d` brings `pluto-runtime` healthy.
 - [ ] `docker compose -f docker/compose.yml exec pluto-runtime cat /root/.config/opencode/opencode.json` shows `"model": "opencode/minimax-m2.5-free"`.
@@ -27,14 +29,22 @@ Run after every meaningful change. Mark `[x]` only when the actual command succe
 - [ ] `grep -R "sk-" -- src docker docs` returns no matches (heuristic, not a security audit).
 - [ ] `OPENCODE_MODEL` resolves to `opencode/minimax-m2.5-free` everywhere it appears.
 
-## 5. Live smoke (gated)
+## 5. Live smoke (host paseo + opencode free model)
 
-Only attempt once the preconditions in `.paseo-pluto-mvp/root/integration-plan.md` are met:
+Live runs from the host that owns the Paseo daemon (Paseo is macOS-only). Preconditions in `.paseo-pluto-mvp/root/integration-plan.md` §1.
 
-- [ ] `paseo --version` works inside the container or on the host.
-- [ ] `pnpm docker:live` returns `{"status":"ok",...}` and writes the artifact.
-- [ ] `events.jsonl` shows >=2 `worker_completed` and one `lead_message kind=summary`.
+- [ ] `paseo daemon status` shows the daemon running on host.
+- [ ] `paseo provider ls --json` lists `opencode` as `available` with default mode `build`.
+- [ ] `OPENCODE_BASE_URL=http://localhost:4096 pnpm smoke:live` returns `{"status":"ok",...}` (allow ~40–80s for the model).
+- [ ] `events.jsonl` contains: `run_started`, `lead_started`, ≥3 `worker_requested`, ≥3 `worker_started`, ≥3 `worker_completed`, one `lead_message` (kind=`summary`), one `artifact_created`, one terminal `run_completed`.
+- [ ] `artifact.md` contains the strings `lead`, `planner`, `generator`, `evaluator` (assertion the smoke script enforces).
 - [ ] If blocked, the script prints a `{"status":"blocker","reason":...}` payload and exits with code 2.
+
+### 5.1 Full Docker live mode (`pnpm smoke:docker`)
+
+- [ ] Builds the `pluto-runtime` image and brings it up healthy on port 4096.
+- [ ] Auto-sets `OPENCODE_BASE_URL=http://localhost:4096` and runs the host-mode live smoke.
+- [ ] Returns `{"status":"ok",...}` end-to-end with three real worker contributions.
 
 ## 6. Concurrency cap (operator)
 

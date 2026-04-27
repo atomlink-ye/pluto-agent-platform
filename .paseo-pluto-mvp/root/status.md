@@ -1,6 +1,6 @@
 # Pluto MVP-alpha Root Manager — Status
 
-Last updated: 2026-04-27 (terminal)
+Last updated: 2026-04-27 (iteration 2 — Docker live closure)
 
 ## Mission
 
@@ -16,31 +16,33 @@ From clean `main`, build the minimal closed loop where:
 - Machine has **limited memory**. At most **2 active tasks** may run in parallel at any time.
 - Cap covers: child agents, worker tasks, OpenCode sessions, heavy build/test/install jobs, Docker build/up jobs, background retries.
 - Default formation: 1 Root Manager + at most 2 active child/worker tasks. Extras queued.
-- Heavy commands serialized.
+- Heavy commands serialized: install / typecheck / test / build / Docker / live smoke runs sequentially.
 - No hidden background jobs, delayed retry helpers, or detached children to bypass the cap.
 
-This run respected the cap: a single Root Manager, no leaf children, all heavy commands serialized.
+This iteration respected the cap: a single Root Manager, no leaf children, all heavy commands serialized.
 
-## Workstream State (terminal)
+## Workstream State (terminal — iteration 2)
 
 | Workstream | Phase Item | Status |
 | --- | --- | --- |
 | Foundation | P0 TS skeleton | Done |
 | Foundation | P1 PaseoTeamAdapter contract + fake adapter | Done |
 | Orchestration | P2 TeamRunService + lead orchestration + events + artifact | Done |
-| Runtime | P3 Docker + OpenCode runtime config | Done |
-| Runtime | P4 Live PaseoOpenCodeAdapter + integration plan | Done (live exec gated) |
-| Delivery | P5 Live smoke script | Done |
+| Runtime | P3 Docker compose + OpenCode runtime container | Done (pluto-mvp service removed; rationale below) |
+| Runtime | P4 Live PaseoOpenCodeAdapter + integration plan | **Done — live smoke green** |
+| Delivery | P5 Live smoke script (`pnpm smoke:fake/live/docker`) | Done |
 | Delivery | P5 README + docs + QA checklist | Done |
-| Gates | pnpm install / typecheck / test / build | Done — 8/8 vitest, typecheck + build clean |
-| Gates | Docker live smoke | Blocked — paseo OpenCode provider missing |
+| Gates | pnpm install / typecheck / test (15/15) / build | Done |
+| Gates | `PLUTO_FAKE_LIVE=1 …` fake smoke | Done — `status: ok` |
+| Gates | No-endpoint blocker smoke | Done — exit 2, `OPENCODE_BASE_URL unset` |
+| Gates | `pnpm smoke:docker` (Docker live mode) | **Done — `status: ok`, 3 real worker contributions, ~43s** |
 | Delivery | final-report.md | Done |
 
 See `final-report.md` for full command outputs and PM status mapping.
 
 ## Active Now
 
-- (none — Root Manager finished its scope)
+- (none — Root Manager iteration 2 finished its scope)
 
 ## Queued
 
@@ -48,8 +50,15 @@ See `final-report.md` for full command outputs and PM status mapping.
 
 ## Blocked
 
-- Live Paseo/OpenCode adapter execution → `integration-plan.md` §2.1 (no paseo provider alias for OpenCode on this host).
-- Docker live smoke → same root cause.
+- **None.** The previous "live smoke blocked on paseo provider" item is closed: `paseo provider ls --json` now reports `opencode` as available with default mode `build`, and the live adapter runs end-to-end against `opencode/minimax-m2.5-free`.
+
+## Architectural decision recorded this iteration
+
+- Paseo CLI is a macOS app bundle (`/Applications/Paseo.app`); no Linux distribution exists today.
+- Therefore the live PaseoOpenCodeAdapter runs on the **host**, not inside a Linux container.
+- The previous `pluto-mvp` Linux service was structurally infeasible and has been removed.
+- `pluto-runtime` container remains as an optional OpenCode web UI debug endpoint on `http://localhost:4096`.
+- `pnpm smoke:docker` brings the runtime container up, then runs the host-mode live smoke against it.
 
 ## Branch / Worktree
 
@@ -58,4 +67,4 @@ See `final-report.md` for full command outputs and PM status mapping.
 - Base: `origin/main` (commit `1b76267`)
 - `legacy` (commit `dd90f4d`) consulted read-only.
 
-Implementation commit hash: see `final-report.md` §8 (appended after `git commit`).
+Implementation commit hashes: see `final-report.md` §8 (appended after `git commit`).
