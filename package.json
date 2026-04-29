@@ -1,0 +1,33 @@
+{
+  "name": "pluto-agent-platform",
+  "version": "0.1.0-alpha.0",
+  "private": true,
+  "description": "Pluto MVP-alpha: minimal agent team control plane on top of Paseo + OpenCode.",
+  "type": "module",
+  "engines": {
+    "node": ">=20.10",
+    "pnpm": ">=9"
+  },
+  "packageManager": "pnpm@9.12.3",
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "build": "tsc -p tsconfig.build.json",
+    "submit": "tsx src/cli/submit.ts",
+    "smoke:fake": "PLUTO_LIVE_ADAPTER=fake tsx docker/live-smoke.ts",
+    "smoke:live": "PLUTO_LIVE_ADAPTER=paseo-opencode tsx docker/live-smoke.ts",
+    "docker:build": "docker compose -f docker/compose.yml build",
+    "docker:up": "docker compose -f docker/compose.yml up -d",
+    "docker:down": "docker compose -f docker/compose.yml down -v",
+    "docker:live": "tsx docker/live-smoke.ts",
+    "smoke:docker": "docker compose -f docker/compose.yml up -d --build && OPENCODE_BASE_URL=${OPENCODE_BASE_URL:-http://localhost:4096} PLUTO_LIVE_ADAPTER=paseo-opencode tsx docker/live-smoke.ts",
+    "verify": "node scripts/verify.mjs"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.0",
+    "tsx": "^4.19.2",
+    "typescript": "^5.6.3",
+    "vitest": "^2.1.8"
+  }
+}

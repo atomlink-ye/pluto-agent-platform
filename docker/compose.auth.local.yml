@@ -1,0 +1,13 @@
+# Optional layer that mounts the operator's local OpenCode auth into the runtime.
+#
+# Usage:
+#   docker compose -f docker/compose.yml -f docker/compose.auth.local.yml up --build
+#
+# The `~/.config/opencode` path is operator-specific. NEVER commit the contents.
+
+services:
+  pluto-runtime:
+    volumes:
+      - ${HOME}/.config/opencode:/root/.config/opencode-host:ro
+    environment:
+      PLUTO_AUTH_HOST_DIR: /root/.config/opencode-host
