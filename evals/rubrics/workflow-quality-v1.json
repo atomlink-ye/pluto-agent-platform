@@ -1,0 +1,35 @@
+{
+  "id": "workflow-quality-v1",
+  "version": 1,
+  "description": "Automated deterministic scoring rubric for Pluto MVP-alpha fake-adapter workflow quality.",
+  "dimensions": [
+    {
+      "id": "event_sequence",
+      "description": "The persisted run event log shows an ordered workflow from orchestration start through lead start, worker activity, lead summary, artifact creation, and terminal completion.",
+      "weight": 0.35,
+      "pass_criteria": "Events contain run_started before lead_started, at least one worker_requested/worker_started/worker_completed chain before lead_message, artifact_created after lead_message, and run_completed as the terminal event.",
+      "fail_criteria": "Any required stage is missing, out of order, or the terminal event is run_failed or absent."
+    },
+    {
+      "id": "role_coverage",
+      "description": "The team lead and all MVP worker roles are represented in events and the final artifact.",
+      "weight": 0.25,
+      "pass_criteria": "lead, planner, generator, and evaluator all appear via events and/or contributions, and the artifact markdown references all four role names.",
+      "fail_criteria": "Any required role is absent from the observable workflow or omitted from the final artifact."
+    },
+    {
+      "id": "artifact_cleanliness",
+      "description": "The artifact is suitable for an operator and does not leak internal adapter prompt protocol fragments.",
+      "weight": 0.25,
+      "pass_criteria": "Neither artifact markdown nor worker contribution output contains 'Instructions from the Team Lead:' or 'Reply with your contribution only'.",
+      "fail_criteria": "Any forbidden protocol fragment appears in the final artifact or worker contribution output."
+    },
+    {
+      "id": "worker_contributions",
+      "description": "The workflow includes enough completed worker outputs to satisfy MVP-alpha team convergence expectations.",
+      "weight": 0.15,
+      "pass_criteria": "At least two worker_completed events exist and at least two worker contributions are included in the final artifact object.",
+      "fail_criteria": "Fewer than two workers complete or fewer than two contributions are present in the final artifact."
+    }
+  ]
+}

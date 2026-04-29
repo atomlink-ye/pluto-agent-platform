@@ -17,3 +17,4 @@ dist/
 
 coverage/
 .vitest-cache/
+evals/reports/*.json

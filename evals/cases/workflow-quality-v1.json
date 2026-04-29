@@ -1,0 +1,39 @@
+{
+  "id": "workflow-quality-v1",
+  "version": 1,
+  "description": "Deterministic Pluto MVP-alpha workflow-quality eval that runs the fake adapter through the real TeamRunService and verifies convergence from lead dispatch through worker completion to a clean markdown artifact.",
+  "input": {
+    "adapter": "fake",
+    "task": {
+      "id": "workflow-quality-v1-fake-task",
+      "title": "Pluto MVP-alpha workflow quality reference run",
+      "prompt": "Produce a markdown artifact that demonstrates team convergence. The artifact must clearly include the team lead synthesis plus planner, generator, and evaluator contributions, and it must not expose internal adapter prompt protocol text.",
+      "minWorkers": 2,
+      "expectedRoles": ["lead", "planner", "generator", "evaluator"]
+    }
+  },
+  "expected_outcomes": {
+    "event_sequence": [
+      "run_started",
+      "lead_started",
+      "worker_requested",
+      "worker_started",
+      "worker_completed",
+      "lead_message",
+      "artifact_created",
+      "run_completed"
+    ],
+    "role_coverage": {
+      "requiredRoles": ["lead", "planner", "generator", "evaluator"],
+      "artifactMustReferenceAllRoles": true,
+      "workerRolesMustContribute": ["planner", "generator", "evaluator"]
+    },
+    "artifact_cleanliness": {
+      "description": "The final artifact and worker contribution text must not leak internal protocol strings used to coordinate workers.",
+      "forbiddenFragments": [
+        "Instructions from the Team Lead:",
+        "Reply with your contribution only"
+      ]
+    }
+  }
+}

@@ -9,28 +9,35 @@ This directory protects model/agent/workflow quality (vs `tests/` which protects
 | `cases/` | Evaluation cases: inputs and expected outcomes |
 | `rubrics/` | Scoring criteria for each case |
 | `goldens/` | Reference artifacts (expected outputs) |
-| `reports/` | Generated evaluation reports |
+| `reports/` | Generated evaluation reports (JSON reports are transient and gitignored) |
 | `datasets/` | Test data, fixtures, prompts |
 
 ## Principles
 
 - **tests/** = fast, deterministic, CI-safe
-- **evals/** = slower, human judgment, evaluation pipelines
+- **evals/** = workflow/model quality evaluation pipelines
 - **Never mix them**
 - Reports are evidence, not source-of-truth
 
-## Future Eval Runner
+## Workflow Quality Eval
 
-A fake evaluator runner may be added here if it becomes genuinely useful for automated scoring. Not added in MVP-alpha.
+MVP-alpha now includes one deterministic automated eval lane:
+
+```bash
+pnpm eval:workflow
+```
+
+This command runs `evals/runner.ts` with the in-process `FakeAdapter` only (no Docker, no live model calls), scores the run against `rubrics/workflow-quality-v1.json`, writes `evals/reports/workflow-quality-latest.json`, and prints a markdown summary.
 
 ## Current State
 
-MVP-alpha has a **skeleton only**. The evals infrastructure is stubbed for future phases:
+MVP-alpha has one real workflow-quality eval plus room for future lanes:
 
-- No cases defined yet
-- No rubrics defined yet
-- No goldens defined yet
-- No automated scoring
+- `cases/workflow-quality-v1.json` — deterministic fake-adapter case
+- `rubrics/workflow-quality-v1.json` — weighted scoring dimensions
+- `goldens/workflow-quality-v1.md` — reference passing artifact
+- `datasets/fake-run-fixture.json` — expected fake run event shapes
+- `runner.ts` — automated offline scorer
 
 ## When to Add Evals
 

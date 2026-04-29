@@ -5,7 +5,7 @@
 | Category | Location | Purpose | Characteristics |
 |----------|----------|---------|-----------------|
 | **tests/** | `tests/*.test.ts` | Protect correctness | Fast, deterministic, no I/O |
-| **evals/** | `evals/cases/`, `evals/rubrics/` | Protect model/workflow quality | Slower, human judgment |
+| **evals/** | `evals/cases/`, `evals/rubrics/`, `evals/runner.ts` | Protect model/workflow quality | Deterministic lanes plus future human judgment |
 
 **Never mix them.** tests/ runs in CI. evals/ is for evaluation pipelines.
 
@@ -33,7 +33,7 @@
 ### Eval Cases (`evals/cases/`)
 
 - Model/workflow quality evaluation
-- Free-form, human judgment required
+- Free-form or automated workflow-quality scenarios
 - Not automated in CI
 
 ### Rubrics (`evals/rubrics/`)
@@ -51,6 +51,12 @@
 - Test data for evals
 - Fixtures, prompts, expected outputs
 
+### Workflow Eval Runner (`evals/runner.ts`)
+
+- Offline deterministic scoring with `FakeAdapter`
+- Writes transient machine-readable reports under `evals/reports/`
+- Runs with `pnpm eval:workflow`
+
 ## Canonical Commands
 
 ```bash
@@ -61,6 +67,9 @@ pnpm build
 
 # Fake adapter E2E
 pnpm smoke:fake
+
+# Deterministic workflow-quality eval (fake adapter, no live calls)
+pnpm eval:workflow
 
 # No-endpoint blocker (asserts exit 2)
 PLUTO_LIVE_ADAPTER=paseo-opencode pnpm exec tsx docker/live-smoke.ts

@@ -50,10 +50,10 @@ Assertions:
 
 ## Future Eval Gates
 
-To be added in `evals/`:
+Implemented and planned `evals/` gates:
 
 - **Model quality:** Does the model produce useful artifacts?
-- **Workflow quality:** Do agent teams converge on good output?
+- **Workflow quality:** Implemented deterministic fake-adapter lane via `pnpm eval:workflow`.
 - **Human eval:** Are artifacts actually useful?
 
 ## PR Acceptance Gates

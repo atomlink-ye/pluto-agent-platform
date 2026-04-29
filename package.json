@@ -15,6 +15,7 @@
     "test:watch": "vitest",
     "build": "tsc -p tsconfig.build.json",
     "submit": "tsx src/cli/submit.ts",
+    "eval:workflow": "tsx evals/runner.ts",
     "smoke:fake": "PLUTO_LIVE_ADAPTER=fake tsx docker/live-smoke.ts",
     "smoke:live": "PLUTO_LIVE_ADAPTER=paseo-opencode tsx docker/live-smoke.ts",
     "docker:build": "docker compose -f docker/compose.yml build",
