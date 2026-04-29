@@ -7,6 +7,8 @@ dist/
 .tmp/
 .tmpartifacts/
 .opencode-serve.json
+.worktrees/
+packages/
 
 .env
 .env.local
