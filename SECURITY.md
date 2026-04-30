@@ -15,6 +15,20 @@
 - Use `git diff --stat` to check for new sensitive files
 - Use `grep -R "sk-" -- src docker docs` as heuristic check
 
+### Evidence redaction (MVP-beta)
+
+Evidence generation (`src/orchestrator/evidence.ts`) **must** redact before persisting `evidence.md` / `evidence.json`:
+
+- **Auth tokens / OAuth tokens / API keys** — env names: `CLAUDE_CODE_OAUTH_TOKEN`, `ANTHROPIC_API_KEY`, `OPENCODE_API_KEY`, `OPENROUTER_API_KEY`, `DAYTONA_API_KEY`, plus generic `*_TOKEN`, `*_API_KEY`, `*_SECRET` patterns.
+- **JWT-like tokens** — three-segment base64 strings (e.g. `eyJ...`).
+- **GitHub tokens** — `ghp_`, `gho_`, `ghu_`, `ghs_`, `ghr_` prefixed strings.
+- **sk-prefixed API keys** — `sk-*`, `pk-*` patterns.
+- **Raw provider stderr / debug protocol noise** — must not be reproduced verbatim; summarized only.
+- **`.env`-style values** — `KEY=VALUE` pairs where the key matches `*_TOKEN`, `*_KEY`, `*_SECRET`, `*_PASSWORD`, `*_CREDENTIAL`, `*_API_KEY`.
+- **Absolute runtime workspace paths** — `EvidencePacketV0.workspace` remains `string | null`, but absolute paths are persisted as `[REDACTED:workspace-path]`.
+
+The redactor replaces matched values with `[REDACTED]` or `[REDACTED:<ENV_NAME>]`. Smoke tests (`pnpm smoke:fake`) assert no token-shaped substrings appear in evidence files. Unit tests in `tests/evidence-redaction.test.ts` cover all patterns.
+
 ## Forbidden Committed Materials
 
 Do **not** commit:

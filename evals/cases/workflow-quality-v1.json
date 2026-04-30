@@ -34,6 +34,12 @@
         "Instructions from the Team Lead:",
         "Reply with your contribution only"
       ]
+    },
+    "evidence_quality": {
+      "description": "The golden fake-adapter run must persist an evidence packet suitable for governance inspection.",
+      "requiredFiles": ["evidence.md", "evidence.json"],
+      "jsonSchema": "EvidencePacketV0",
+      "forbidSecretShapedContent": true
     }
   }
 }

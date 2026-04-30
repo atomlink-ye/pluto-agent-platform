@@ -30,6 +30,7 @@ interface CliFlags {
   adapter: "fake" | "paseo-opencode";
   artifact?: string;
   minWorkers: number;
+  maxRetries: number;
 }
 
 function parseFlags(argv: string[]): CliFlags {
@@ -37,6 +38,7 @@ function parseFlags(argv: string[]): CliFlags {
     workspace: ".tmp/pluto-cli",
     adapter: "fake",
     minWorkers: 2,
+    maxRetries: 1,
   };
   for (let i = 0; i < argv.length; i++) {
     const k = argv[i];
@@ -69,6 +71,10 @@ function parseFlags(argv: string[]): CliFlags {
         flags.minWorkers = Number(v);
         i++;
         break;
+      case "--max-retries":
+        flags.maxRetries = parseMaxRetries(v);
+        i++;
+        break;
       default:
         if (k && k.startsWith("--")) throw new Error(`unknown_flag:${k}`);
     }
@@ -77,6 +83,17 @@ function parseFlags(argv: string[]): CliFlags {
     throw new Error("missing_required_flag: --title and --prompt are required");
   }
   return flags as CliFlags;
+}
+
+function parseMaxRetries(value: string | undefined): number {
+  if (value === undefined || !/^\d+$/.test(value)) {
+    throw new Error("invalid_max_retries: --max-retries must be an integer from 0 to 3");
+  }
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed < 0 || parsed > 3) {
+    throw new Error("invalid_max_retries: --max-retries must be an integer from 0 to 3");
+  }
+  return parsed;
 }
 
 async function main() {
@@ -100,6 +117,7 @@ async function main() {
     store,
     timeoutMs: 10 * 60 * 1000,
     pumpIntervalMs: 50,
+    maxRetries: flags.maxRetries,
   });
 
   const task: TeamTask = {

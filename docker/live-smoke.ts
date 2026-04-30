@@ -26,12 +26,13 @@
  */
 import { mkdir, readFile } from "node:fs/promises";
 import { resolve } from "node:path";
+import { existsSync } from "node:fs";
 import * as process from "node:process";
 
 import { FakeAdapter } from "../src/adapters/fake/index.js";
 import { PaseoOpenCodeAdapter } from "../src/adapters/paseo-opencode/index.js";
 import { DEFAULT_RUNNER } from "../src/adapters/paseo-opencode/process-runner.js";
-import { DEFAULT_TEAM, RunStore, TeamRunService } from "../src/orchestrator/index.js";
+import { DEFAULT_TEAM, RunStore, TeamRunService, validateEvidencePacketV0 } from "../src/orchestrator/index.js";
 import type { PaseoTeamAdapter } from "../src/contracts/adapter.js";
 
 const WORKSPACE = resolve(
@@ -182,7 +183,59 @@ async function main() {
     process.exit(1);
   }
 
-  console.log(JSON.stringify({ status: "ok", summary }, null, 2));
+  // --- MVP-beta evidence assertions ---
+  const evidenceMdPath = `${store.runDir(result.runId)}/evidence.md`;
+  const evidenceJsonPath = `${store.runDir(result.runId)}/evidence.json`;
+
+  if (!existsSync(evidenceMdPath) || !existsSync(evidenceJsonPath)) {
+    console.error(
+      JSON.stringify(
+        { status: "assertion_failed", message: "evidence.md or evidence.json missing", summary },
+        null,
+        2,
+      ),
+    );
+    process.exit(1);
+  }
+
+  const evidenceJsonRaw = await readFile(evidenceJsonPath, "utf8");
+  const evidenceParsed: unknown = JSON.parse(evidenceJsonRaw);
+  if (!validateEvidencePacketV0(evidenceParsed)) {
+    console.error(
+      JSON.stringify(
+        { status: "assertion_failed", message: "evidence.json does not validate against EvidencePacketV0", summary },
+        null,
+        2,
+      ),
+    );
+    process.exit(1);
+  }
+
+  const secretPatterns = [
+    /\b(?:sk|pk)[_-][A-Za-z0-9_-]{16,}\b/i,
+    /\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{36,}\b/,
+    /\beyJ[A-Za-z0-9_-]{20,}/,
+  ];
+  const evidenceMdContent = await readFile(evidenceMdPath, "utf8");
+  const allEvidenceContent = evidenceMdContent + evidenceJsonRaw;
+  const leakedSecrets = secretPatterns.filter((p) => p.test(allEvidenceContent));
+  if (leakedSecrets.length > 0) {
+    console.error(
+      JSON.stringify(
+        {
+          status: "assertion_failed",
+          message: "evidence files contain secret-shaped patterns",
+          patterns: leakedSecrets.map((p) => p.source),
+          summary,
+        },
+        null,
+        2,
+      ),
+    );
+    process.exit(1);
+  }
+
+  console.log(JSON.stringify({ status: "ok", summary, evidence: { md: evidenceMdPath, json: evidenceJsonPath } }, null, 2));
 }
 
 main().catch((err) => {

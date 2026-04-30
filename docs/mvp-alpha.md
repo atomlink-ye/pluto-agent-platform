@@ -72,3 +72,54 @@ A run is acceptable iff:
 | P3 docker + opencode runtime | `docker/compose.yml`, `docker/pluto-runtime/*`, `docker/pluto-mvp/*` |
 | P4 live adapter | `src/adapters/paseo-opencode/`, `.paseo-pluto-mvp/root/integration-plan.md` |
 | P5 docs + smoke | `docker/live-smoke.ts`, `README.md`, `docs/mvp-alpha.md`, `docs/qa-checklist.md` |
+
+---
+
+## → MVP-beta Delta
+
+MVP-beta builds on top of the merged MVP-alpha runtime (PR #60) to add run inspection, error recovery, and evidence generation.
+
+### New objects
+
+| Object | Where it lives | Notes |
+| --- | --- | --- |
+| `BlockerReasonV0` | `src/contracts/types.ts` | 11-value canonical v0 union for failure classification |
+| `EvidencePacketV0` | `src/contracts/types.ts` | Schema for evidence.json produced alongside artifact.md |
+| `RunsListOutputV0` / `RunsShowOutputV0` / `RunsEventV0` | `src/contracts/types.ts` | JSON output shapes for CLI |
+
+### New modules
+
+| Module | Purpose |
+| --- | --- |
+| `src/orchestrator/blocker-classifier.ts` | Maps raw failure signals to `BlockerReasonV0` |
+| `src/orchestrator/evidence.ts` | Generator + validator + redactor for evidence packets |
+| `src/cli/runs.ts` | `pnpm runs list/show/events/artifact/evidence` CLI |
+
+### New event types
+
+| Event | Owner | Purpose |
+| --- | --- | --- |
+| `blocker` | orchestrator | Records classified blocker reason |
+| `retry` | orchestrator | Records per-worker retry attempt |
+
+### Additive changes to existing types
+
+- `TeamRunResult.blockerReason?: BlockerReasonV0 | null`
+
+### New run output files
+
+- `.pluto/runs/<runId>/evidence.md` — human-readable evidence packet
+- `.pluto/runs/<runId>/evidence.json` — machine-readable evidence packet (`EvidencePacketV0`)
+
+### Retry policy
+
+- Retryable: `provider_unavailable`, `runtime_timeout` only
+- Scope: per-worker, per-step (no run-level rerun)
+- Default: 1 retry. Configurable via `--max-retries N` (0–3, hard cap 3)
+
+### Backward compatibility
+
+- `pnpm submit` unchanged in default mode
+- Old MVP-alpha runs without evidence files remain listable/showable
+- Slice #1 blocker aliases normalize on read/display (`worker_timeout` → `runtime_timeout`; `quota_or_model_error` → `quota_exceeded` for quota/rate-limit/payment cases, otherwise `runtime_error`)
+- Existing event shapes and adapter contract unchanged

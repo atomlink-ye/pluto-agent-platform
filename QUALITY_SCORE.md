@@ -11,6 +11,7 @@
 | **Convergent** | Do agents converge on good output? | Live smoke success |
 | **Guardrails** | Does bad input get blocked? | No-endpoint blocker exit 2 |
 | **Clean artifact** | No leaked prompts or protocols | live-smoke.ts assertions |
+| **Evidence quality** | Evidence packet present, schema-valid, no secret leaks | `EvidencePacketV0` validation, redaction assertions |
 
 ## Fast Gates (Default Verify)
 
@@ -83,6 +84,16 @@ Live (when applicable):
 - [ ] pnpm smoke:live returns status: ok
 - [ ] No protocol fragment leaks
 - [ ] No-endpoint blocker exits 2
+
+## Evidence Quality Dimension (MVP-beta)
+
+The `evidence_quality` eval dimension (weight 0.15 in `evals/runner.ts`) checks:
+
+1. `evidence.md` and `evidence.json` exist in `.pluto/runs/<runId>/`
+2. `evidence.json` validates against `EvidencePacketV0` schema
+3. Neither file contains secret-shaped content (sk-* keys, JWTs, GitHub tokens)
+
+This dimension is enforced by both the workflow eval (`pnpm eval:workflow`) and the fake smoke test (`pnpm smoke:fake`).
 
 ## Non-Goals (What We Don't Measure Yet)
 

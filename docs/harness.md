@@ -42,7 +42,11 @@ evals/        # cases, rubrics, goldens, reports, datasets
 
 - **.pluto/runs/<runId>/events.jsonl** — Event log
 - **.pluto/runs/<runId>/artifact.md** — Final artifact
-- **evals/reports/** — Evaluation reports (future)
+- **.pluto/runs/<runId>/evidence.md** — Evidence packet (human-readable, MVP-beta)
+- **.pluto/runs/<runId>/evidence.json** — Evidence packet (machine-readable, `EvidencePacketV0`, MVP-beta)
+- **evals/reports/** — Evaluation reports
+
+The evidence packet is a new control-surface artifact introduced in MVP-beta. It is generated for every completed or blocked run and contains: run metadata, canonical `BlockerReasonV0` (when blocked), per-worker contribution summaries, validation outcome, cited inputs (redacted), risks, and open questions. It validates against `EvidencePacketV0` schema and is redacted by `src/orchestrator/evidence.ts` before being written to disk.
 
 ## Control Knobs
 

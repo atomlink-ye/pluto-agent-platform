@@ -46,12 +46,41 @@ Live runs from the host that owns the Paseo daemon (Paseo is macOS-only). Precon
 - [ ] Auto-sets `OPENCODE_BASE_URL=http://localhost:4096` and runs the host-mode live smoke.
 - [ ] Returns `{"status":"ok",...}` end-to-end with three real worker contributions.
 
-## 6. Concurrency cap (operator)
+## 6. Evidence packet (MVP-beta)
+
+- [ ] `pnpm submit --title "evidence test" --prompt "produce a test artifact" --workspace .tmp/pluto-cli` produces `evidence.md` and `evidence.json` in `.pluto/runs/<runId>/`.
+- [ ] `pnpm runs evidence <runId> --json` validates against `EvidencePacketV0` schema.
+- [ ] Evidence files contain no token-shaped substrings, no env KEY=VALUE secrets, no raw provider stderr.
+- [ ] `pnpm smoke:fake` asserts evidence files present, schema valid, no redacted-secret patterns.
+
+## 7. BlockerReason taxonomy (MVP-beta)
+
+- [ ] All 11 canonical values exercised in `tests/blocker-classifier.test.ts`: `provider_unavailable`, `credential_missing`, `quota_exceeded`, `capability_unavailable`, `runtime_permission_denied`, `runtime_timeout`, `empty_artifact`, `validation_failed`, `adapter_protocol_error`, `runtime_error`, `unknown`.
+- [ ] Legacy aliases normalize on read/display: `worker_timeout` → `runtime_timeout`; `quota_or_model_error` → `quota_exceeded` for quota/rate-limit/payment cases, otherwise `runtime_error`.
+- [ ] Only `provider_unavailable` and `runtime_timeout` are retryable; all others are not.
+- [ ] `--max-retries 0` disables retry; hard cap 3 enforced.
+
+## 8. CLI subcommand smoke (MVP-beta)
+
+- [ ] `pnpm runs list` returns runs; `--json` matches `RunsListOutputV0`.
+- [ ] `pnpm runs show <runId>` prints metadata; `--json` matches `RunsShowOutputV0`.
+- [ ] `pnpm runs events <runId>` streams events; `--role` and `--kind` reject unknown values with non-zero exit.
+- [ ] `pnpm runs artifact <runId>` prints artifact markdown.
+- [ ] `pnpm runs evidence <runId>` prints evidence markdown; `--json` prints validated `EvidencePacketV0`.
+- [ ] Old MVP-alpha runs show `evidencePresent=false`; `runs evidence <oldRunId>` exits 0 with graceful message.
+
+## 9. Redaction (MVP-beta)
+
+- [ ] `tests/evidence-redaction.test.ts` covers: token shapes, env-name patterns, raw provider stderr, `.env`-style key=value.
+- [ ] `pnpm smoke:fake` asserts no token-shaped substrings in evidence files.
+- [ ] Evidence generation redacts known secret env names, JWT-like tokens, GitHub tokens, sk-* API keys.
+
+## 10. Concurrency cap (operator)
 
 - [ ] Status doc records the `<= 2 active tasks` cap (`.paseo-pluto-mvp/root/status.md`).
 - [ ] No background retry helpers, hidden detached children, or nested OpenCode sessions used to bypass the cap.
 
-## 7. Documentation
+## 11. Documentation
 
 - [ ] README quickstart reproducible by a fresh clone.
 - [ ] `docs/mvp-alpha.md` contracts match `src/contracts/`.

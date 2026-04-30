@@ -1,14 +1,15 @@
 #!/usr/bin/env tsx
-import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { existsSync, readFileSync } from "node:fs";
 
 import { FakeAdapter } from "../src/adapters/fake/index.js";
-import { DEFAULT_TEAM, RunStore, TeamRunService } from "../src/orchestrator/index.js";
+import { DEFAULT_TEAM, RunStore, TeamRunService, validateEvidencePacketV0 } from "../src/orchestrator/index.js";
 import type { AgentEvent, AgentEventType, FinalArtifact, TeamRunResult } from "../src/contracts/types.js";
 
-type DimensionId = "event_sequence" | "role_coverage" | "artifact_cleanliness" | "worker_contributions";
+type DimensionId = "event_sequence" | "role_coverage" | "artifact_cleanliness" | "worker_contributions" | "evidence_quality";
 
 interface RubricDimension {
   id: DimensionId;
@@ -47,17 +48,17 @@ const FORBIDDEN_PROTOCOL_FRAGMENTS = [
 const RUBRIC: RubricDimension[] = [
   {
     id: "event_sequence",
-    weight: 0.35,
+    weight: 0.3,
     description: "Run event log follows the expected workflow lifecycle order.",
   },
   {
     id: "role_coverage",
-    weight: 0.25,
+    weight: 0.2,
     description: "Lead, planner, generator, and evaluator are represented.",
   },
   {
     id: "artifact_cleanliness",
-    weight: 0.25,
+    weight: 0.2,
     description: "Final artifact has no leaked internal prompt protocol fragments.",
   },
   {
@@ -65,10 +66,18 @@ const RUBRIC: RubricDimension[] = [
     weight: 0.15,
     description: "At least two workers complete and contribute to the artifact.",
   },
+  {
+    id: "evidence_quality",
+    weight: 0.15,
+    description: "Evidence packet is present, well-formed, and contains no secret-shaped content.",
+  },
 ];
 
-export function scoreRun(result: Pick<TeamRunResult, "runId" | "status" | "events" | "artifact">): EvalReport {
-  const dimensions = RUBRIC.map((dimension) => scoreDimension(dimension, result));
+export function scoreRun(
+  result: Pick<TeamRunResult, "runId" | "status" | "events" | "artifact">,
+  evidenceDir?: string,
+): EvalReport {
+  const dimensions = RUBRIC.map((dimension) => scoreDimension(dimension, result, evidenceDir));
   const totalWeight = RUBRIC.reduce((sum, dimension) => sum + dimension.weight, 0);
   const earned = dimensions.reduce((sum, dimension) => sum + dimension.score, 0);
   const completedWorkers = result.events
@@ -119,7 +128,8 @@ async function runWorkflowEval(): Promise<EvalReport> {
       minWorkers: 2,
     });
 
-    return scoreRun(result);
+    const evidenceDir = store.runDir(result.runId);
+    return scoreRun(result, evidenceDir);
   } finally {
     await rm(workspace, { recursive: true, force: true });
   }
@@ -128,6 +138,7 @@ async function runWorkflowEval(): Promise<EvalReport> {
 function scoreDimension(
   dimension: RubricDimension,
   result: Pick<TeamRunResult, "status" | "events" | "artifact">,
+  evidenceDir?: string,
 ): DimensionScore {
   const observations: string[] = [];
   const passed = (() => {
@@ -140,6 +151,8 @@ function scoreDimension(
         return scoreArtifactCleanliness(result.artifact, observations);
       case "worker_contributions":
         return scoreWorkerContributions(result.events, result.artifact, observations);
+      case "evidence_quality":
+        return scoreEvidenceQuality(evidenceDir, observations);
     }
   })();
 
@@ -236,6 +249,54 @@ function scoreWorkerContributions(events: AgentEvent[], artifact: FinalArtifact 
 
   observations.push(`worker completion threshold met: completed=${completed}, contributions=${contributions}`);
   return true;
+}
+
+function scoreEvidenceQuality(evidenceDir: string | undefined, observations: string[]): boolean {
+  if (!evidenceDir) {
+    observations.push("no evidence directory provided to eval");
+    return false;
+  }
+
+  const mdPath = join(evidenceDir, "evidence.md");
+  const jsonPath = join(evidenceDir, "evidence.json");
+
+  if (!existsSync(mdPath)) {
+    observations.push("evidence.md is missing");
+    return false;
+  }
+  if (!existsSync(jsonPath)) {
+    observations.push("evidence.json is missing");
+    return false;
+  }
+
+  try {
+    const jsonContent = readFileSync(jsonPath, "utf8");
+    const parsed: unknown = JSON.parse(jsonContent);
+    if (!validateEvidencePacketV0(parsed)) {
+      observations.push("evidence.json does not validate against EvidencePacketV0");
+      return false;
+    }
+
+    const secretPatterns = [
+      /\b(?:sk|pk)[_-][A-Za-z0-9_-]{16,}\b/i,
+      /\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{36,}\b/,
+      /\beyJ[A-Za-z0-9_-]{20,}/,
+    ];
+    const mdContent = readFileSync(mdPath, "utf8");
+    const allContent = mdContent + jsonContent;
+    for (const pattern of secretPatterns) {
+      if (pattern.test(allContent)) {
+        observations.push(`evidence files contain secret-shaped content matching ${pattern.source}`);
+        return false;
+      }
+    }
+
+    observations.push("evidence.md and evidence.json are present, schema-valid, and contain no secret-shaped content");
+    return true;
+  } catch (err) {
+    observations.push(`evidence validation error: ${err instanceof Error ? err.message : String(err)}`);
+    return false;
+  }
 }
 
 function renderMarkdownSummary(report: EvalReport): string {

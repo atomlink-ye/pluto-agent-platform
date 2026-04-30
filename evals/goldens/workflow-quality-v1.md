@@ -19,3 +19,7 @@ PASS: deliverable matches the team goal.
 
 ## Lead summary
 Lead aggregated 3 worker outputs (planner, generator, evaluator).
+
+## Evidence expectation
+
+The golden run must also persist `evidence.md` and schema-valid `evidence.json` with no secret-shaped content.

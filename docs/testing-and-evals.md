@@ -18,6 +18,13 @@
 - Deterministic with fake adapter
 - Example: `tests/team-run-service.test.ts`
 
+MVP-beta test lanes:
+- `tests/blocker-classifier.test.ts` — all 11 canonical `BlockerReasonV0` values plus legacy aliases exercised
+- `tests/team-run-service-recovery.test.ts` — retry semantics, hard cap, no-mutation
+- `tests/evidence.test.ts` — done/blocked/failed packets, schema validation, file writing
+- `tests/evidence-redaction.test.ts` — token shapes, env patterns, JWT, GitHub tokens
+- `tests/cli/runs.test.ts` — JSON output shapes for all `pnpm runs` subcommands, old-run degradation
+
 ### Integration/Smoke Tests
 
 - Can use fake adapter: `pnpm smoke:fake`
@@ -56,6 +63,7 @@
 - Offline deterministic scoring with `FakeAdapter`
 - Writes transient machine-readable reports under `evals/reports/`
 - Runs with `pnpm eval:workflow`
+- MVP-beta: added `evidence_quality` dimension (0.15 weight) — checks evidence.md + evidence.json presence, schema validity, and absence of secret-shaped content
 
 ## Canonical Commands
 

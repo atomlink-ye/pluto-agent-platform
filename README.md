@@ -28,6 +28,43 @@ pnpm submit \
 Outputs:
 - `./.pluto/runs/<runId>/events.jsonl` — append-only event log
 - `./.pluto/runs/<runId>/artifact.md` — Team Lead's final markdown
+- `./.pluto/runs/<runId>/evidence.md` — Evidence packet (human-readable)
+- `./.pluto/runs/<runId>/evidence.json` — Evidence packet (machine-readable, `EvidencePacketV0`)
+
+## Run inspection
+
+Inspect runs after submission:
+
+```bash
+pnpm runs list [--limit N] [--status STATUS] [--json]
+pnpm runs show <runId> [--json]
+pnpm runs events <runId> [--role ROLE] [--kind KIND] [--since EVENT_ID] [--json]
+pnpm runs artifact <runId>
+pnpm runs evidence <runId> [--json]
+```
+
+All subcommands read from the file-backed `.pluto/runs/` store. Old MVP-alpha runs without evidence files are listable and showable; `runs evidence <oldRunId>` exits 0 with a graceful message.
+
+## Error recovery
+
+Failures are classified into the canonical 11-value `BlockerReasonV0` taxonomy:
+- `provider_unavailable` — host/daemon/provider not reachable, 5xx, network errors
+- `credential_missing` — required credential or secret ref is absent
+- `quota_exceeded` — quota, rate limit, payment, or budget cap blocks execution
+- `capability_unavailable` — requested runtime/tool/model capability is unavailable
+- `runtime_permission_denied` — runtime or tool authorization is denied
+- `runtime_timeout` — worker or runtime exceeded its wait window
+- `empty_artifact` — run completed but artifact is empty/whitespace-only
+- `validation_failed` — evaluator found the artifact unacceptable
+- `adapter_protocol_error` — adapter callback/event contract is malformed
+- `runtime_error` — non-quota runtime/model/provider error
+- `unknown` — catch-all
+
+Legacy persisted values are normalized for readers (`worker_timeout` → `runtime_timeout`; `quota_or_model_error` → `quota_exceeded` or `runtime_error`). Only `provider_unavailable` and `runtime_timeout` trigger per-worker retry (default: 1 attempt, configurable via `--max-retries N` on `pnpm submit`, hard cap: 3). See `RELIABILITY.md` for the full policy.
+
+## Evidence
+
+Every completed or blocked run produces `evidence.md` and `evidence.json` in `.pluto/runs/<runId>/`. The evidence packet (`EvidencePacketV0`) includes: run metadata, per-worker summaries, validation outcome, cited inputs, risks, and open questions. All content is redacted before writing — see `SECURITY.md` for the redaction policy.
 
 ## Live smoke (host Paseo + OpenCode free model)
 
@@ -106,7 +143,7 @@ PLUTO_LIVE_ADAPTER=paseo-opencode pnpm exec tsx docker/live-smoke.ts
 +--------------+                                +----------------------+
        |
        v
-.pluto/runs/<runId>/{events.jsonl, artifact.md}
+.pluto/runs/<runId>/{events.jsonl, artifact.md, evidence.md, evidence.json}
 ```
 
 The orchestrator never imports OpenCode. The contract (`src/contracts/adapter.ts`) is the only seam between business logic and runtime concerns.
@@ -116,15 +153,18 @@ The orchestrator never imports OpenCode. The contract (`src/contracts/adapter.ts
 ```
 src/
   contracts/      types + PaseoTeamAdapter interface
-  orchestrator/   TeamRunService, RunStore, static team config
+  orchestrator/   TeamRunService, RunStore, team-config, blocker-classifier, evidence
   adapters/
     fake/                  in-process deterministic adapter
     paseo-opencode/        live adapter scaffold (paseo CLI)
-  cli/submit.ts   `pnpm submit ...` CLI
+  cli/
+    submit.ts     `pnpm submit ...` CLI
+    runs.ts       `pnpm runs ...` CLI (list/show/events/artifact/evidence)
 
-tests/            vitest specs (unit + fake-adapter E2E)
+tests/            vitest specs (unit + fake-adapter E2E + recovery + evidence + CLI)
 docker/           compose.yml, runtime + mvp Dockerfiles, live-smoke.ts
-docs/             mvp-alpha.md, qa-checklist.md
+docs/             mvp-alpha.md, qa-checklist.md, harness.md, testing-and-evals.md
+evals/            cases, rubrics, goldens, datasets, reports, runner.ts
 .pluto/           runtime state — gitignored
 ```
 

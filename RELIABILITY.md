@@ -10,15 +10,43 @@
 
 Set via `timeoutMs` and `pumpIntervalMs` in TeamRunService.
 
-## Retry Policy
+## Retry Policy (MVP-beta — narrow)
 
-**No automatic retry.** The MVP intentionally fails fast:
+MVP-beta adds per-worker, per-step retry for a narrow set of retryable reasons:
 
-- If a worker fails, the run continues with partial results.
-- The final artifact includes whatever workers completed.
-- Failed runs are recorded in events.jsonl with `run_failed`.
+| Retryable reason | Default retries | Configurable | Hard cap |
+|---|---|---|---|
+| `provider_unavailable` | 1 | `--max-retries N` on `pnpm submit` | 3 |
+| `runtime_timeout` | 1 | `--max-retries N` on `pnpm submit` | 3 |
 
-Rationale: Faster feedback loop for MVP. Retry logic can be added in later phases.
+**Non-retryable reasons** (no retry attempted):
+- `credential_missing`
+- `quota_exceeded`
+- `capability_unavailable`
+- `runtime_permission_denied`
+- `empty_artifact`
+- `validation_failed`
+- `adapter_protocol_error`
+- `runtime_error`
+- `unknown`
+
+Legacy persisted aliases are normalized for readers: `worker_timeout` maps to `runtime_timeout`; `quota_or_model_error` maps to `quota_exceeded` for quota/rate-limit/payment cases and `runtime_error` for other model/provider runtime errors.
+
+### Retry observability
+
+- Each retry emits a `kind: 'retry'` event with `{ attempt, reason, originalEventId, delayMs }`.
+- `attempt` is 1-indexed; values >1 indicate a retry.
+- **No mutation of prior events.** New attempt numbers are append-only in `events.jsonl`.
+
+### Scope limits
+
+- Per-worker, per-step retry only. No run-level rerun.
+- No global retry budget, cancel API, scheduler, or queue semantics.
+- `--max-retries 0` disables retry entirely.
+
+### Blocker classification
+
+All failures are classified by `src/orchestrator/blocker-classifier.ts` into the canonical 11-value `BlockerReasonV0` taxonomy. The classifier is the single decision point; `team-run-service` calls it at the moment a blocker is recorded.
 
 ## Cleanup Policy
 

@@ -60,6 +60,8 @@ export type AgentEventType =
   | "worker_message"
   | "orchestrator_underdispatch_fallback"
   | "artifact_created"
+  | "blocker"
+  | "retry"
   | "run_completed"
   | "run_failed";
 
@@ -99,4 +101,103 @@ export interface TeamRunResult {
   events: AgentEvent[];
   /** Filled when status = failed. */
   failure?: { message: string; cause?: unknown };
+  /** MVP-beta: classified blocker reason. null for successful runs. */
+  blockerReason?: BlockerReasonV0 | null;
+}
+
+// ---------------------------------------------------------------------------
+// MVP-beta v0 types (additive, non-exhaustive)
+// ---------------------------------------------------------------------------
+
+export type BlockerReasonV0 =
+  | "provider_unavailable"
+  | "credential_missing"
+  | "quota_exceeded"
+  | "capability_unavailable"
+  | "runtime_permission_denied"
+  | "runtime_timeout"
+  | "empty_artifact"
+  | "validation_failed"
+  | "adapter_protocol_error"
+  | "runtime_error"
+  | "unknown";
+
+export type EvidencePacketStatusV0 = "done" | "blocked" | "failed";
+
+export interface EvidencePacketV0 {
+  schemaVersion: 0;
+  runId: string;
+  taskTitle: string;
+  status: EvidencePacketStatusV0;
+  blockerReason: BlockerReasonV0 | null;
+  startedAt: string;
+  finishedAt: string;
+  workspace: string | null;
+  workers: Array<{
+    role: string;
+    sessionId: string | null;
+    contributionSummary: string;
+    tokenUsageApprox: number | null;
+    durationMsApprox: number | null;
+  }>;
+  validation: {
+    outcome: "pass" | "fail" | "na";
+    reason: string | null;
+  };
+  citedInputs: {
+    taskPrompt: string;
+    workspaceMarkers: string[];
+  };
+  risks: string[];
+  openQuestions: string[];
+  classifierVersion: 0;
+  generatedAt: string;
+}
+
+export interface RunsListItemV0 {
+  schemaVersion: 0;
+  runId: string;
+  taskTitle: string;
+  status: "queued" | "running" | "blocked" | "failed" | "done";
+  blockerReason: BlockerReasonV0 | null;
+  startedAt: string;
+  finishedAt: string | null;
+  workerCount: number;
+  artifactPresent: boolean;
+  evidencePresent: boolean;
+}
+
+export interface RunsListOutputV0 {
+  schemaVersion: 0;
+  items: RunsListItemV0[];
+}
+
+export interface RunsShowOutputV0 {
+  schemaVersion: 0;
+  runId: string;
+  taskTitle: string;
+  status: "queued" | "running" | "blocked" | "failed" | "done";
+  blockerReason: BlockerReasonV0 | null;
+  startedAt: string;
+  finishedAt: string | null;
+  workspace: string | null;
+  workers: Array<{
+    role: string;
+    sessionId: string | null;
+    status: "pending" | "running" | "done" | "failed" | "timed_out";
+    contributionSummary: string | null;
+  }>;
+  artifactPath: string | null;
+  evidencePath: string | null;
+}
+
+export interface RunsEventV0 {
+  schemaVersion: 0;
+  runId: string;
+  eventId: string;
+  occurredAt: string;
+  role: string | null;
+  kind: string;
+  attempt: number;
+  payload: unknown;
 }
