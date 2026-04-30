@@ -5,9 +5,18 @@ import type {
   BlockerReasonV0,
   EvidencePacketStatusV0,
   EvidencePacketV0,
+  ProvenancePinRef,
   TeamRunResult,
   TeamTask,
+  WorkerContribution,
+  WorkerContributionProvenancePins,
 } from "../contracts/types.js";
+import {
+  collectPortableRuntimeResultRefs,
+  readPortableRuntimeResultValueRef,
+  type PortableRuntimeResultAnyRefV0,
+  type PortableRuntimeResultValueKeyV0,
+} from "../runtime/result-contract.js";
 import { normalizeBlockerReason } from "./blocker-classifier.js";
 import {
   redactObject,
@@ -70,6 +79,60 @@ function validateStringArray(value: unknown, path: string, errors: string[]): vo
   });
 }
 
+function validateProvenanceRef(
+  value: unknown,
+  path: string,
+  errors: string[],
+): void {
+  if (typeof value !== "object" || value === null) {
+    errors.push(`${path} must be an object`);
+    return;
+  }
+
+  const ref = value as Record<string, unknown>;
+  if (typeof ref["id"] !== "string") {
+    errors.push(`${path}.id must be a string`);
+  }
+  if (typeof ref["version"] !== "string") {
+    errors.push(`${path}.version must be a string`);
+  }
+}
+
+function validateWorkerProvenance(
+  worker: Record<string, unknown>,
+  path: string,
+  errors: string[],
+): void {
+  if (worker["workerRoleRef"] !== undefined) {
+    validateProvenanceRef(worker["workerRoleRef"], `${path}.workerRoleRef`, errors);
+  }
+  if (worker["skillRef"] !== undefined) {
+    validateProvenanceRef(worker["skillRef"], `${path}.skillRef`, errors);
+  }
+  if (worker["templateRef"] !== undefined) {
+    validateProvenanceRef(worker["templateRef"], `${path}.templateRef`, errors);
+  }
+  if (worker["policyPackRefs"] !== undefined) {
+    if (!Array.isArray(worker["policyPackRefs"])) {
+      errors.push(`${path}.policyPackRefs must be an array`);
+    } else {
+      worker["policyPackRefs"].forEach((entry, index) => {
+        validateProvenanceRef(entry, `${path}.policyPackRefs[${index}]`, errors);
+      });
+    }
+  }
+  if (worker["catalogEntryRef"] !== undefined) {
+    validateProvenanceRef(worker["catalogEntryRef"], `${path}.catalogEntryRef`, errors);
+  }
+  if (
+    worker["extensionInstallRef"] !== undefined
+    && worker["extensionInstallRef"] !== null
+    && typeof worker["extensionInstallRef"] !== "string"
+  ) {
+    errors.push(`${path}.extensionInstallRef must be a string or null`);
+  }
+}
+
 export function validateEvidencePacketV0(packet: unknown): EvidencePacketValidationResult {
   const errors: string[] = [];
 
@@ -130,6 +193,7 @@ export function validateEvidencePacketV0(packet: unknown): EvidencePacketValidat
       if (worker["durationMsApprox"] !== null && typeof worker["durationMsApprox"] !== "number") {
         errors.push(`workers[${index}].durationMsApprox must be a number or null`);
       }
+      validateWorkerProvenance(worker, `workers[${index}]`, errors);
     }
   }
 
@@ -171,6 +235,15 @@ export interface GenerateEvidenceInput {
   startedAt: Date;
   finishedAt: Date;
   blockerReason: BlockerReasonV0 | null;
+  runtimeResultRefs?: TeamRunResult["runtimeResultRefs"];
+}
+
+interface WorkerEvidenceAccumulator {
+  sessionId: string | null;
+  output: string;
+  referenceOnly: boolean;
+  referenceSummaryFromPayload: boolean;
+  provenance: WorkerContributionProvenancePins;
 }
 
 function mapStatus(result: TeamRunResult, blockerReason: BlockerReasonV0 | null): EvidencePacketStatusV0 {
@@ -179,14 +252,17 @@ function mapStatus(result: TeamRunResult, blockerReason: BlockerReasonV0 | null)
   return "failed";
 }
 
-function extractValidation(events: AgentEvent[]): EvidencePacketV0["validation"] {
+function extractValidation(
+  events: AgentEvent[],
+  resolveEventValue: (event: AgentEvent, key: PortableRuntimeResultValueKeyV0) => string,
+): EvidencePacketV0["validation"] {
   const evalEvents = events.filter(
     (e) => e.roleId === "evaluator" && e.type === "worker_completed",
   );
   if (evalEvents.length === 0) return { outcome: "na", reason: null };
 
   const lastEval = evalEvents[evalEvents.length - 1]!;
-  const output = String(lastEval.payload?.["output"] ?? "");
+  const output = resolveEventValue(lastEval, "output");
   if (output.startsWith("PASS:")) {
     return { outcome: "pass", reason: output.slice(5).trim() || null };
   }
@@ -196,13 +272,16 @@ function extractValidation(events: AgentEvent[]): EvidencePacketV0["validation"]
   return { outcome: "na", reason: null };
 }
 
-function extractRisksAndQuestions(events: AgentEvent[]): { risks: string[]; openQuestions: string[] } {
+function extractRisksAndQuestions(
+  events: AgentEvent[],
+  resolveEventValue: (event: AgentEvent, key: PortableRuntimeResultValueKeyV0) => string,
+): { risks: string[]; openQuestions: string[] } {
   const risks: string[] = [];
   const openQuestions: string[] = [];
 
   for (const ev of events) {
     if (ev.roleId === "evaluator" && ev.type === "worker_completed") {
-      const output = String(ev.payload?.["output"] ?? "");
+      const output = resolveEventValue(ev, "output");
       if (output.includes("FAIL:")) {
         risks.push(output.replace(/^FAIL:\s*/, "").trim());
       }
@@ -215,20 +294,65 @@ function extractRisksAndQuestions(events: AgentEvent[]): { risks: string[]; open
 export function generateEvidencePacket(input: GenerateEvidenceInput): EvidencePacketV0 {
   const { task, result, events, startedAt, finishedAt } = input;
   const blockerReason = normalizeBlockerReason(input.blockerReason);
+  const runtimeResultRefs = input.runtimeResultRefs ?? result.runtimeResultRefs ?? collectPortableRuntimeResultRefs(events);
+  const referenceOnlyPersistence = usesReferenceOnlyPersistence(events);
+  const contributionOutputs = new Map<string, string>(
+    result.artifact?.contributions.map((contribution) => [contribution.roleId, contribution.output]) ?? [],
+  );
+  const resolveEventValue = createRuntimeValueResolver(result, runtimeResultRefs, contributionOutputs);
 
   const workerEvents = events.filter(
     (e) => e.type === "worker_started" || e.type === "worker_completed",
   );
-  const workerMap = new Map<string, { sessionId: string | null; output: string }>();
+  const workerMap = new Map<string, WorkerEvidenceAccumulator>();
+  const artifactContributions = new Map<string, WorkerContribution>(
+    (result.artifact?.contributions ?? []).map((contribution) => [contribution.roleId, contribution] as const),
+  );
   for (const ev of workerEvents) {
-    const role = String(ev.roleId ?? "");
+    const role = ev.roleId;
     if (!role) continue;
-    const existing = workerMap.get(role) ?? { sessionId: null, output: "" };
+    const existing = workerMap.get(role) ?? {
+      sessionId: null,
+      output: "",
+      referenceOnly: false,
+      referenceSummaryFromPayload: false,
+      provenance: {},
+    };
     if (ev.type === "worker_started") {
       existing.sessionId = ev.sessionId ?? null;
     } else if (ev.type === "worker_completed") {
-      existing.output = String(ev.payload?.["output"] ?? "");
+      existing.referenceOnly = isReferenceOnlyEventValue(ev, "output");
+      existing.referenceSummaryFromPayload = existing.referenceOnly && typeof ev.payload?.["summary"] === "string";
+      existing.output = existing.referenceOnly
+        ? readReferenceOnlySummary(ev, "output")
+        : resolveEventValue(ev, "output");
+      existing.provenance = mergeProvenancePins(
+        extractContributionProvenance(artifactContributions.get(role)),
+        extractCatalogSelectionProvenance(ev.payload?.["catalogSelection"]),
+      );
     }
+    workerMap.set(role, existing);
+  }
+
+  for (const [role, output] of contributionOutputs) {
+    const existing = workerMap.get(role);
+    if (!existing) {
+      workerMap.set(role, {
+        sessionId: null,
+        output,
+        referenceOnly: false,
+        referenceSummaryFromPayload: false,
+        provenance: extractContributionProvenance(artifactContributions.get(role)),
+      });
+      continue;
+    }
+    if (!existing.output || (existing.referenceOnly && !existing.referenceSummaryFromPayload)) {
+      existing.output = output;
+    }
+    existing.provenance = mergeProvenancePins(
+      extractContributionProvenance(artifactContributions.get(role)),
+      existing.provenance,
+    );
     workerMap.set(role, existing);
   }
 
@@ -239,11 +363,12 @@ export function generateEvidencePacket(input: GenerateEvidenceInput): EvidencePa
       contributionSummary: redactString(info.output.slice(0, 500) || ""),
       tokenUsageApprox: null,
       durationMsApprox: null,
+      ...info.provenance,
     }),
   );
 
-  const validation = extractValidation(events);
-  const { risks, openQuestions } = extractRisksAndQuestions(events);
+  const validation = extractValidation(events, resolveEventValue);
+  const { risks, openQuestions } = extractRisksAndQuestions(events, resolveEventValue);
 
   const packet: EvidencePacketV0 = {
     schemaVersion: 0,
@@ -251,9 +376,12 @@ export function generateEvidencePacket(input: GenerateEvidenceInput): EvidencePa
     taskTitle: redactString(task.title),
     status: mapStatus(result, blockerReason),
     blockerReason,
+    ...(runtimeResultRefs.length > 0
+      ? { runtimeResultRefs: redactObject(runtimeResultRefs) as EvidencePacketV0["runtimeResultRefs"] }
+      : {}),
     startedAt: startedAt.toISOString(),
     finishedAt: finishedAt.toISOString(),
-    workspace: redactCanonicalWorkspacePath(task.workspacePath) || null,
+    workspace: referenceOnlyPersistence ? null : redactCanonicalWorkspacePath(task.workspacePath) || null,
     workers,
     validation: {
       outcome: validation.outcome,
@@ -270,6 +398,143 @@ export function generateEvidencePacket(input: GenerateEvidenceInput): EvidencePa
   };
 
   return packet;
+}
+
+function extractContributionProvenance(
+  contribution: WorkerContribution | undefined,
+): WorkerContributionProvenancePins {
+  if (!contribution) {
+    return {};
+  }
+
+  return {
+    ...(contribution.workerRoleRef ? { workerRoleRef: cloneRef(contribution.workerRoleRef) } : {}),
+    ...(contribution.skillRef ? { skillRef: cloneRef(contribution.skillRef) } : {}),
+    ...(contribution.templateRef ? { templateRef: cloneRef(contribution.templateRef) } : {}),
+    ...(contribution.policyPackRefs ? { policyPackRefs: contribution.policyPackRefs.map(cloneRef) } : {}),
+    ...(contribution.catalogEntryRef ? { catalogEntryRef: cloneRef(contribution.catalogEntryRef) } : {}),
+    ...(contribution.extensionInstallRef !== undefined
+      ? { extensionInstallRef: contribution.extensionInstallRef }
+      : {}),
+  };
+}
+
+function extractCatalogSelectionProvenance(selection: unknown): WorkerContributionProvenancePins {
+  if (typeof selection !== "object" || selection === null) {
+    return {};
+  }
+
+  const candidate = selection as Record<string, unknown>;
+  const workerRoleRef = readProvenanceRef(candidate["workerRole"]);
+  const skillRef = readProvenanceRef(candidate["skill"]);
+  const templateRef = readProvenanceRef(candidate["template"]);
+  const policyPackRef = readProvenanceRef(candidate["policyPack"]);
+  const catalogEntryRef = readProvenanceRef(candidate["entry"]);
+
+  return {
+    ...(workerRoleRef ? { workerRoleRef } : {}),
+    ...(skillRef ? { skillRef } : {}),
+    ...(templateRef ? { templateRef } : {}),
+    ...(policyPackRef ? { policyPackRefs: [policyPackRef] } : {}),
+    ...(catalogEntryRef ? { catalogEntryRef } : {}),
+  };
+}
+
+function readProvenanceRef(value: unknown): ProvenancePinRef | undefined {
+  if (typeof value !== "object" || value === null) {
+    return undefined;
+  }
+
+  const ref = value as Record<string, unknown>;
+  if (typeof ref["id"] !== "string" || typeof ref["version"] !== "string") {
+    return undefined;
+  }
+
+  return { id: ref["id"], version: ref["version"] };
+}
+
+function mergeProvenancePins(
+  primary: WorkerContributionProvenancePins,
+  fallback: WorkerContributionProvenancePins,
+): WorkerContributionProvenancePins {
+  return {
+    ...(fallback.workerRoleRef ? { workerRoleRef: cloneRef(fallback.workerRoleRef) } : {}),
+    ...(fallback.skillRef ? { skillRef: cloneRef(fallback.skillRef) } : {}),
+    ...(fallback.templateRef ? { templateRef: cloneRef(fallback.templateRef) } : {}),
+    ...(fallback.policyPackRefs ? { policyPackRefs: fallback.policyPackRefs.map(cloneRef) } : {}),
+    ...(fallback.catalogEntryRef ? { catalogEntryRef: cloneRef(fallback.catalogEntryRef) } : {}),
+    ...(fallback.extensionInstallRef !== undefined ? { extensionInstallRef: fallback.extensionInstallRef } : {}),
+    ...(primary.workerRoleRef ? { workerRoleRef: cloneRef(primary.workerRoleRef) } : {}),
+    ...(primary.skillRef ? { skillRef: cloneRef(primary.skillRef) } : {}),
+    ...(primary.templateRef ? { templateRef: cloneRef(primary.templateRef) } : {}),
+    ...(primary.policyPackRefs ? { policyPackRefs: primary.policyPackRefs.map(cloneRef) } : {}),
+    ...(primary.catalogEntryRef ? { catalogEntryRef: cloneRef(primary.catalogEntryRef) } : {}),
+    ...(primary.extensionInstallRef !== undefined ? { extensionInstallRef: primary.extensionInstallRef } : {}),
+  };
+}
+
+function cloneRef(ref: ProvenancePinRef): ProvenancePinRef {
+  return { id: ref.id, version: ref.version };
+}
+
+function usesReferenceOnlyPersistence(events: readonly AgentEvent[]): boolean {
+  return events.some(
+    (event) => isReferenceOnlyEventValue(event, "output") || isReferenceOnlyEventValue(event, "markdown"),
+  );
+}
+
+function isReferenceOnlyEventValue(
+  event: AgentEvent,
+  key: PortableRuntimeResultValueKeyV0,
+): boolean {
+  return readPortableRuntimeResultValueRef(event, key) !== null && typeof event.payload?.[key] !== "string";
+}
+
+function readReferenceOnlySummary(
+  event: AgentEvent,
+  key: PortableRuntimeResultValueKeyV0,
+): string {
+  const summary = event.payload?.["summary"];
+  if (typeof summary === "string") {
+    return summary;
+  }
+
+  if (key === "markdown") {
+    return event.payload?.["kind"] === "summary"
+      ? "Reference-only lead summary."
+      : "Reference-only markdown result.";
+  }
+
+  return "Reference-only worker result.";
+}
+
+function createRuntimeValueResolver(
+  result: TeamRunResult,
+  runtimeResultRefs: readonly PortableRuntimeResultAnyRefV0[],
+  contributionOutputs: ReadonlyMap<string, string>,
+): (event: AgentEvent, key: PortableRuntimeResultValueKeyV0) => string {
+  const runtimeValueRefs = new Map<string, PortableRuntimeResultAnyRefV0>();
+  for (const ref of runtimeResultRefs) {
+    if (ref.kind !== "value") continue;
+    runtimeValueRefs.set(`${ref.eventId}:${ref.valueKey}`, ref);
+  }
+
+  return (event, key) => {
+    const valueRef = readPortableRuntimeResultValueRef(event, key)
+      ?? runtimeValueRefs.get(`${event.id}:${key}`)
+      ?? null;
+    if (valueRef?.kind === "value") {
+      if (key === "output") {
+        return event.roleId ? contributionOutputs.get(event.roleId) ?? "" : "";
+      }
+      if (key === "markdown") {
+        return result.artifact?.markdown ?? "";
+      }
+    }
+
+    const persisted = event.payload?.[key];
+    return typeof persisted === "string" ? persisted : "";
+  };
 }
 
 export function renderEvidenceMarkdown(packet: EvidencePacketV0): string {

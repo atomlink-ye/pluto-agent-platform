@@ -11,7 +11,6 @@ import {
 } from "@/orchestrator/evidence.js";
 import type {
   AgentEvent,
-  EvidencePacketV0,
   TeamRunResult,
   TeamTask,
 } from "@/contracts/types.js";
@@ -147,6 +146,7 @@ describe("evidence packet generation", () => {
     expect(packet.status).toBe("blocked");
     expect(packet.blockerReason).toBe("unknown");
   });
+
 });
 
 describe("validateEvidencePacketV0", () => {

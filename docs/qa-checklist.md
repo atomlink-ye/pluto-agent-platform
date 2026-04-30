@@ -7,6 +7,9 @@ Run after every meaningful change. Mark `[x]` only when the actual command succe
 - [ ] `pnpm install` (frozen lockfile preferred once one is generated)
 - [ ] `pnpm typecheck`
 - [ ] `pnpm test`
+- [ ] `pnpm verify` runs `pnpm spec:hygiene` in the default non-required mirror mode, so verify still passes when the production mirror is absent.
+- [ ] Local authors can point the hygiene check at a mirror with `pnpm spec:hygiene --input <path-to-mirror>`.
+- [ ] Example production-mirror check: `pnpm spec:hygiene --input .local/manager/spec-prd-trd-qa-rewrite/hierarchy/`
 
 ## 2. Fake adapter E2E (offline)
 

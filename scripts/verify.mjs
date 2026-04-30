@@ -5,9 +5,10 @@
  * Runs the following gates in order:
  *   1. pnpm typecheck  (TypeScript strict)
  *   2. pnpm test       (vitest run)
- *   3. pnpm build      (dist/ output)
- *   4. pnpm smoke:fake (fake adapter E2E)
- *   5. No-endpoint blocker check (exit 2 if OPENCODE_BASE_URL unset)
+ *   3. pnpm spec:hygiene (optional mirror validation)
+ *   4. pnpm build      (dist/ output)
+ *   5. pnpm smoke:fake (fake adapter E2E)
+ *   6. No-endpoint blocker check (exit 2 if OPENCODE_BASE_URL unset)
  *
  * This script is cross-platform (macOS/Node.js) and requires no secrets.
  * Excludes: pnpm smoke:docker (broader validation — see docs/testing-and-evals.md).
@@ -18,6 +19,7 @@ import { env } from "node:process";
 const VERIFY_SCRIPTS = [
   { name: "typecheck", cmd: "pnpm typecheck", expect: 0 },
   { name: "test", cmd: "pnpm test", expect: 0 },
+  { name: "spec:hygiene", cmd: "pnpm spec:hygiene", expect: 0 },
   { name: "build", cmd: "pnpm build", expect: 0 },
   { name: "smoke:fake", cmd: "pnpm smoke:fake", expect: 0 },
 ];

@@ -201,10 +201,30 @@ export class RunStore {
 
 export function sanitizeEventForPersistence(event: AgentEvent): AgentEvent {
   const { transient: _transient, ...persistableEvent } = event;
+  const payload = redactEventPayload(persistableEvent.payload) as Record<string, unknown>;
   return {
     ...persistableEvent,
-    payload: redactEventPayload(persistableEvent.payload) as AgentEvent["payload"],
+    payload: projectReferenceOnlyPayload(payload) as AgentEvent["payload"],
   };
+}
+
+function projectReferenceOnlyPayload(payload: Record<string, unknown>): Record<string, unknown> {
+  const projected = { ...payload };
+  const hasOutputRef = typeof projected["outputRef"] === "object" && projected["outputRef"] !== null;
+  const hasMarkdownRef = typeof projected["markdownRef"] === "object" && projected["markdownRef"] !== null;
+  const hasTextPayload = typeof projected["output"] === "string" || typeof projected["markdown"] === "string";
+
+  if (!hasTextPayload && typeof projected["summary"] !== "string") {
+    if (hasOutputRef) {
+      projected["summary"] = "Reference-only worker result.";
+    } else if (hasMarkdownRef) {
+      projected["summary"] = projected["kind"] === "summary"
+        ? "Reference-only lead summary."
+        : "Reference-only markdown result.";
+    }
+  }
+
+  return projected;
 }
 
 function normalizeEventPayload(ev: AgentEvent): unknown {

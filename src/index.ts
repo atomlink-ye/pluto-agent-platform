@@ -1,4 +1,13 @@
 export * from "./contracts/index.js";
+export * from "./catalog/contracts.js";
+export * from "./catalog/lifecycle.js";
+export * from "./catalog/seed.js";
+export * from "./extensions/contracts.js";
+export * from "./extensions/audit.js";
+export * from "./extensions/lifecycle.js";
+export * from "./runtime/index.js";
 export * from "./orchestrator/index.js";
+export * from "./portable-workflow/index.js";
+export * from "./versioning/index.js";
 export { FakeAdapter } from "./adapters/fake/index.js";
 export { PaseoOpenCodeAdapter } from "./adapters/paseo-opencode/index.js";

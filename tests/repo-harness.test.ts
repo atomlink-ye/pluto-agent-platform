@@ -19,6 +19,13 @@ describe("repo-harness", () => {
       );
       expect(pkg.scripts).toHaveProperty("verify");
     });
+
+    it("exposes spec:hygiene script", async () => {
+      const pkg = JSON.parse(
+        await readFile(resolve(PROJECT_ROOT, "package.json"), "utf-8")
+      );
+      expect(pkg.scripts["spec:hygiene"]).toBe("node scripts/spec-hygiene.mjs");
+    });
   });
 
   describe(".gitignore", () => {
@@ -51,6 +58,17 @@ describe("repo-harness", () => {
         "utf-8"
       );
       expect(content).toContain("test");
+    });
+
+    it("runs spec:hygiene in sequence without requiring the mirror", async () => {
+      const content = await readFile(
+        resolve(PROJECT_ROOT, "scripts/verify.mjs"),
+        "utf-8"
+      );
+      expect(content).toContain('name: "spec:hygiene"');
+      expect(content).toContain('cmd: "pnpm spec:hygiene"');
+      expect(content).not.toContain("pnpm spec:hygiene --require-mirror");
+      expect(content).not.toContain("pnpm spec:hygiene -- --require-mirror");
     });
 
     it("runs build in sequence", async () => {
@@ -148,6 +166,17 @@ describe("repo-harness", () => {
         "utf-8"
       );
       expect(content.length).toBeGreaterThan(0);
+    });
+
+    it("docs/qa-checklist.md documents verify and mirror override behavior", async () => {
+      const content = await readFile(
+        resolve(PROJECT_ROOT, "docs/qa-checklist.md"),
+        "utf-8"
+      );
+      expect(content).toContain("pnpm verify");
+      expect(content).toContain("pnpm spec:hygiene");
+      expect(content).toContain("non-required mirror mode");
+      expect(content).toContain("--input <path-to-mirror>");
     });
 
     it("docs/plans/README.md exists", async () => {

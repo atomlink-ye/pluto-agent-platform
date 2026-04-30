@@ -45,4 +45,16 @@ describe("pnpm submit --max-retries validation", () => {
     expect(stdout).toBe("");
     expect(stderr).toContain("--max-retries must be an integer from 0 to 3");
   });
+
+  it("reports a canonical blocker when a requirements preset makes the adapter ineligible", async () => {
+    const { exitCode, stderr, stdout } = await runSubmit([
+      ...baseArgs,
+      "--requirements-preset", "shell-write",
+    ]);
+
+    expect(exitCode).toBe(1);
+    expect(stdout).toBe("");
+    expect(stderr).toContain('"blockerReason":"capability_unavailable"');
+    expect(stderr).toContain("runtime_selector_no_match");
+  });
 });

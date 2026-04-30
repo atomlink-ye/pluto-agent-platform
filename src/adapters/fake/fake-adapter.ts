@@ -9,6 +9,12 @@ import type {
 } from "../../contracts/types.js";
 import type { PaseoTeamAdapter } from "../../contracts/adapter.js";
 import { redactObject } from "../../orchestrator/redactor.js";
+import {
+  buildAdapterCallbackIdentity,
+  type AdapterCallbackIdentity,
+  type AdapterCallbackStatus,
+} from "../../runtime/callback-normalizer.js";
+import { buildPortableRuntimeResultValueRefV0 } from "../../runtime/result-contract.js";
 
 /**
  * Deterministic in-memory adapter. Used by unit tests and any environment
@@ -42,7 +48,9 @@ export class FakeAdapter implements PaseoTeamAdapter {
       cursor: number;
       leadSessionId?: string;
       workerSessions: Map<string, AgentSession>;
+      workerAttempts: Map<string, number>;
       contributions: Map<string, string>;
+      callbackSequence: number;
       ended: boolean;
     }
   >();
@@ -78,7 +86,9 @@ export class FakeAdapter implements PaseoTeamAdapter {
       events: [],
       cursor: 0,
       workerSessions: new Map(),
+      workerAttempts: new Map(),
       contributions: new Map(),
+      callbackSequence: 0,
       ended: false,
     });
   }
@@ -94,25 +104,41 @@ export class FakeAdapter implements PaseoTeamAdapter {
     }
     const sessionId = `fake-lead-${this.idGen()}`;
     run.leadSessionId = sessionId;
+    const leadBatchId = this.nextBatchId(input.runId, "lead");
     this.appendEvent(input.runId, {
       type: "lead_started",
       roleId: input.role.id,
       sessionId,
       payload: { systemPrompt: input.role.systemPrompt },
+      callback: this.callbackIdentity({
+        source: "fake_adapter",
+        batchId: leadBatchId,
+        lineageKey: `lead:${sessionId}`,
+        status: "in_progress",
+        dedupeParts: ["lead_started", sessionId],
+      }),
     });
 
     // Simulate the lead deciding to dispatch every non-lead role in config order.
     const workerRoles = this.team.roles.filter((r) => r.kind === "worker");
     for (const worker of workerRoles) {
+      const instructions = this.workerInstructionsFor(input.task, worker);
       this.appendEvent(input.runId, {
         type: "worker_requested",
         roleId: worker.id,
         sessionId,
         payload: {
           targetRole: worker.id,
-          instructions: this.workerInstructionsFor(input.task, worker),
+          instructions,
         },
         rawPayloadKeys: ["instructions"],
+        callback: this.callbackIdentity({
+          source: "fake_adapter",
+          batchId: leadBatchId,
+          lineageKey: `worker_request:${sessionId}:${worker.id}`,
+          status: "in_progress",
+          dedupeParts: ["worker_requested", sessionId, worker.id, instructions],
+        }),
       });
     }
 
@@ -129,6 +155,9 @@ export class FakeAdapter implements PaseoTeamAdapter {
       throw new Error(`fake_adapter_worker_role_kind_mismatch: ${input.role.id}`);
     }
     const sessionId = `fake-worker-${input.role.id}-${this.idGen()}`;
+    const attempt = (run.workerAttempts.get(input.role.id) ?? 0) + 1;
+    run.workerAttempts.set(input.role.id, attempt);
+    const workerBatchId = this.nextBatchId(input.runId, `worker-${input.role.id}`);
     const session: AgentSession = { sessionId, role: input.role };
     run.workerSessions.set(sessionId, session);
 
@@ -136,7 +165,14 @@ export class FakeAdapter implements PaseoTeamAdapter {
       type: "worker_started",
       roleId: input.role.id,
       sessionId,
-      payload: { instructions: input.instructions },
+      payload: { instructions: input.instructions, attempt },
+      callback: this.callbackIdentity({
+        source: "fake_adapter",
+        batchId: workerBatchId,
+        lineageKey: `worker:${input.role.id}:attempt:${attempt}`,
+        status: "in_progress",
+        dedupeParts: ["worker_started", input.role.id, attempt, input.instructions],
+      }),
     });
 
     const output = this.workerOutputFor(input.role, input.instructions);
@@ -146,8 +182,15 @@ export class FakeAdapter implements PaseoTeamAdapter {
       type: "worker_completed",
       roleId: input.role.id,
       sessionId,
-      payload: { output },
+      payload: { output, attempt },
       rawPayloadKeys: ["output"],
+      callback: this.callbackIdentity({
+        source: "fake_adapter",
+        batchId: workerBatchId,
+        lineageKey: `worker:${input.role.id}:attempt:${attempt}`,
+        status: "completed",
+        dedupeParts: ["worker_completed", input.role.id, attempt, output],
+      }),
     });
 
     return session;
@@ -168,12 +211,20 @@ export class FakeAdapter implements PaseoTeamAdapter {
       return;
     }
     const summary = this.buildSummary(run.task, run.contributions);
+    const summaryBatchId = this.nextBatchId(input.runId, "lead-summary");
     this.appendEvent(input.runId, {
       type: "lead_message",
       roleId: this.team.leadRoleId,
       sessionId: input.sessionId,
       payload: { kind: "summary", markdown: summary },
       rawPayloadKeys: ["markdown"],
+      callback: this.callbackIdentity({
+        source: "fake_adapter",
+        batchId: summaryBatchId,
+        lineageKey: `lead_summary:${input.sessionId}`,
+        status: "completed",
+        dedupeParts: ["lead_message", input.sessionId, "summary", summary],
+      }),
     });
   }
 
@@ -216,6 +267,7 @@ export class FakeAdapter implements PaseoTeamAdapter {
       sessionId?: string;
       payload: Record<string, unknown>;
       rawPayloadKeys?: string[];
+      callback?: AdapterCallbackIdentity;
     },
   ) {
     const run = this.expectRun(runId);
@@ -235,9 +287,43 @@ export class FakeAdapter implements PaseoTeamAdapter {
         : {}),
       ...(partial.sessionId ? { sessionId: partial.sessionId } : {}),
       payload: redactedPayload,
-      ...(rawPayload ? { transient: { rawPayload } } : {}),
+      ...((rawPayload || partial.callback)
+        ? {
+            transient: {
+              ...(rawPayload ? { rawPayload } : {}),
+              ...(partial.callback ? { callback: partial.callback } : {}),
+            },
+          }
+        : {}),
     };
+    this.attachValueRefs(event, partial.rawPayloadKeys);
     run.events.push(event);
+  }
+
+  private attachValueRefs(event: AgentEvent, rawPayloadKeys?: readonly string[]) {
+    if (!rawPayloadKeys?.length) return;
+    if (rawPayloadKeys.includes("output")) {
+      event.payload.outputRef = buildPortableRuntimeResultValueRefV0(event, "output");
+    }
+    if (rawPayloadKeys.includes("markdown")) {
+      event.payload.markdownRef = buildPortableRuntimeResultValueRefV0(event, "markdown");
+    }
+  }
+
+  private nextBatchId(runId: string, label: string): string {
+    const run = this.expectRun(runId);
+    run.callbackSequence += 1;
+    return `fake:${runId}:${label}:${run.callbackSequence}`;
+  }
+
+  private callbackIdentity(input: {
+    source: string;
+    batchId: string;
+    lineageKey: string;
+    status: AdapterCallbackStatus;
+    dedupeParts: ReadonlyArray<unknown>;
+  }): AdapterCallbackIdentity {
+    return buildAdapterCallbackIdentity(input);
   }
 
   private workerInstructionsFor(task: TeamTask, worker: AgentRoleConfig): string {

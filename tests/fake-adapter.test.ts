@@ -55,6 +55,7 @@ describe("FakeAdapter protocol", () => {
     const events = await adapter.readEvents({ runId: "r2" });
     expect(events.map((e) => e.type)).toEqual(["worker_started", "worker_completed"]);
     expect(events[1]?.payload["output"]).toBe("token [REDACTED]");
+    expect(events[1]?.payload["outputRef"]).toBeDefined();
     expect(events[1]?.transient?.rawPayload?.["output"]).toBe(
       "token sk-ant-api03-abcdefghijklmnop",
     );
@@ -90,6 +91,7 @@ describe("FakeAdapter protocol", () => {
     expect(events[0]?.type).toBe("lead_message");
     expect(events[0]?.payload["kind"]).toBe("summary");
     const md = String(events[0]?.payload["markdown"]);
+    expect(events[0]?.payload["markdownRef"]).toBeDefined();
     expect(md).toContain("planner");
     expect(md).toContain("generator");
   });

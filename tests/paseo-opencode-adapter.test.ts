@@ -229,6 +229,7 @@ describe("PaseoOpenCodeAdapter — protocol with mocked runner", () => {
     const events = await adapter.readEvents({ runId: "r2" });
     expect(events.map((e) => e.type)).toEqual(["worker_started", "worker_completed"]);
     expect(events[1]?.payload["output"]).toBe("step 1\nstep 2");
+    expect(events[1]?.payload["outputRef"]).toBeDefined();
   });
 
   it("includes workspace and artifact-write instructions in worker prompts", async () => {
@@ -335,10 +336,12 @@ describe("PaseoOpenCodeAdapter — protocol with mocked runner", () => {
     const leadMessage = events.find((e) => e.type === "lead_message");
 
     expect(workerCompleted?.payload["output"]).toBe("worker token [REDACTED]");
+    expect(workerCompleted?.payload["outputRef"]).toBeDefined();
     expect(workerCompleted?.transient?.rawPayload?.["output"]).toBe(
       "worker token sk-ant-api03-abcdefghijklmnop",
     );
     expect(leadMessage?.payload["markdown"]).toBe("# Hello team\nsummary token [REDACTED]");
+    expect(leadMessage?.payload["markdownRef"]).toBeDefined();
     expect(leadMessage?.transient?.rawPayload?.["markdown"]).toBe(
       "# Hello team\nsummary token sk-ant-api03-abcdefghijklmnop",
     );
@@ -436,6 +439,7 @@ describe("PaseoOpenCodeAdapter — protocol with mocked runner", () => {
     expect(summary).toBeDefined();
     expect(summary!.payload["kind"]).toBe("summary");
     expect(String(summary!.payload["markdown"])).toContain("# Hello team");
+    expect(summary!.payload["markdownRef"]).toBeDefined();
   });
 
   it("rejects sendMessage to a non-lead session", async () => {

@@ -1,0 +1,10 @@
+{
+  "spec_directory": "beta-spec",
+  "source_combined_file": "beta-spec/source.md",
+  "generated_files": {
+    "overview": "beta-spec/overview.md",
+    "PRD": "beta-spec/PRD.md",
+    "TRD": "beta-spec/TRD.md",
+    "QA": "beta-spec/QA.md"
+  }
+}

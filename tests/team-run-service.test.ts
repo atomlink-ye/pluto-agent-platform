@@ -148,6 +148,21 @@ describe("TeamRunService with FakeAdapter (E2E)", () => {
     expect(eventTypes).toContain("artifact_created");
     expect(eventTypes[eventTypes.length - 1]).toBe("run_completed");
 
+    const parsedEvents = eventsRaw
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line));
+    const generatorStarted = parsedEvents.find(
+      (event) => event.type === "worker_started" && event.roleId === "generator",
+    );
+    expect(generatorStarted?.payload.catalogSelection).toMatchObject({
+      entry: { id: "default-generator", version: "0.0.1" },
+      workerRole: { id: "generator", version: "0.0.1" },
+      skill: { id: "generate-artifact", version: "0.0.1" },
+      template: { id: "generator-body", version: "0.0.1" },
+      policyPack: { id: "default-guardrails", version: "0.0.1" },
+    });
+
     // artifact.md exists and references each contributing role.
     const artifactMd = await readFile(
       join(workDir, ".pluto", "runs", result.runId, "artifact.md"),
@@ -218,4 +233,5 @@ describe("TeamRunService with FakeAdapter (E2E)", () => {
     );
     expect(eventsRaw).toContain("run_failed");
   });
+
 });

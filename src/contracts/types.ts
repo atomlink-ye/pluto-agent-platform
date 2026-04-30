@@ -6,6 +6,8 @@
  * leak through these types.
  */
 
+import type { PortableRuntimeResultAnyRefV0 } from "../runtime/result-contract.js";
+
 export type AgentRoleId = "lead" | "planner" | "generator" | "evaluator";
 
 export type AgentRoleKind = "team_lead" | "worker";
@@ -40,6 +42,10 @@ export interface TeamTask {
   artifactPath?: string;
   /** Hard floor on workers the lead must dispatch. MVP requires >= 2. */
   minWorkers: number;
+  /** Optional runtime capability gate evaluated before adapter start. */
+  runtimeRequirements?: RuntimeRequirementsV0;
+  /** Optional provider profile merged into runtimeRequirements. */
+  providerProfileId?: string;
 }
 
 /** Identifier of a Paseo agent session backing a role. */
@@ -82,6 +88,13 @@ export interface AgentEvent {
    */
   transient?: {
     rawPayload?: Record<string, unknown>;
+    callback?: {
+      source: string;
+      batchId: string;
+      eventId: string;
+      lineageKey: string;
+      status: "in_progress" | "blocked" | "completed" | "failed";
+    };
   };
 }
 
@@ -109,11 +122,31 @@ export interface RetryEventPayloadV0 {
   roleId: AgentRoleId;
 }
 
+export interface ProvenancePinRef {
+  id: string;
+  version: string;
+}
+
+export interface WorkerContributionProvenancePins {
+  workerRoleRef?: ProvenancePinRef;
+  skillRef?: ProvenancePinRef;
+  templateRef?: ProvenancePinRef;
+  policyPackRefs?: ProvenancePinRef[];
+  catalogEntryRef?: ProvenancePinRef;
+  extensionInstallRef?: string | null;
+}
+
 export interface WorkerContribution {
   roleId: AgentRoleId;
   sessionId: string;
   /** Short text contribution that goes into the artifact. */
   output: string;
+  workerRoleRef?: ProvenancePinRef;
+  skillRef?: ProvenancePinRef;
+  templateRef?: ProvenancePinRef;
+  policyPackRefs?: ProvenancePinRef[];
+  catalogEntryRef?: ProvenancePinRef;
+  extensionInstallRef?: string | null;
 }
 
 export interface FinalArtifact {
@@ -130,6 +163,7 @@ export interface TeamRunResult {
   status: "completed" | "failed";
   artifact?: FinalArtifact;
   events: AgentEvent[];
+  runtimeResultRefs?: PortableRuntimeResultAnyRefV0[];
   /** Filled when status = failed. */
   failure?: { message: string; cause?: unknown };
   /** MVP-beta: classified blocker reason. null for successful runs. */
@@ -161,6 +195,7 @@ export interface EvidencePacketV0 {
   taskTitle: string;
   status: EvidencePacketStatusV0;
   blockerReason: BlockerReasonV0 | null;
+  runtimeResultRefs?: PortableRuntimeResultAnyRefV0[];
   startedAt: string;
   finishedAt: string;
   workspace: string | null;
@@ -170,6 +205,12 @@ export interface EvidencePacketV0 {
     contributionSummary: string;
     tokenUsageApprox: number | null;
     durationMsApprox: number | null;
+    workerRoleRef?: ProvenancePinRef;
+    skillRef?: ProvenancePinRef;
+    templateRef?: ProvenancePinRef;
+    policyPackRefs?: ProvenancePinRef[];
+    catalogEntryRef?: ProvenancePinRef;
+    extensionInstallRef?: string | null;
   }>;
   validation: {
     outcome: "pass" | "fail" | "na";
@@ -233,4 +274,104 @@ export interface RunsEventV0 {
   kind: string;
   attempt: number;
   payload: unknown;
+}
+
+export type RuntimeToolKindV0 =
+  | "shell"
+  | "web_fetch"
+  | "search"
+  | "image_input";
+
+export type RuntimeLocalityV0 = "local" | "remote" | "hybrid";
+
+export type RuntimePostureV0 =
+  | "workspace_write"
+  | "sandboxed"
+  | "host_exec";
+
+export interface RuntimeCapabilityDescriptorV0 {
+  schemaVersion: 0;
+  runtimeId: string;
+  adapterId: string;
+  provider: string;
+  model?: {
+    id?: string;
+    family?: string;
+    mode?: string;
+    contextWindowTokens?: number;
+    maxOutputTokens?: number;
+    structuredOutput?: boolean;
+  };
+  tools?: Partial<Record<RuntimeToolKindV0, boolean>>;
+  files?: {
+    read?: boolean;
+    write?: boolean;
+    workspaceRootOnly?: boolean;
+  };
+  callbacks?: {
+    followUpMessages?: boolean;
+    eventStream?: boolean;
+    backgroundSessions?: boolean;
+  };
+  locality: RuntimeLocalityV0;
+  posture: RuntimePostureV0;
+  limits?: {
+    maxExecutionMs?: number;
+    maxFilesPerRun?: number;
+  };
+}
+
+export interface RuntimeRequirementsV0 {
+  runtimeIds?: string[];
+  adapterIds?: string[];
+  providers?: string[];
+  model?: {
+    ids?: string[];
+    families?: string[];
+    modes?: string[];
+    minContextWindowTokens?: number;
+    minMaxOutputTokens?: number;
+    structuredOutput?: boolean;
+  };
+  tools?: Partial<Record<RuntimeToolKindV0, boolean>>;
+  files?: {
+    read?: boolean;
+    write?: boolean;
+    workspaceRootOnly?: boolean;
+  };
+  callbacks?: {
+    followUpMessages?: boolean;
+    eventStream?: boolean;
+    backgroundSessions?: boolean;
+  };
+  locality?: RuntimeLocalityV0[];
+  posture?: RuntimePostureV0[];
+  limits?: {
+    minExecutionMs?: number;
+    minFilesPerRun?: number;
+  };
+}
+
+export interface ProviderProfileV0 {
+  schemaVersion: 0;
+  id: string;
+  provider: string;
+  label: string;
+  defaultModel?: string;
+  envRefs?: {
+    required: string[];
+    optional?: string[];
+  };
+  secretRefs?: {
+    required: string[];
+    optional?: string[];
+  };
+  selection?: {
+    runtimeIds?: string[];
+    adapterIds?: string[];
+    modelIds?: string[];
+    modelFamilies?: string[];
+    localities?: RuntimeLocalityV0[];
+    postures?: RuntimePostureV0[];
+  };
 }

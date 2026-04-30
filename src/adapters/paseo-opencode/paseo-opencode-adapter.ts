@@ -10,6 +10,12 @@ import type {
 } from "../../contracts/types.js";
 import type { PaseoTeamAdapter } from "../../contracts/adapter.js";
 import { redactObject } from "../../orchestrator/redactor.js";
+import {
+  buildAdapterCallbackIdentity,
+  type AdapterCallbackIdentity,
+  type AdapterCallbackStatus,
+} from "../../runtime/callback-normalizer.js";
+import { buildPortableRuntimeResultValueRefV0 } from "../../runtime/result-contract.js";
 import { DEFAULT_RUNNER, type ProcessRunner } from "./process-runner.js";
 
 /**
@@ -80,6 +86,7 @@ interface RunState {
   followers: Array<{ dispose: () => Promise<void> }>;
   workerAgentIds: Map<string, string>; // roleId → paseo agent id
   workerAttempts: Map<string, number>;
+  callbackSequence: number;
   /** First-text-line cursor per worker so we can attribute the assistant turn. */
   workerLogCursors: Map<string, number>;
 }
@@ -131,6 +138,7 @@ export class PaseoOpenCodeAdapter implements PaseoTeamAdapter {
       followers: [],
       workerAgentIds: new Map(),
       workerAttempts: new Map(),
+      callbackSequence: 0,
       workerLogCursors: new Map(),
     });
   }
@@ -158,12 +166,20 @@ export class PaseoOpenCodeAdapter implements PaseoTeamAdapter {
       );
     }
     run.leadAgentId = agentId;
+    const leadBatchId = this.nextBatchId(run, "lead");
 
     this.appendEvent(input.runId, {
       type: "lead_started",
       roleId: input.role.id,
       sessionId: agentId,
       payload: { provider: this.provider, paseoAgentId: agentId, mode: this.mode },
+      callback: this.callbackIdentity({
+        source: "paseo_opencode",
+        batchId: leadBatchId,
+        lineageKey: `lead:${agentId}`,
+        status: "in_progress",
+        dedupeParts: ["lead_started", agentId, this.provider, this.mode],
+      }),
     });
 
     // Subscribe to the lead's text stream and translate WORKER_REQUEST markers.
@@ -206,12 +222,20 @@ export class PaseoOpenCodeAdapter implements PaseoTeamAdapter {
       );
     }
     run.workerAgentIds.set(input.role.id, agentId);
+    const workerBatchId = this.nextBatchId(run, `worker-${input.role.id}`);
 
     this.appendEvent(input.runId, {
       type: "worker_started",
       roleId: input.role.id,
       sessionId: agentId,
       payload: { paseoAgentId: agentId, instructions: input.instructions, attempt },
+      callback: this.callbackIdentity({
+        source: "paseo_opencode",
+        batchId: workerBatchId,
+        lineageKey: `worker:${input.role.id}:attempt:${attempt}`,
+        status: "in_progress",
+        dedupeParts: ["worker_started", input.role.id, attempt, input.instructions],
+      }),
     });
 
     const wait = await this.runner.exec(
@@ -232,6 +256,13 @@ export class PaseoOpenCodeAdapter implements PaseoTeamAdapter {
       sessionId: agentId,
       payload: { paseoAgentId: agentId, output, attempt },
       rawPayloadKeys: ["output"],
+      callback: this.callbackIdentity({
+        source: "paseo_opencode",
+        batchId: workerBatchId,
+        lineageKey: `worker:${input.role.id}:attempt:${attempt}`,
+        status: "completed",
+        dedupeParts: ["worker_completed", input.role.id, attempt, output],
+      }),
     });
 
     return { sessionId: agentId, role: input.role, external: { paseoAgentId: agentId } };
@@ -271,12 +302,20 @@ export class PaseoOpenCodeAdapter implements PaseoTeamAdapter {
         { cwd: this.runCwd(run) },
       );
       const markdown = await this.fetchAgentText(input.sessionId, run, wireMessage);
+      const summaryBatchId = this.nextBatchId(run, "lead-summary");
       this.appendEvent(input.runId, {
         type: "lead_message",
         roleId: run.team.leadRoleId,
         sessionId: input.sessionId,
         payload: { kind: "summary", markdown },
         rawPayloadKeys: ["markdown"],
+        callback: this.callbackIdentity({
+          source: "paseo_opencode",
+          batchId: summaryBatchId,
+          lineageKey: `lead_summary:${input.sessionId}`,
+          status: "completed",
+          dedupeParts: ["lead_message", input.sessionId, "summary", markdown],
+        }),
       });
     }
   }
@@ -482,12 +521,21 @@ export class PaseoOpenCodeAdapter implements PaseoTeamAdapter {
       if (!m) continue;
       const targetRole = m[1]!;
       const instructions = (m[2] ?? "").trim();
+      const run = this.expectRun(runId);
+      const batchId = this.nextBatchId(run, `worker-request-${targetRole}`);
       this.appendEvent(runId, {
         type: "worker_requested",
         roleId: targetRole,
         sessionId: leadId,
         payload: { targetRole, instructions, source: "lead_text_marker" },
         rawPayloadKeys: ["instructions"],
+        callback: this.callbackIdentity({
+          source: "paseo_opencode",
+          batchId,
+          lineageKey: `worker_request:${leadId}:${targetRole}`,
+          status: "in_progress",
+          dedupeParts: ["worker_requested", leadId, targetRole, instructions],
+        }),
       });
     }
   }
@@ -549,6 +597,7 @@ export class PaseoOpenCodeAdapter implements PaseoTeamAdapter {
       sessionId?: string;
       payload: Record<string, unknown>;
       rawPayloadKeys?: string[];
+      callback?: AdapterCallbackIdentity;
     },
   ) {
     const run = this.expectRun(runId);
@@ -568,9 +617,42 @@ export class PaseoOpenCodeAdapter implements PaseoTeamAdapter {
         : {}),
       ...(partial.sessionId ? { sessionId: partial.sessionId } : {}),
       payload: redactedPayload,
-      ...(rawPayload ? { transient: { rawPayload } } : {}),
+      ...((rawPayload || partial.callback)
+        ? {
+            transient: {
+              ...(rawPayload ? { rawPayload } : {}),
+              ...(partial.callback ? { callback: partial.callback } : {}),
+            },
+          }
+        : {}),
     };
+    this.attachValueRefs(event, partial.rawPayloadKeys);
     run.events.push(event);
+  }
+
+  private attachValueRefs(event: AgentEvent, rawPayloadKeys?: readonly string[]) {
+    if (!rawPayloadKeys?.length) return;
+    if (rawPayloadKeys.includes("output")) {
+      event.payload.outputRef = buildPortableRuntimeResultValueRefV0(event, "output");
+    }
+    if (rawPayloadKeys.includes("markdown")) {
+      event.payload.markdownRef = buildPortableRuntimeResultValueRefV0(event, "markdown");
+    }
+  }
+
+  private nextBatchId(run: RunState, label: string): string {
+    run.callbackSequence += 1;
+    return `paseo:${run.task.id}:${label}:${run.callbackSequence}`;
+  }
+
+  private callbackIdentity(input: {
+    source: string;
+    batchId: string;
+    lineageKey: string;
+    status: AdapterCallbackStatus;
+    dedupeParts: ReadonlyArray<unknown>;
+  }): AdapterCallbackIdentity {
+    return buildAdapterCallbackIdentity(input);
   }
 
   private expectRun(runId: string): RunState {

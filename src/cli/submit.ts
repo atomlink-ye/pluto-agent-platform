@@ -21,7 +21,8 @@ import { FakeAdapter } from "../adapters/fake/index.js";
 import { PaseoOpenCodeAdapter } from "../adapters/paseo-opencode/index.js";
 import type { PaseoTeamAdapter } from "../contracts/adapter.js";
 import { DEFAULT_TEAM, RunStore, TeamRunService } from "../orchestrator/index.js";
-import type { TeamTask } from "../contracts/types.js";
+import { RuntimeRegistry } from "../runtime/index.js";
+import type { RuntimeCapabilityDescriptorV0, RuntimeRequirementsV0, TeamTask } from "../contracts/types.js";
 
 interface CliFlags {
   title: string;
@@ -31,6 +32,9 @@ interface CliFlags {
   artifact?: string;
   minWorkers: number;
   maxRetries: number;
+  runtimeId?: string;
+  providerProfileId?: string;
+  requirementsPreset?: "shell-write";
 }
 
 function parseFlags(argv: string[]): CliFlags {
@@ -75,6 +79,18 @@ function parseFlags(argv: string[]): CliFlags {
         flags.maxRetries = parseMaxRetries(v);
         i++;
         break;
+      case "--runtime-id":
+        flags.runtimeId = v;
+        i++;
+        break;
+      case "--profile":
+        flags.providerProfileId = v;
+        i++;
+        break;
+      case "--requirements-preset":
+        flags.requirementsPreset = parseRequirementsPreset(v);
+        i++;
+        break;
       default:
         if (k && k.startsWith("--")) throw new Error(`unknown_flag:${k}`);
     }
@@ -96,6 +112,13 @@ function parseMaxRetries(value: string | undefined): number {
   return parsed;
 }
 
+function parseRequirementsPreset(value: string | undefined): "shell-write" {
+  if (value === "shell-write") {
+    return value;
+  }
+  throw new Error("invalid_requirements_preset: supported values: shell-write");
+}
+
 async function main() {
   const flags = parseFlags(process.argv.slice(2));
   const workspace = resolve(flags.workspace);
@@ -108,6 +131,11 @@ async function main() {
     adapter = new PaseoOpenCodeAdapter({ workspaceCwd: workspace });
   }
 
+  const runtimeRequirements = buildRuntimeRequirements(flags);
+  const runtimeRegistry = runtimeRequirements || flags.providerProfileId
+    ? buildRuntimeRegistry(workspace, flags.adapter)
+    : undefined;
+
   const store = new RunStore({
     dataDir: process.env["PLUTO_DATA_DIR"] ?? ".pluto",
   });
@@ -115,6 +143,7 @@ async function main() {
     adapter,
     team: DEFAULT_TEAM,
     store,
+    runtimeRegistry,
     timeoutMs: 10 * 60 * 1000,
     pumpIntervalMs: 50,
     maxRetries: flags.maxRetries,
@@ -127,11 +156,18 @@ async function main() {
     workspacePath: workspace,
     minWorkers: flags.minWorkers,
     ...(flags.artifact ? { artifactPath: flags.artifact } : {}),
+    ...(runtimeRequirements ? { runtimeRequirements } : {}),
+    ...(flags.providerProfileId ? { providerProfileId: flags.providerProfileId } : {}),
   };
 
   const result = await service.run(task);
   if (result.status === "failed") {
-    console.error(JSON.stringify({ runId: result.runId, status: "failed", failure: result.failure?.message }));
+    console.error(JSON.stringify({
+      runId: result.runId,
+      status: "failed",
+      blockerReason: result.blockerReason ?? null,
+      failure: result.failure?.message,
+    }));
     process.exitCode = 1;
     return;
   }
@@ -152,6 +188,129 @@ async function main() {
     ),
   );
 }
+
+function buildRuntimeRequirements(flags: CliFlags): RuntimeRequirementsV0 | undefined {
+  if (!flags.runtimeId && !flags.requirementsPreset) {
+    return undefined;
+  }
+
+  const requirements: RuntimeRequirementsV0 = {};
+
+  if (flags.runtimeId) {
+    requirements.runtimeIds = [flags.runtimeId];
+  }
+
+  if (flags.requirementsPreset === "shell-write") {
+    requirements.tools = { shell: true };
+    requirements.files = { write: true };
+  }
+
+  return requirements;
+}
+
+function buildRuntimeRegistry(
+  workspace: string,
+  adapterId: CliFlags["adapter"],
+): RuntimeRegistry {
+  const registry = new RuntimeRegistry();
+  if (adapterId === "fake") {
+    registry.registerAdapter({
+      id: "fake",
+      factory: {
+        create: () => new FakeAdapter({ team: DEFAULT_TEAM }),
+      },
+    });
+    registry.registerRuntime({
+      id: "fake-local",
+      adapterId: "fake",
+      capability: fakeCapability,
+    });
+    return registry;
+  }
+
+  registry.registerAdapter({
+    id: "paseo-opencode",
+    factory: {
+      create: () => new PaseoOpenCodeAdapter({ workspaceCwd: workspace }),
+    },
+  });
+  registry.registerRuntime({
+    id: "opencode-live",
+    adapterId: "paseo-opencode",
+    capability: openCodeCapability,
+  });
+  registry.registerProviderProfile({
+    profile: {
+      schemaVersion: 0,
+      id: "opencode-default",
+      provider: "opencode",
+      label: "OpenCode default",
+      envRefs: { required: ["OPENCODE_BASE_URL"] },
+      secretRefs: { required: ["OPENCODE_API_KEY"] },
+      selection: {
+        runtimeIds: ["opencode-live"],
+        adapterIds: ["paseo-opencode"],
+        localities: ["remote"],
+      },
+    },
+  });
+  return registry;
+}
+
+const fakeCapability: RuntimeCapabilityDescriptorV0 = {
+  schemaVersion: 0,
+  runtimeId: "fake-local",
+  adapterId: "fake",
+  provider: "fake",
+  model: {
+    id: "fake/test",
+    family: "fake",
+    mode: "test",
+    contextWindowTokens: 4_096,
+  },
+  tools: {
+    shell: false,
+  },
+  files: {
+    read: true,
+    write: false,
+    workspaceRootOnly: true,
+  },
+  callbacks: {
+    followUpMessages: true,
+  },
+  locality: "local",
+  posture: "sandboxed",
+};
+
+const openCodeCapability: RuntimeCapabilityDescriptorV0 = {
+  schemaVersion: 0,
+  runtimeId: "opencode-live",
+  adapterId: "paseo-opencode",
+  provider: "opencode",
+  model: {
+    id: "opencode/minimax-m2.5-free",
+    family: "minimax",
+    mode: "build",
+    contextWindowTokens: 128_000,
+  },
+  tools: {
+    shell: true,
+  },
+  files: {
+    read: true,
+    write: true,
+    workspaceRootOnly: true,
+  },
+  callbacks: {
+    followUpMessages: true,
+  },
+  locality: "remote",
+  posture: "workspace_write",
+  limits: {
+    maxExecutionMs: 180_000,
+  },
+};
 
 main().catch((err) => {
   console.error(err instanceof Error ? err.stack : String(err));

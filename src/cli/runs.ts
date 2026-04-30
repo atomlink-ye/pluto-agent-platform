@@ -178,6 +178,8 @@ async function handleShow(
       const payload = asRecord(ev.payload);
       const contributionSummary = typeof payload?.["output"] === "string"
         ? payload["output"].slice(0, 200) || null
+        : typeof payload?.["summary"] === "string"
+          ? payload["summary"].slice(0, 200) || null
         : null;
       const existing = workerMap.get(role);
       if (existing) {

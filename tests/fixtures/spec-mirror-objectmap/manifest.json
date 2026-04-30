@@ -1,0 +1,32 @@
+{
+  "Alpha Overview": {
+    "slug": "alpha-spec",
+    "source_combined_file": "alpha-spec/source.md",
+    "generated_files": {
+      "overview": "alpha-spec/overview.md",
+      "PRD": "alpha-spec/PRD.md",
+      "TRD": "alpha-spec/TRD.md",
+      "QA": "alpha-spec/QA.md"
+    }
+  },
+  "Beta Overview": {
+    "slug": "beta-spec",
+    "source_combined_file": "beta-spec/source.md",
+    "generated_files": {
+      "overview": "beta-spec/overview.md",
+      "PRD": "beta-spec/PRD.md",
+      "TRD": "beta-spec/TRD.md",
+      "QA": "beta-spec/QA.md"
+    }
+  },
+  "Gamma Overview": {
+    "slug": "gamma-spec",
+    "source_combined_file": "gamma-spec/source.md",
+    "generated_files": {
+      "overview": "gamma-spec/overview.md",
+      "PRD": "gamma-spec/PRD.md",
+      "TRD": "gamma-spec/TRD.md",
+      "QA": "gamma-spec/QA.md"
+    }
+  }
+}

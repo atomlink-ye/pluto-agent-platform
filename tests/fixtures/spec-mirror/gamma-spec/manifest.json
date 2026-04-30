@@ -1,0 +1,10 @@
+{
+  "spec_directory": "gamma-spec",
+  "source_combined_file": "gamma-spec/source.md",
+  "generated_files": {
+    "overview": "gamma-spec/overview.md",
+    "PRD": "gamma-spec/PRD.md",
+    "TRD": "gamma-spec/TRD.md",
+    "QA": "gamma-spec/QA.md"
+  }
+}
