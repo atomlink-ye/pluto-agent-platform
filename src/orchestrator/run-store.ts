@@ -31,6 +31,10 @@ export class RunStore {
     return join(this.dataDir, "runs", runId);
   }
 
+  dataDirPath(): string {
+    return this.dataDir;
+  }
+
   async ensure(runId: string): Promise<void> {
     await mkdir(this.runDir(runId), { recursive: true });
   }

@@ -64,6 +64,7 @@ Persisted events are part of the same control surface. `RunStore.appendEvent()` 
 - `pnpm runs list/show/events/artifact/evidence` all read from `.pluto/runs/`.
 - `pnpm runs events --follow` is a real file-backed follow mode over `events.jsonl`, with role/kind/since filters applied to each poll.
 - `pnpm runs evidence` degrades gracefully for pre-evidence runs instead of failing.
+- `pnpm observability` and `pnpm ops` are local read-only operator query surfaces backed by Store-managed readiness data; detailed schemas stay in `src/contracts/observability.ts`, `src/contracts/ops.ts`, and `src/ops/upgrade-events.ts`.
 
 ## For New Agents
 

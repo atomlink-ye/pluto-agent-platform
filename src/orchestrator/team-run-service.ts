@@ -30,6 +30,13 @@ import {
   readPortableRuntimeResultValueRefs,
   type PortableRuntimeResultAnyRefV0,
 } from "../runtime/result-contract.js";
+import { ObservabilityStore } from "../observability/observability-store.js";
+import {
+  DEFAULT_BUDGET_SNAPSHOT_MAX_AGE_MS,
+  evaluateBudgetGateV0,
+  recordBudgetDecisionV0,
+} from "../observability/budgets.js";
+import type { BudgetSnapshotV0, BudgetV0, UsageMeterV0 } from "../contracts/observability.js";
 
 export interface TeamRunServiceOptions {
   adapter: PaseoTeamAdapter;
@@ -51,6 +58,8 @@ export interface TeamRunServiceOptions {
   underdispatchFallbackMs?: number;
   /** Per-worker retry count for retryable blocker reasons. 0–3, default 1. */
   maxRetries?: number;
+  observabilityStore?: ObservabilityStore;
+  budgetSnapshotMaxAgeMs?: number;
 }
 
 const MAX_RETRIES_HARD_CAP = 3;
@@ -66,6 +75,8 @@ export class TeamRunService {
   private readonly idGen: () => string;
   private readonly clock: () => Date;
   private readonly maxRetries: number;
+  private readonly observabilityStore: ObservabilityStore;
+  private readonly budgetSnapshotMaxAgeMs: number;
 
   constructor(opts: TeamRunServiceOptions) {
     this.adapter = opts.adapter;
@@ -81,6 +92,8 @@ export class TeamRunService {
       Math.max(opts.maxRetries ?? 1, 0),
       MAX_RETRIES_HARD_CAP,
     );
+    this.observabilityStore = opts.observabilityStore ?? new ObservabilityStore({ dataDir: this.store.dataDirPath() });
+    this.budgetSnapshotMaxAgeMs = opts.budgetSnapshotMaxAgeMs ?? DEFAULT_BUDGET_SNAPSHOT_MAX_AGE_MS;
   }
 
   async run(task: TeamTask): Promise<TeamRunResult> {
@@ -199,6 +212,59 @@ export class TeamRunService {
 
       if (runtimeSelection?.ok) {
         adapter = await runtimeSelection.candidate.adapter.factory.create();
+      }
+
+      const budgetFailure = await this.enforceBudgetGate(runId, task, emit);
+      if (budgetFailure) {
+        blockerReason = "quota_exceeded";
+        await emit("blocker", {
+          reason: blockerReason,
+          classifierVersion: 0,
+          message: budgetFailure.message,
+          budgetBehavior: budgetFailure.behavior,
+          budgetDecisionIds: budgetFailure.decisionIds,
+          localApproximation: true,
+        });
+        await emit("run_failed", {
+          message: budgetFailure.message,
+          budgetBehavior: budgetFailure.behavior,
+          budgetDecisionIds: budgetFailure.decisionIds,
+        });
+
+        const finishedAt = this.clock();
+        const result: TeamRunResult = {
+          runId,
+          status: "failed",
+          events: collected,
+          runtimeResultRefs,
+          blockerReason,
+          failure: { message: budgetFailure.message },
+        };
+
+        const evidenceFailure = await this.writeEvidencePacket(
+          task,
+          result,
+          collected,
+          startedAt,
+          finishedAt,
+          blockerReason,
+        );
+        if (!evidenceFailure) {
+          return result;
+        }
+
+        blockerReason = evidenceFailure.reason;
+        await emit("blocker", {
+          reason: evidenceFailure.reason,
+          classifierVersion: evidenceFailure.classifierVersion,
+          message: evidenceFailure.message,
+        });
+        await emit("run_failed", { message: evidenceFailure.message });
+        return {
+          ...result,
+          blockerReason,
+          failure: { message: evidenceFailure.message, cause: evidenceFailure.cause },
+        };
       }
 
       await adapter.startRun({ runId, task, team: this.team });
@@ -653,5 +719,77 @@ export class TeamRunService {
       requirements: task.runtimeRequirements,
       providerProfileId: task.providerProfileId,
     });
+  }
+
+  private async enforceBudgetGate(
+    runId: string,
+    task: TeamTask,
+    _emit: (type: AgentEventType, payload?: Record<string, unknown>) => Promise<AgentEvent>,
+  ): Promise<{ behavior: "block" | "require_override"; message: string; decisionIds: string[] } | null> {
+    const workspaceId = task.workspacePath;
+    const records = await this.observabilityStore.query({
+      workspaceId,
+      kind: ["budget", "budget_snapshot", "usage_meter"],
+    });
+    const budgets = records.filter((record): record is BudgetV0 => record.kind === "budget");
+    if (budgets.length === 0) {
+      return null;
+    }
+
+    const evaluation = evaluateBudgetGateV0({
+      scopeRef: { kind: "workspace", id: workspaceId },
+      subjectRef: { kind: "team_run", id: runId },
+      budgets,
+      snapshots: records.filter((record): record is BudgetSnapshotV0 => record.kind === "budget_snapshot"),
+      usageMeters: records.filter((record): record is UsageMeterV0 => record.kind === "usage_meter"),
+      now: this.clock(),
+      snapshotMaxAgeMs: this.budgetSnapshotMaxAgeMs,
+    });
+
+    const decisionIds: string[] = [];
+    for (const decision of evaluation.decisions) {
+      const effectiveDecision = task.budgetOverride && decision.behavior === "require_override"
+        ? {
+            ...decision,
+            overrideRequired: false,
+            reason: `${decision.reason} Governed override applied: ${task.budgetOverride.reason}`,
+          }
+        : decision;
+      const record = await recordBudgetDecisionV0({
+        store: this.observabilityStore,
+        workspaceId,
+        correlationId: runId,
+        decision: effectiveDecision,
+        actorId: task.budgetOverride?.actorId,
+        principalId: task.budgetOverride?.principalId ?? "pluto.orchestrator",
+        runId,
+        runAttempt: 1,
+        idGen: this.idGen,
+        clock: this.clock,
+      });
+      decisionIds.push(record.id);
+    }
+
+    if (evaluation.behavior === "block") {
+      return {
+        behavior: evaluation.behavior,
+        message: evaluation.reason,
+        decisionIds,
+      };
+    }
+
+    if (evaluation.behavior === "require_override") {
+      if (task.budgetOverride) {
+        return null;
+      }
+
+      return {
+        behavior: evaluation.behavior,
+        message: evaluation.reason,
+        decisionIds,
+      };
+    }
+
+    return null;
   }
 }

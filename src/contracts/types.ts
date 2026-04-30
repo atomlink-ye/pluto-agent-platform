@@ -46,6 +46,12 @@ export interface TeamTask {
   runtimeRequirements?: RuntimeRequirementsV0;
   /** Optional provider profile merged into runtimeRequirements. */
   providerProfileId?: string;
+  /** Optional governed override for approximate budget decisions. */
+  budgetOverride?: {
+    reason: string;
+    actorId?: string | null;
+    principalId?: string | null;
+  };
 }
 
 /** Identifier of a Paseo agent session backing a role. */
