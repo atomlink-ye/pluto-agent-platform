@@ -8,6 +8,7 @@ import type {
   TeamTask,
 } from "../../contracts/types.js";
 import type { PaseoTeamAdapter } from "../../contracts/adapter.js";
+import { redactObject } from "../../orchestrator/redactor.js";
 
 /**
  * Deterministic in-memory adapter. Used by unit tests and any environment
@@ -111,6 +112,7 @@ export class FakeAdapter implements PaseoTeamAdapter {
           targetRole: worker.id,
           instructions: this.workerInstructionsFor(input.task, worker),
         },
+        rawPayloadKeys: ["instructions"],
       });
     }
 
@@ -145,6 +147,7 @@ export class FakeAdapter implements PaseoTeamAdapter {
       roleId: input.role.id,
       sessionId,
       payload: { output },
+      rawPayloadKeys: ["output"],
     });
 
     return session;
@@ -170,6 +173,7 @@ export class FakeAdapter implements PaseoTeamAdapter {
       roleId: this.team.leadRoleId,
       sessionId: input.sessionId,
       payload: { kind: "summary", markdown: summary },
+      rawPayloadKeys: ["markdown"],
     });
   }
 
@@ -206,9 +210,21 @@ export class FakeAdapter implements PaseoTeamAdapter {
 
   private appendEvent(
     runId: string,
-    partial: { type: AgentEventType; roleId?: string; sessionId?: string; payload: Record<string, unknown> },
+    partial: {
+      type: AgentEventType;
+      roleId?: string;
+      sessionId?: string;
+      payload: Record<string, unknown>;
+      rawPayloadKeys?: string[];
+    },
   ) {
     const run = this.expectRun(runId);
+    const redactedPayload = redactObject(partial.payload) as Record<string, unknown>;
+    const rawPayload = partial.rawPayloadKeys?.length
+      ? Object.fromEntries(
+          partial.rawPayloadKeys.map((key) => [key, partial.payload[key]]),
+        )
+      : undefined;
     const event: AgentEvent = {
       id: this.idGen(),
       runId,
@@ -218,7 +234,8 @@ export class FakeAdapter implements PaseoTeamAdapter {
         ? { roleId: partial.roleId as AgentEvent["roleId"] }
         : {}),
       ...(partial.sessionId ? { sessionId: partial.sessionId } : {}),
-      payload: partial.payload,
+      payload: redactedPayload,
+      ...(rawPayload ? { transient: { rawPayload } } : {}),
     };
     run.events.push(event);
   }

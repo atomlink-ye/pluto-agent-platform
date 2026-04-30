@@ -99,6 +99,45 @@ describe("PaseoOpenCodeAdapter — log text extraction", () => {
       "Plan: four hello lines.",
     );
   });
+
+  it("strips echoed worker prompt continuation lines when the prompt starts with task metadata", () => {
+    const fullPrompt = [
+      "You are the planner.",
+      "",
+      "Task title: Hello team",
+      "Goal: Produce a hello-team artifact.",
+      "Workspace path: /tmp/pluto-live",
+      "Artifact path the team should converge on: /tmp/pluto-live/hello-pluto.md",
+      "",
+      "Instructions from the Team Lead:",
+      "Write the hello lines into the artifact file.",
+      "Keep the tone upbeat.",
+      "",
+      "Work in the workspace directly. If the lead asks you to create or update files, make those changes before replying.",
+      "Do not only describe intended edits when the task calls for an artifact change.",
+      "Reply with your contribution only. Keep it concise (under 15 lines).",
+    ].join("\n");
+    const raw = [
+      "[User] Task title: Hello team",
+      "Goal: Produce a hello-team artifact.",
+      "Workspace path: /tmp/pluto-live",
+      "Artifact path the team should converge on: /tmp/pluto-live/hello-pluto.md",
+      "",
+      "Instructions from the Team Lead:",
+      "Write the hello lines into the artifact file.",
+      "Keep the tone upbeat.",
+      "",
+      "Work in the workspace directly. If the lead asks you to create or update files, make those changes before replying.",
+      "Do not only describe intended edits when the task calls for an artifact change.",
+      "Reply with your contribution only. Keep it concise (under 15 lines).",
+      "Wrote four hello lines to /tmp/pluto-live/hello-pluto.md.",
+      "[Thought] done",
+    ].join("\n");
+
+    expect(PaseoOpenCodeAdapter.extractAssistantTextFromLogs(raw, fullPrompt)).toBe(
+      "Wrote four hello lines to /tmp/pluto-live/hello-pluto.md.",
+    );
+  });
 });
 
 describe("PaseoOpenCodeAdapter — protocol with mocked runner", () => {
@@ -190,6 +229,180 @@ describe("PaseoOpenCodeAdapter — protocol with mocked runner", () => {
     const events = await adapter.readEvents({ runId: "r2" });
     expect(events.map((e) => e.type)).toEqual(["worker_started", "worker_completed"]);
     expect(events[1]?.payload["output"]).toBe("step 1\nstep 2");
+  });
+
+  it("includes workspace and artifact-write instructions in worker prompts", async () => {
+    const runPrompts: string[] = [];
+    const taskWithArtifact: TeamTask = {
+      ...baseTask,
+      artifactPath: "/tmp/pluto-live/hello-pluto.md",
+    };
+    const adapter = new PaseoOpenCodeAdapter({
+      workspaceCwd: "/tmp/pluto-live",
+      runner: makeRunner({
+        run: (args) => {
+          runPrompts.push(args[args.length - 1] ?? "");
+          return { stdout: '{"agentId":"worker-1"}' };
+        },
+      }),
+    });
+
+    await adapter.startRun({ runId: "r2-worker-prompt", task: taskWithArtifact, team: DEFAULT_TEAM });
+    await adapter.createWorkerSession({
+      runId: "r2-worker-prompt",
+      role: getRole(DEFAULT_TEAM, "generator"),
+      instructions: "Write the hello lines into the artifact file.",
+    });
+
+    expect(runPrompts).toHaveLength(1);
+    expect(runPrompts[0]).toContain("Workspace path: /tmp/pluto-live");
+    expect(runPrompts[0]).toContain(
+      "Artifact path the team should converge on: /tmp/pluto-live/hello-pluto.md",
+    );
+    expect(runPrompts[0]).toContain(
+      "If the lead asks you to create or update files, make those changes before replying.",
+    );
+    expect(runPrompts[0]).toContain(
+      "Do not only describe intended edits when the task calls for an artifact change.",
+    );
+  });
+
+  it("redacts persisted adapter payloads while keeping raw worker/lead data transient", async () => {
+    let runCount = 0;
+    const adapter = new PaseoOpenCodeAdapter({
+      workspaceCwd: "/tmp/pluto-live",
+      runner: {
+        async exec(_cmd, args) {
+          const sub = args[0];
+          if (sub === "run") {
+            runCount += 1;
+            return {
+              stdout: JSON.stringify({ agentId: runCount === 1 ? "lead-agent" : "planner-agent" }),
+              stderr: "",
+              exitCode: 0,
+            };
+          }
+          if (sub === "wait") {
+            return { stdout: '{"status":"idle"}', stderr: "", exitCode: 0 };
+          }
+          if (sub === "send") {
+            return { stdout: '{"sent":true}', stderr: "", exitCode: 0 };
+          }
+          if (sub === "logs") {
+            if (args[1] === "planner-agent") {
+              return {
+                stdout: "[User] Plan\nworker token sk-ant-api03-abcdefghijklmnop\n[Thought] ok",
+                stderr: "",
+                exitCode: 0,
+              };
+            }
+            return {
+              stdout:
+                "[User] task\n[User] All workers done. SUMMARIZE.\n# Hello team\nsummary token sk-ant-api03-abcdefghijklmnop\n[Thought] done",
+              stderr: "",
+              exitCode: 0,
+            };
+          }
+          if (sub === "delete") {
+            return { stdout: "", stderr: "", exitCode: 0 };
+          }
+          return { stdout: "", stderr: `unknown subcommand:${sub}`, exitCode: 1 };
+        },
+        follow() {
+          return { dispose: async () => undefined };
+        },
+      },
+    });
+    await adapter.startRun({ runId: "r2-redacted", task: baseTask, team: DEFAULT_TEAM });
+    const lead = await adapter.createLeadSession({
+      runId: "r2-redacted",
+      task: baseTask,
+      role: getRole(DEFAULT_TEAM, DEFAULT_TEAM.leadRoleId),
+    });
+    await adapter.createWorkerSession({
+      runId: "r2-redacted",
+      role: getRole(DEFAULT_TEAM, "planner"),
+      instructions: "Plan token sk-ant-api03-abcdefghijklmnop",
+    });
+    await adapter.sendMessage({
+      runId: "r2-redacted",
+      sessionId: lead.sessionId,
+      message: "All workers done. SUMMARIZE.",
+    });
+
+    const events = await adapter.readEvents({ runId: "r2-redacted" });
+    const workerCompleted = events.find((e) => e.type === "worker_completed");
+    const leadMessage = events.find((e) => e.type === "lead_message");
+
+    expect(workerCompleted?.payload["output"]).toBe("worker token [REDACTED]");
+    expect(workerCompleted?.transient?.rawPayload?.["output"]).toBe(
+      "worker token sk-ant-api03-abcdefghijklmnop",
+    );
+    expect(leadMessage?.payload["markdown"]).toBe("# Hello team\nsummary token [REDACTED]");
+    expect(leadMessage?.transient?.rawPayload?.["markdown"]).toBe(
+      "# Hello team\nsummary token sk-ant-api03-abcdefghijklmnop",
+    );
+  });
+
+  it("preserves per-attempt worker event stamping when the first wait/log path fails", async () => {
+    let workerRunCount = 0;
+    const adapter = new PaseoOpenCodeAdapter({
+      workspaceCwd: "/tmp/pluto-live",
+      runner: {
+        async exec(_cmd, args) {
+          const sub = args[0];
+          if (sub === "run") {
+            workerRunCount += 1;
+            return {
+              stdout: `{"agentId":"planner-agent-${workerRunCount}"}`,
+              stderr: "",
+              exitCode: 0,
+            };
+          }
+          if (sub === "wait") {
+            if (args[1] === "planner-agent-1") {
+              return { stdout: "", stderr: "timed out", exitCode: 1 };
+            }
+            return { stdout: '{"status":"idle"}', stderr: "", exitCode: 0 };
+          }
+          if (sub === "logs") {
+            return {
+              stdout: "[User] Plan\nstep 1\nstep 2\n[Thought] ok",
+              stderr: "",
+              exitCode: 0,
+            };
+          }
+          if (sub === "delete" || sub === "send") {
+            return { stdout: "", stderr: "", exitCode: 0 };
+          }
+          return { stdout: "", stderr: `unknown subcommand:${sub}`, exitCode: 1 };
+        },
+        follow() {
+          return { dispose: async () => undefined };
+        },
+      },
+    });
+
+    await adapter.startRun({ runId: "r2-attempts", task: baseTask, team: DEFAULT_TEAM });
+    await expect(
+      adapter.createWorkerSession({
+        runId: "r2-attempts",
+        role: getRole(DEFAULT_TEAM, "planner"),
+        instructions: "Plan",
+      }),
+    ).rejects.toThrow(/paseo_worker_wait_failed:planner/);
+    await adapter.createWorkerSession({
+      runId: "r2-attempts",
+      role: getRole(DEFAULT_TEAM, "planner"),
+      instructions: "Plan",
+    });
+
+    const events = await adapter.readEvents({ runId: "r2-attempts" });
+    expect(events.map((e) => [e.type, e.payload["attempt"]])).toEqual([
+      ["worker_started", 1],
+      ["worker_started", 2],
+      ["worker_completed", 2],
+    ]);
   });
 
   it("emits lead_message(kind=summary) on SUMMARIZE", async () => {

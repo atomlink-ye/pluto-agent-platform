@@ -13,4 +13,4 @@ export {
   redactSecrets,
   redactWorkspacePath,
 } from "./evidence.js";
-export type { GenerateEvidenceInput } from "./evidence.js";
+export type { EvidencePacketValidationResult, GenerateEvidenceInput } from "./evidence.js";

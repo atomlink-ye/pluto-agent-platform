@@ -5,6 +5,7 @@ import type {
   AgentEventType,
   BlockerReasonV0,
   FinalArtifact,
+  RetryEventPayloadV0,
   TeamConfig,
   TeamRunResult,
   TeamTask,
@@ -12,9 +13,9 @@ import type {
 } from "../contracts/types.js";
 import type { PaseoTeamAdapter } from "../contracts/adapter.js";
 import { getRole } from "./team-config.js";
-import { RunStore } from "./run-store.js";
+import { RunStore, sanitizeEventForPersistence } from "./run-store.js";
 import { classifyBlocker, isRetryable } from "./blocker-classifier.js";
-import { generateEvidencePacket, writeEvidence } from "./evidence.js";
+import { generateEvidencePacket, redactSecrets, writeEvidence } from "./evidence.js";
 
 export interface TeamRunServiceOptions {
   adapter: PaseoTeamAdapter;
@@ -82,13 +83,13 @@ export class TeamRunService {
       type: AgentEventType,
       payload: Record<string, unknown> = {},
     ): Promise<AgentEvent> => {
-      const ev: AgentEvent = {
+      const ev = sanitizeEventForPersistence({
         id: this.idGen(),
         runId,
         ts: this.clock().toISOString(),
         type,
         payload,
-      };
+      });
       collected.push(ev);
       await this.store.appendEvent(ev);
       return ev;
@@ -96,11 +97,15 @@ export class TeamRunService {
 
     const recordAdapterEvent = async (ev: AgentEvent) => {
       const roleId = ev.roleId ?? (typeof ev.payload?.["targetRole"] === "string" ? ev.payload["targetRole"] as AgentEvent["roleId"] : undefined);
-      const attempt = roleId ? (workerAttempts.get(roleId) ?? 1) : 1;
-      const eventToRecord =
+      const stampedAttempt = typeof ev.payload?.["attempt"] === "number"
+        ? ev.payload["attempt"]
+        : undefined;
+      const attempt = stampedAttempt ?? (roleId ? (workerAttempts.get(roleId) ?? 1) : 1);
+      const eventToRecord = sanitizeEventForPersistence(
         (ev.type === "worker_started" || ev.type === "worker_completed")
           ? { ...ev, payload: { ...ev.payload, attempt } }
-          : ev;
+          : ev,
+      );
       collected.push(eventToRecord);
       await this.store.appendEvent(eventToRecord);
     };
@@ -188,7 +193,7 @@ export class TeamRunService {
             if (!targetRole || workersDispatched.has(targetRole)) continue;
             const role = getRole(this.team, targetRole);
             const instructions = String(
-              ev.payload?.["instructions"] ?? `Work on: ${task.prompt}`,
+              this.readEventPayloadValue(ev, "instructions") ?? `Work on: ${task.prompt}`,
             );
             workersDispatched.add(targetRole);
             await this.dispatchWorkerWithRetry(
@@ -198,7 +203,7 @@ export class TeamRunService {
           } else if (ev.type === "worker_completed") {
             const roleId = String(ev.roleId ?? ev.payload?.["targetRole"] ?? "");
             const sessionId = String(ev.sessionId ?? "");
-            const output = String(ev.payload?.["output"] ?? "");
+            const output = String(this.readEventPayloadValue(ev, "output") ?? "");
             contributions.push({
               roleId: roleId as WorkerContribution["roleId"],
               sessionId,
@@ -210,7 +215,7 @@ export class TeamRunService {
           } else if (ev.type === "lead_message") {
             const kind = String(ev.payload?.["kind"] ?? "");
             if (kind === "summary") {
-              leadSummaryMd = String(ev.payload?.["markdown"] ?? "");
+              leadSummaryMd = String(this.readEventPayloadValue(ev, "markdown") ?? "");
             }
           }
         }
@@ -276,7 +281,29 @@ export class TeamRunService {
       const artifactPath = await this.store.writeArtifact(artifact);
       await emit("artifact_created", { path: artifactPath, bytes: artifact.markdown.length });
 
-      if (blockerReason) {
+      const finishedAt = this.clock();
+      let result: TeamRunResult = blockerReason
+        ? { runId, status: "failed", artifact, events: collected, blockerReason, failure: { message: `Blocker: ${blockerReason}` } }
+        : { runId, status: "completed", artifact, events: collected, blockerReason: null };
+
+      const evidenceFailure = await this.writeEvidencePacket(task, result, collected, startedAt, finishedAt, blockerReason);
+      if (evidenceFailure) {
+        blockerReason = evidenceFailure.reason;
+        await emit("blocker", {
+          reason: evidenceFailure.reason,
+          classifierVersion: evidenceFailure.classifierVersion,
+          message: evidenceFailure.message,
+        });
+        await emit("run_failed", { message: evidenceFailure.message });
+        result = {
+          runId,
+          status: "failed",
+          artifact,
+          events: collected,
+          blockerReason,
+          failure: { message: evidenceFailure.message, cause: evidenceFailure.cause },
+        };
+      } else if (blockerReason) {
         await emit("run_failed", { message: `Blocker: ${blockerReason}` });
       } else {
         await emit("run_completed", {
@@ -285,12 +312,6 @@ export class TeamRunService {
         });
       }
 
-      const finishedAt = this.clock();
-      const result: TeamRunResult = blockerReason
-        ? { runId, status: "failed", artifact, events: collected, blockerReason, failure: { message: `Blocker: ${blockerReason}` } }
-        : { runId, status: "completed", artifact, events: collected, blockerReason: null };
-
-      await this.writeEvidencePacket(task, result, collected, startedAt, finishedAt, blockerReason);
       return result;
     } catch (cause) {
       const message = cause instanceof Error ? cause.message : String(cause);
@@ -313,8 +334,30 @@ export class TeamRunService {
         blockerReason,
       };
 
-      await this.writeEvidencePacket(task, result, collected, startedAt, finishedAt, blockerReason);
-      return result;
+      const evidenceFailure = await this.writeEvidencePacket(
+        task,
+        result,
+        collected,
+        startedAt,
+        finishedAt,
+        blockerReason,
+      );
+      if (!evidenceFailure) {
+        return result;
+      }
+
+      blockerReason = evidenceFailure.reason;
+      await emit("blocker" as AgentEventType, {
+        reason: evidenceFailure.reason,
+        classifierVersion: evidenceFailure.classifierVersion,
+        message: evidenceFailure.message,
+      });
+      await emit("run_failed", { message: evidenceFailure.message });
+      return {
+        ...result,
+        blockerReason,
+        failure: { message: evidenceFailure.message, cause: evidenceFailure.cause },
+      };
     } finally {
       await this.adapter.endRun({ runId }).catch(() => {});
     }
@@ -341,12 +384,22 @@ export class TeamRunService {
 
       if (isRetryable(classification.reason) && currentAttempt <= this.maxRetries) {
         const delayMs = Math.min(1000 * currentAttempt, 5000);
-        await emit("retry", {
+        const blockerEvent = await emit("blocker", {
+          reason: classification.reason,
+          classifierVersion: classification.classifierVersion,
+          sourceRole: role.id,
+          message: classification.message,
+          attempt: currentAttempt,
+        });
+        const retryPayload: RetryEventPayloadV0 = {
           attempt: currentAttempt + 1,
           reason: classification.reason,
-          originalEventId: `worker-${role.id}-attempt-${currentAttempt}`,
+          originalEventId: blockerEvent.id,
           delayMs,
           roleId: role.id,
+        };
+        await emit("retry", {
+          ...retryPayload,
         });
 
         await delay(Math.min(delayMs, 100));
@@ -369,7 +422,12 @@ export class TeamRunService {
     startedAt: Date,
     finishedAt: Date,
     blockerReason: BlockerReasonV0 | null,
-  ): Promise<void> {
+  ): Promise<{
+    reason: BlockerReasonV0;
+    classifierVersion: 0;
+    message: string;
+    cause: unknown;
+  } | null> {
     try {
       const packet = generateEvidencePacket({
         task,
@@ -380,8 +438,17 @@ export class TeamRunService {
         blockerReason,
       });
       await writeEvidence(this.store.runDir(result.runId), packet);
-    } catch {
-      // Evidence generation is best-effort; don't fail the run
+      return null;
+    } catch (cause) {
+      const message = redactSecrets(
+        cause instanceof Error ? cause.message : String(cause),
+      );
+      return {
+        reason: "runtime_error",
+        classifierVersion: 0,
+        message,
+        cause,
+      };
     }
   }
 
@@ -412,5 +479,9 @@ export class TeamRunService {
       return line;
     }
     return "";
+  }
+
+  private readEventPayloadValue(ev: AgentEvent, key: string): unknown {
+    return ev.transient?.rawPayload?.[key] ?? ev.payload?.[key];
   }
 }

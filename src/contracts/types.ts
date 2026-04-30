@@ -76,6 +76,37 @@ export interface AgentEvent {
   sessionId?: string;
   /** Free-form structured payload. Adapters MUST keep this JSON-serializable. */
   payload: Record<string, unknown>;
+  /**
+   * In-memory-only fields that the orchestrator may use during the active run.
+   * Persistence paths MUST drop this object entirely.
+   */
+  transient?: {
+    rawPayload?: Record<string, unknown>;
+  };
+}
+
+/** Persisted `AgentEvent.id` used for cross-event provenance. */
+export type PersistedAgentEventId = string;
+
+/**
+ * Retry provenance must point to a real persisted failure/blocker event.
+ *
+ * Lane E will wire this to the exact `AgentEvent.id` of the blocker/failure
+ * event that justified the retry. This is intentionally stricter than an
+ * attempt label so downstream readers can resolve the provenance in the stored
+ * event log.
+ */
+export interface RetryEventPayloadV0 {
+  /** Next worker attempt number that the orchestrator is scheduling. */
+  attempt: number;
+  reason: BlockerReasonV0;
+  /**
+   * Persisted `AgentEvent.id` of the real blocker/failure event that triggered
+   * this retry. Never use synthetic labels such as `worker-<role>-attempt-<n>`.
+   */
+  originalEventId: PersistedAgentEventId;
+  delayMs: number;
+  roleId: AgentRoleId;
 }
 
 export interface WorkerContribution {
@@ -162,6 +193,7 @@ export interface RunsListItemV0 {
   blockerReason: BlockerReasonV0 | null;
   startedAt: string;
   finishedAt: string | null;
+  parseWarnings: number;
   workerCount: number;
   artifactPresent: boolean;
   evidencePresent: boolean;
@@ -180,6 +212,7 @@ export interface RunsShowOutputV0 {
   blockerReason: BlockerReasonV0 | null;
   startedAt: string;
   finishedAt: string | null;
+  parseWarnings: number;
   workspace: string | null;
   workers: Array<{
     role: string;

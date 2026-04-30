@@ -36,6 +36,7 @@ Legacy persisted aliases are normalized for readers: `worker_timeout` maps to `r
 
 - Each retry emits a `kind: 'retry'` event with `{ attempt, reason, originalEventId, delayMs }`.
 - `attempt` is 1-indexed; values >1 indicate a retry.
+- `originalEventId` is the real persisted `blocker` event id that justified the retry, never a synthetic attempt label.
 - **No mutation of prior events.** New attempt numbers are append-only in `events.jsonl`.
 
 ### Scope limits
@@ -48,7 +49,23 @@ Legacy persisted aliases are normalized for readers: `worker_timeout` maps to `r
 
 All failures are classified by `src/orchestrator/blocker-classifier.ts` into the canonical 11-value `BlockerReasonV0` taxonomy. The classifier is the single decision point; `team-run-service` calls it at the moment a blocker is recorded.
 
+### Evidence write failures
+
+- Evidence generation runs after `artifact_created`.
+- If evidence validation or file write fails, the orchestrator records a final `blocker` with reason `runtime_error`, emits `run_failed`, and returns a failed `TeamRunResult`.
+- `writeEvidence()` removes partially written `evidence.md` / `evidence.json` on error so the run directory does not contain half-written evidence.
+
 ## Cleanup Policy
+
+## Lifecycle Vocabulary Compatibility
+
+Slice #3 locks the compatibility decision for run terminal vocabulary without changing v0 runtime behavior.
+
+- v0 implementation emits evidence/list/show status `done` and event kind `run_completed` today.
+- v1 target vocabulary is `status: succeeded` and `kind: completion`.
+- v0 readers must tolerate both `done` and `succeeded`.
+- v0 writers must emit `done`.
+- This slice does not migrate on-disk names or API names.
 
 Adapters must implement idempotent `endRun`:
 
@@ -92,7 +109,7 @@ If `OPENCODE_BASE_URL` is unset with live adapter:
 ## Error Handling Patterns
 
 1. **Blocker:** Precondition missing → exit 2, structured JSON payload
-2. **Transient:** Run continues with partial results
+2. **Transient/acceptable partial:** Live smoke may return `{"status":"partial"}` only when evidence is `blocked` for `provider_unavailable` or `quota_exceeded`
 3. **Fatal:** Run records failure, exits 1
 
 ## Debugging Failed Runs

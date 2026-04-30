@@ -24,6 +24,7 @@
  * If preconditions are missing this script prints a structured BLOCKER report
  * and exits with code 2 (intentionally distinct from generic failure exit 1).
  */
+import { fileURLToPath } from "node:url";
 import { mkdir, readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { existsSync } from "node:fs";
@@ -32,8 +33,9 @@ import * as process from "node:process";
 import { FakeAdapter } from "../src/adapters/fake/index.js";
 import { PaseoOpenCodeAdapter } from "../src/adapters/paseo-opencode/index.js";
 import { DEFAULT_RUNNER } from "../src/adapters/paseo-opencode/process-runner.js";
-import { DEFAULT_TEAM, RunStore, TeamRunService, validateEvidencePacketV0 } from "../src/orchestrator/index.js";
+import { DEFAULT_TEAM, RunStore, TeamRunService, normalizeBlockerReason, validateEvidencePacketV0 } from "../src/orchestrator/index.js";
 import type { PaseoTeamAdapter } from "../src/contracts/adapter.js";
+import type { BlockerReasonV0, EvidencePacketV0 } from "../src/contracts/types.js";
 
 const WORKSPACE = resolve(
   process.env["PLUTO_LIVE_WORKSPACE"] ?? `${process.cwd()}/.tmp/live-quickstart`,
@@ -60,6 +62,35 @@ interface BlockerReport {
   status: "blocker";
   reason: string;
   hint: string;
+}
+
+type LiveSmokeEvidenceClassification =
+  | { outcome: "done" }
+  | { outcome: "partial"; reason: "provider_unavailable" | "quota_exceeded" }
+  | { outcome: "failed"; message: string; blockerReason: BlockerReasonV0 | null };
+
+export function classifyLiveSmokeEvidence(packet: EvidencePacketV0): LiveSmokeEvidenceClassification {
+  if (packet.status === "done") {
+    return { outcome: "done" };
+  }
+
+  const blockerReason = normalizeBlockerReason(packet.blockerReason);
+  if (packet.status === "blocked") {
+    if (blockerReason === "provider_unavailable" || blockerReason === "quota_exceeded") {
+      return { outcome: "partial", reason: blockerReason };
+    }
+    return {
+      outcome: "failed",
+      blockerReason,
+      message: `blocked run is not an acceptable partial: ${blockerReason ?? "missing blocker reason"}`,
+    };
+  }
+
+  return {
+    outcome: "failed",
+    blockerReason,
+    message: `live smoke evidence status ${packet.status} is not acceptable`,
+  };
 }
 
 async function preflight(): Promise<BlockerReport | null> {
@@ -141,48 +172,6 @@ async function main() {
     eventsPath: `${store.runDir(result.runId)}/events.jsonl`,
   };
 
-  if (result.status !== "completed" || !result.artifact) {
-    console.error(JSON.stringify({ status: "failed", failure: result.failure?.message, summary }, null, 2));
-    process.exit(1);
-  }
-  const finalArtifact = result.artifact;
-
-  // Assertions on the artifact content.
-  const artifactMd = await readFile(`${store.runDir(result.runId)}/artifact.md`, "utf8");
-  const requiredRoles = ["lead", "planner", "generator", "evaluator"];
-  const missing = requiredRoles.filter((r) => !artifactMd.toLowerCase().includes(r));
-  if (missing.length > 0) {
-    console.error(
-      JSON.stringify(
-        { status: "assertion_failed", message: "artifact missing required roles", missing, summary },
-        null,
-        2,
-      ),
-    );
-    process.exit(1);
-  }
-
-
-  const leakedProtocol = finalArtifact.contributions.filter((c) =>
-    c.output.includes("Instructions from the Team Lead:") ||
-    c.output.includes("Reply with your contribution only"),
-  );
-  if (leakedProtocol.length > 0) {
-    console.error(
-      JSON.stringify(
-        {
-          status: "assertion_failed",
-          message: "worker output leaked adapter prompt protocol",
-          roles: leakedProtocol.map((c) => c.roleId),
-          summary,
-        },
-        null,
-        2,
-      ),
-    );
-    process.exit(1);
-  }
-
   // --- MVP-beta evidence assertions ---
   const evidenceMdPath = `${store.runDir(result.runId)}/evidence.md`;
   const evidenceJsonPath = `${store.runDir(result.runId)}/evidence.json`;
@@ -200,16 +189,24 @@ async function main() {
 
   const evidenceJsonRaw = await readFile(evidenceJsonPath, "utf8");
   const evidenceParsed: unknown = JSON.parse(evidenceJsonRaw);
-  if (!validateEvidencePacketV0(evidenceParsed)) {
+  const evidenceValidation = validateEvidencePacketV0(evidenceParsed);
+  if (!evidenceValidation.ok) {
     console.error(
       JSON.stringify(
-        { status: "assertion_failed", message: "evidence.json does not validate against EvidencePacketV0", summary },
+        {
+          status: "assertion_failed",
+          message: `evidence.json does not validate against EvidencePacketV0: ${evidenceValidation.errors.join("; ")}`,
+          summary,
+        },
         null,
         2,
       ),
     );
     process.exit(1);
   }
+
+  const evidencePacket = evidenceParsed as EvidencePacketV0;
+  const evidenceClassification = classifyLiveSmokeEvidence(evidencePacket);
 
   const secretPatterns = [
     /\b(?:sk|pk)[_-][A-Za-z0-9_-]{16,}\b/i,
@@ -235,10 +232,99 @@ async function main() {
     process.exit(1);
   }
 
+  if (evidenceClassification.outcome === "partial") {
+    console.log(
+      JSON.stringify(
+        {
+          status: "partial",
+          reason: evidenceClassification.reason,
+          summary,
+          evidence: { md: evidenceMdPath, json: evidenceJsonPath },
+        },
+        null,
+        2,
+      ),
+    );
+    return;
+  }
+
+  if (evidenceClassification.outcome === "failed") {
+    console.error(
+      JSON.stringify(
+        {
+          status: "failed",
+          message: evidenceClassification.message,
+          blockerReason: evidenceClassification.blockerReason,
+          failure: result.failure?.message,
+          summary,
+          evidence: { md: evidenceMdPath, json: evidenceJsonPath },
+        },
+        null,
+        2,
+      ),
+    );
+    process.exit(1);
+  }
+
+  if (result.status !== "completed" || !result.artifact) {
+    console.error(
+      JSON.stringify(
+        {
+          status: "failed",
+          message: "live smoke evidence reported done but run result is incomplete",
+          failure: result.failure?.message,
+          summary,
+          evidence: { md: evidenceMdPath, json: evidenceJsonPath },
+        },
+        null,
+        2,
+      ),
+    );
+    process.exit(1);
+  }
+  const finalArtifact = result.artifact;
+
+  // Assertions on the artifact content.
+  const artifactMd = await readFile(`${store.runDir(result.runId)}/artifact.md`, "utf8");
+  const requiredRoles = ["lead", "planner", "generator", "evaluator"];
+  const missing = requiredRoles.filter((r) => !artifactMd.toLowerCase().includes(r));
+  if (missing.length > 0) {
+    console.error(
+      JSON.stringify(
+        { status: "assertion_failed", message: "artifact missing required roles", missing, summary },
+        null,
+        2,
+      ),
+    );
+    process.exit(1);
+  }
+
+  const leakedProtocol = finalArtifact.contributions.filter((c) =>
+    c.output.includes("Instructions from the Team Lead:") ||
+    c.output.includes("Reply with your contribution only"),
+  );
+  if (leakedProtocol.length > 0) {
+    console.error(
+      JSON.stringify(
+        {
+          status: "assertion_failed",
+          message: "worker output leaked adapter prompt protocol",
+          roles: leakedProtocol.map((c) => c.roleId),
+          summary,
+        },
+        null,
+        2,
+      ),
+    );
+    process.exit(1);
+  }
+
   console.log(JSON.stringify({ status: "ok", summary, evidence: { md: evidenceMdPath, json: evidenceJsonPath } }, null, 2));
 }
 
-main().catch((err) => {
-  console.error(err instanceof Error ? err.stack : String(err));
-  process.exit(1);
-});
+if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1])) {
+  main().catch((err) => {
+    console.error(err instanceof Error ? err.stack : String(err));
+    process.exit(1);
+  });
+}

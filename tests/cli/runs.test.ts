@@ -99,9 +99,16 @@ describe("pnpm runs list", () => {
     expect(typeof item.taskTitle).toBe("string");
     expect(["queued", "running", "blocked", "failed", "done"]).toContain(item.status);
     expect(typeof item.startedAt).toBe("string");
+    expect(typeof item.parseWarnings).toBe("number");
     expect(typeof item.workerCount).toBe("number");
     expect(typeof item.artifactPresent).toBe("boolean");
     expect(typeof item.evidencePresent).toBe("boolean");
+  });
+
+  it("rejects invalid --limit values with a friendly error", async () => {
+    const { exitCode, stderr } = await runCli(["list", "--limit", "0"]);
+    expect(exitCode).not.toBe(0);
+    expect(stderr).toContain("Invalid --limit '0'. Expected a positive integer.");
   });
 });
 
@@ -114,9 +121,42 @@ describe("pnpm runs show", () => {
     expect(output.runId).toBe(runId);
     expect(output.taskTitle).toBe("CLI test task");
     expect(output.workspace).toBe("[REDACTED:workspace-path]");
+    expect(output.artifactPath).toBe(join(".pluto", "runs", runId, "artifact.md"));
+    expect(output.evidencePath).toBe(join(".pluto", "runs", runId, "evidence.json"));
     expect(typeof output.taskTitle).toBe("string");
+    expect(typeof output.parseWarnings).toBe("number");
     expect(["queued", "running", "blocked", "failed", "done"]).toContain(output.status);
     expect(Array.isArray(output.workers)).toBe(true);
+  });
+
+  it("re-redacts show JSON worker summaries when evidence is absent", async () => {
+    const secretRunId = "show-redaction-run";
+    const secretRunDir = join(dataDir, "runs", secretRunId);
+    const rawSecret = "sk-ant-api03-abcdefghijklmnop";
+    await mkdir(secretRunDir, { recursive: true });
+    await writeFile(
+      join(secretRunDir, "events.jsonl"),
+      [
+        { id: "sr1", runId: secretRunId, ts: "2026-04-29T12:00:00.000Z", type: "run_started", payload: { title: "Show Redaction" } },
+        { id: "sr2", runId: secretRunId, ts: "2026-04-29T12:00:01.000Z", type: "worker_started", roleId: "generator", sessionId: "sess-123", payload: { attempt: 1 } },
+        { id: "sr3", runId: secretRunId, ts: "2026-04-29T12:00:02.000Z", type: "worker_completed", roleId: "generator", sessionId: "sess-123", payload: { attempt: 1, output: `token ${rawSecret}` } },
+        { id: "sr4", runId: secretRunId, ts: "2026-04-29T12:00:03.000Z", type: "run_completed", payload: {} },
+      ].map((event) => JSON.stringify(event)).join("\n") + "\n",
+      "utf8",
+    );
+
+    const { stdout, exitCode } = await runCli(["show", secretRunId, "--json"]);
+    expect(exitCode).toBe(0);
+    const output: RunsShowOutputV0 = JSON.parse(stdout);
+    expect(JSON.stringify(output)).not.toContain(rawSecret);
+    expect(output.workers).toEqual([
+      {
+        role: "generator",
+        sessionId: null,
+        status: "done",
+        contributionSummary: "token [REDACTED]",
+      },
+    ]);
   });
 
   it("shows run in text mode", async () => {
@@ -303,6 +343,19 @@ describe("pnpm runs artifact", () => {
     expect(exitCode).toBe(0);
     expect(stdout.length).toBeGreaterThan(0);
     expect(stdout).toContain("planner");
+  });
+
+  it("prints redacted persisted artifact markdown", async () => {
+    const secretRunId = "artifact-cli-redaction-run";
+    const secretRunDir = join(dataDir, "runs", secretRunId);
+    const rawSecret = "ARTIFACT_SECRET=artifact-secret-value";
+    await mkdir(secretRunDir, { recursive: true });
+    await writeFile(join(secretRunDir, "artifact.md"), `# Artifact\ncontains ${rawSecret}\n`, "utf8");
+
+    const { stdout, exitCode } = await runCli(["artifact", secretRunId]);
+    expect(exitCode).toBe(0);
+    expect(stdout).not.toContain("artifact-secret-value");
+    expect(stdout).toContain("[REDACTED]");
   });
 });
 

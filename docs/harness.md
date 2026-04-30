@@ -31,7 +31,7 @@ When in doubt, check source-of-truth order in AGENTS.md:
 
 ```
 src/          # Contracts, orchestrator, adapters
-tests/        # Unit + fake adapter E2E (fast, no I/O)
+tests/        # Unit + fake adapter E2E (fast, offline; some file-backed checks)
 docker/       # compose.yml, runtime, live-smoke.ts
 docs/         # mvp-alpha.md, qa-checklist.md, harness docs
 scripts/     # verify.mjs
@@ -46,7 +46,9 @@ evals/        # cases, rubrics, goldens, reports, datasets
 - **.pluto/runs/<runId>/evidence.json** — Evidence packet (machine-readable, `EvidencePacketV0`, MVP-beta)
 - **evals/reports/** — Evaluation reports
 
-The evidence packet is a new control-surface artifact introduced in MVP-beta. It is generated for every completed or blocked run and contains: run metadata, canonical `BlockerReasonV0` (when blocked), per-worker contribution summaries, validation outcome, cited inputs (redacted), risks, and open questions. It validates against `EvidencePacketV0` schema and is redacted by `src/orchestrator/evidence.ts` before being written to disk.
+The evidence packet is a new control-surface artifact introduced in MVP-beta. Successful evidence generation writes `evidence.md` and `evidence.json` for completed, blocked, and failed runs and contains: run metadata, canonical `BlockerReasonV0` (when blocked), per-worker contribution summaries, validation outcome, cited inputs (redacted), risks, and open questions. It validates against `EvidencePacketV0` schema and is redacted by `src/orchestrator/evidence.ts` before being written to disk. If evidence generation itself fails, the run is surfaced as `runtime_error` / `run_failed` and partial evidence files are cleaned up instead of being guaranteed to persist.
+
+Persisted events are part of the same control surface. `RunStore.appendEvent()` strips `transient.rawPayload` and rewrites payloads through the same redactor, while live adapters may still keep raw payload fragments in memory long enough for orchestration and artifact synthesis.
 
 ## Control Knobs
 
@@ -56,6 +58,12 @@ The evidence packet is a new control-surface artifact introduced in MVP-beta. It
 | Endpoint | `OPENCODE_BASE_URL` | Live smoke guard |
 | Workspace | `PLUTO_LIVE_WORKSPACE` | Run directory |
 | Free model | `opencode/minimax-m2.5-free` | Default (do not change) |
+
+## CLI Surfaces
+
+- `pnpm runs list/show/events/artifact/evidence` all read from `.pluto/runs/`.
+- `pnpm runs events --follow` is a real file-backed follow mode over `events.jsonl`, with role/kind/since filters applied to each poll.
+- `pnpm runs evidence` degrades gracefully for pre-evidence runs instead of failing.
 
 ## For New Agents
 

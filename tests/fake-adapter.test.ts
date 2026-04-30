@@ -32,7 +32,12 @@ describe("FakeAdapter protocol", () => {
   });
 
   it("emits worker_started + worker_completed when workers are created", async () => {
-    const adapter = new FakeAdapter({ team: DEFAULT_TEAM });
+    const adapter = new FakeAdapter({
+      team: DEFAULT_TEAM,
+      workerOutputs: {
+        planner: "token sk-ant-api03-abcdefghijklmnop",
+      },
+    });
     await adapter.startRun({ runId: "r2", task: baseTask, team: DEFAULT_TEAM });
     await adapter.createLeadSession({
       runId: "r2",
@@ -49,7 +54,10 @@ describe("FakeAdapter protocol", () => {
 
     const events = await adapter.readEvents({ runId: "r2" });
     expect(events.map((e) => e.type)).toEqual(["worker_started", "worker_completed"]);
-    expect(events[1]?.payload["output"]).toBeTypeOf("string");
+    expect(events[1]?.payload["output"]).toBe("token [REDACTED]");
+    expect(events[1]?.transient?.rawPayload?.["output"]).toBe(
+      "token sk-ant-api03-abcdefghijklmnop",
+    );
   });
 
   it("returns a synthesized lead summary on SUMMARIZE", async () => {

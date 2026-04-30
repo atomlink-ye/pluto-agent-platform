@@ -272,8 +272,9 @@ function scoreEvidenceQuality(evidenceDir: string | undefined, observations: str
   try {
     const jsonContent = readFileSync(jsonPath, "utf8");
     const parsed: unknown = JSON.parse(jsonContent);
-    if (!validateEvidencePacketV0(parsed)) {
-      observations.push("evidence.json does not validate against EvidencePacketV0");
+    const validation = validateEvidencePacketV0(parsed);
+    if (!validation.ok) {
+      observations.push(`evidence.json does not validate against EvidencePacketV0: ${validation.errors.join("; ")}`);
       return false;
     }
 

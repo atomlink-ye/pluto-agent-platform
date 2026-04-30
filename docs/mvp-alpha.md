@@ -14,6 +14,7 @@ Prove the smallest closed loop where Pluto, Paseo, and an OpenCode runtime coope
 | `AgentSession` | adapter-owned | opaque sessionId; adapter-specific `external` payload |
 | `AgentEvent` | `.pluto/runs/<runId>/events.jsonl` | append-only JSONL |
 | `FinalArtifact` | `.pluto/runs/<runId>/artifact.md` | markdown produced by the lead, contains worker contributions |
+| `EvidencePacketV0` | `.pluto/runs/<runId>/evidence.{md,json}` | redacted persisted evidence packet |
 
 ## Contract
 
@@ -30,6 +31,8 @@ Prove the smallest closed loop where Pluto, Paseo, and an OpenCode runtime coope
 | `endRun` | tear down processes, watchers, sessions |
 
 The orchestrator owns lifecycle events: `run_started`, `artifact_created`, `run_completed`, `run_failed`. Adapters never emit those four.
+
+Persistence note: adapters may attach in-memory `transient.rawPayload` fields to events so orchestration can read unredacted `instructions`, `output`, or `markdown` during the active run. `RunStore` strips that transient object and redacts payloads before any event is written to `events.jsonl`.
 
 ## Event types
 
@@ -93,6 +96,7 @@ MVP-beta builds on top of the merged MVP-alpha runtime (PR #60) to add run inspe
 | --- | --- |
 | `src/orchestrator/blocker-classifier.ts` | Maps raw failure signals to `BlockerReasonV0` |
 | `src/orchestrator/evidence.ts` | Generator + validator + redactor for evidence packets |
+| `src/orchestrator/run-store.ts` | Persists redacted events/artifacts/evidence and powers `pnpm runs` reads |
 | `src/cli/runs.ts` | `pnpm runs list/show/events/artifact/evidence` CLI |
 
 ### New event types
@@ -116,10 +120,27 @@ MVP-beta builds on top of the merged MVP-alpha runtime (PR #60) to add run inspe
 - Retryable: `provider_unavailable`, `runtime_timeout` only
 - Scope: per-worker, per-step (no run-level rerun)
 - Default: 1 retry. Configurable via `--max-retries N` (0–3, hard cap 3)
+- Retry provenance: each `retry` event stores `originalEventId`, the persisted `blocker` event id that justified the retry
+
+### Evidence write semantics
+
+- Evidence status maps to `done`, `blocked`, or `failed`
+- `writeEvidence()` validates the redacted packet before writing
+- If evidence validation or file write fails, the orchestrator records blocker reason `runtime_error`, emits `run_failed`, and removes partial evidence files
 
 ### Backward compatibility
 
 - `pnpm submit` unchanged in default mode
 - Old MVP-alpha runs without evidence files remain listable/showable
 - Slice #1 blocker aliases normalize on read/display (`worker_timeout` → `runtime_timeout`; `quota_or_model_error` → `quota_exceeded` for quota/rate-limit/payment cases, otherwise `runtime_error`)
-- Existing event shapes and adapter contract unchanged
+- Existing event shapes and adapter contract remain additive; new transient raw payload fields are in-memory only and never part of persisted v0 JSONL/CLI output
+
+### Slice #3 lifecycle vocabulary lock
+
+Slice #3 documents the compatibility decision only. It does not rename current runtime behavior, persisted files, or API fields.
+
+- v0 implementation emits `status: done` and `kind: run_completed` today.
+- v1 target vocabulary is `status: succeeded` and `kind: completion`.
+- v0 readers must tolerate both `done` and `succeeded`.
+- v0 writers must emit `done`.
+- This slice does not migrate on-disk names or API names.

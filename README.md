@@ -38,12 +38,12 @@ Inspect runs after submission:
 ```bash
 pnpm runs list [--limit N] [--status STATUS] [--json]
 pnpm runs show <runId> [--json]
-pnpm runs events <runId> [--role ROLE] [--kind KIND] [--since EVENT_ID] [--json]
+pnpm runs events <runId> [--follow] [--role ROLE] [--kind KIND] [--since EVENT_ID|TIMESTAMP] [--json]
 pnpm runs artifact <runId>
 pnpm runs evidence <runId> [--json]
 ```
 
-All subcommands read from the file-backed `.pluto/runs/` store. Old MVP-alpha runs without evidence files are listable and showable; `runs evidence <oldRunId>` exits 0 with a graceful message.
+All subcommands read from the file-backed `.pluto/runs/` store. `pnpm runs events --follow` tails `events.jsonl` via the run store, prints newline-delimited JSON in `--json` mode, and drains briefly after terminal events so the last persisted records are not missed. Old MVP-alpha runs without evidence files are still listable and showable; `runs evidence <oldRunId>` exits 0 with a graceful message.
 
 ## Error recovery
 
@@ -60,11 +60,13 @@ Failures are classified into the canonical 11-value `BlockerReasonV0` taxonomy:
 - `runtime_error` — non-quota runtime/model/provider error
 - `unknown` — catch-all
 
-Legacy persisted values are normalized for readers (`worker_timeout` → `runtime_timeout`; `quota_or_model_error` → `quota_exceeded` or `runtime_error`). Only `provider_unavailable` and `runtime_timeout` trigger per-worker retry (default: 1 attempt, configurable via `--max-retries N` on `pnpm submit`, hard cap: 3). See `RELIABILITY.md` for the full policy.
+Legacy persisted values are normalized for readers (`worker_timeout` → `runtime_timeout`; `quota_or_model_error` → `quota_exceeded` or `runtime_error`). Only `provider_unavailable` and `runtime_timeout` trigger per-worker retry (default: 1 retry, configurable via `--max-retries N` on `pnpm submit`, hard cap: 3). Retry provenance is recorded in `retry.payload.originalEventId`, which always points at the persisted `blocker` event that justified the next attempt. See `RELIABILITY.md` for the full policy.
+
+If evidence generation cannot be validated or written, the run is converted to a terminal failure with blocker reason `runtime_error`, a final `blocker` event is appended, and partial evidence files are removed rather than left behind in a half-written state.
 
 ## Evidence
 
-Every completed or blocked run produces `evidence.md` and `evidence.json` in `.pluto/runs/<runId>/`. The evidence packet (`EvidencePacketV0`) includes: run metadata, per-worker summaries, validation outcome, cited inputs, risks, and open questions. All content is redacted before writing — see `SECURITY.md` for the redaction policy.
+Every completed, blocked, or failed run attempts to produce `evidence.md` and `evidence.json` in `.pluto/runs/<runId>/`. The evidence packet (`EvidencePacketV0`) includes: run metadata, per-worker summaries, validation outcome, cited inputs, risks, and open questions. Redaction happens at the write boundary for persisted events and evidence, while adapters may keep raw payload fragments transiently in memory so the live orchestrator can still build the artifact from unredacted worker output. See `SECURITY.md` for the exact redaction policy.
 
 ## Live smoke (host Paseo + OpenCode free model)
 
@@ -85,7 +87,7 @@ OPENCODE_BASE_URL=http://localhost:4096 pnpm smoke:live
 pnpm smoke:docker
 ```
 
-Both paths use `opencode/minimax-m2.5-free` by default. Do **not** switch to a paid model without explicit authorization (see `docs/qa-checklist.md`).
+Both paths use `opencode/minimax-m2.5-free` by default. Do **not** switch to a paid model without explicit authorization (see `docs/qa-checklist.md`). A live smoke result of `{"status":"partial"}` is acceptable only for evidence packets classified as blocked by `provider_unavailable` or `quota_exceeded`; other blocked/failed evidence outcomes are treated as smoke failures.
 
 ### Verification
 
@@ -117,6 +119,11 @@ docker compose \
 - Each requested worker is spawned via Paseo, runs to idle, and reports back.
 - The final markdown artifact references all four roles (lead, planner, generator, evaluator).
 - `events.jsonl` contains the canonical lifecycle: `run_started → lead_started → 3× worker_requested/started/completed → lead_message → artifact_created → run_completed`.
+- `evidence.json` validates against `EvidencePacketV0`, and `evidence.md`/`evidence.json` contain no secret-shaped substrings.
+
+### Vocabulary note
+
+Slice #3 documents a compatibility note only: the current v0 runtime still writes `status: done` and event kind `run_completed`. Readers should tolerate the future `succeeded`/`completion` vocabulary, but this branch does not rename stored files, event kinds, or CLI fields.
 
 ### Quick-fail (no-endpoint blocker)
 

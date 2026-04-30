@@ -4,7 +4,7 @@
 
 | Category | Location | Purpose | Characteristics |
 |----------|----------|---------|-----------------|
-| **tests/** | `tests/*.test.ts` | Protect correctness | Fast, deterministic, no I/O |
+| **tests/** | `tests/*.test.ts` | Protect correctness | Fast, deterministic, offline; small local file I/O is allowed when the behavior under test is file-backed |
 | **evals/** | `evals/cases/`, `evals/rubrics/`, `evals/runner.ts` | Protect model/workflow quality | Deterministic lanes plus future human judgment |
 
 **Never mix them.** tests/ runs in CI. evals/ is for evaluation pipelines.
@@ -13,7 +13,7 @@
 
 ### Unit Tests (`tests/*.test.ts`)
 
-- No I/O, no network, no Docker
+- No network, no Docker; keep file I/O limited to local deterministic coverage where the runtime behavior is file-backed
 - Fast (<15s each, see vitest.config.ts)
 - Deterministic with fake adapter
 - Example: `tests/team-run-service.test.ts`
@@ -22,14 +22,23 @@ MVP-beta test lanes:
 - `tests/blocker-classifier.test.ts` — all 11 canonical `BlockerReasonV0` values plus legacy aliases exercised
 - `tests/team-run-service-recovery.test.ts` — retry semantics, hard cap, no-mutation
 - `tests/evidence.test.ts` — done/blocked/failed packets, schema validation, file writing
+- `tests/evidence-failure.test.ts` — partial-file cleanup on write failure and runtime_error escalation when evidence generation fails
 - `tests/evidence-redaction.test.ts` — token shapes, env patterns, JWT, GitHub tokens
+- `tests/run-store-redaction.test.ts` — redacted persistence plus safe reads of legacy unredacted event logs
+- `tests/team-run-service-redaction.test.ts` — persisted-event redaction with transient raw payload retained only in memory
+- `tests/paseo-opencode-adapter.test.ts` — adapter-boundary redaction and transient raw `output` / `markdown`
 - `tests/cli/runs.test.ts` — JSON output shapes for all `pnpm runs` subcommands, old-run degradation
+- `tests/cli/runs-follow.test.ts` — real `pnpm runs events --follow` streaming, filters, and terminal drain behavior
 
 ### Integration/Smoke Tests
 
 - Can use fake adapter: `pnpm smoke:fake`
 - Runs in CI with Docker when needed: `pnpm smoke:docker`
 - Example: `docker/live-smoke.ts`
+- Live smoke classifies evidence outcomes as:
+  - `ok` when evidence status is `done`
+  - `partial` only when evidence status is `blocked` for `provider_unavailable` or `quota_exceeded`
+  - failure for every other blocked/failed evidence outcome
 
 ### Live E2E
 
@@ -63,7 +72,7 @@ MVP-beta test lanes:
 - Offline deterministic scoring with `FakeAdapter`
 - Writes transient machine-readable reports under `evals/reports/`
 - Runs with `pnpm eval:workflow`
-- MVP-beta: added `evidence_quality` dimension (0.15 weight) — checks evidence.md + evidence.json presence, schema validity, and absence of secret-shaped content
+- MVP-beta: added `evidence_quality` dimension (0.15 weight) — checks evidence.md + evidence.json presence, schema validity, and absence of secret-shaped content on persisted outputs
 
 ## Canonical Commands
 

@@ -168,6 +168,13 @@ describe("TeamRunService recovery — retry semantics", () => {
     expect(retryEvents.length).toBeGreaterThanOrEqual(1);
     expect(retryEvents[0].payload.reason).toBe("provider_unavailable");
     expect(retryEvents[0].payload.attempt).toBe(2);
+    const blockerIndex = events.findIndex((e: { type: string }) => e.type === "blocker");
+    const retryIndex = events.findIndex((e: { type: string }) => e.type === "retry");
+    expect(blockerIndex).toBeGreaterThanOrEqual(0);
+    expect(retryIndex).toBeGreaterThan(blockerIndex);
+    const retrySource = events.find((e: { id: string }) => e.id === retryEvents[0].payload.originalEventId);
+    expect(retrySource?.type).toBe("blocker");
+    expect(String(retryEvents[0].payload.originalEventId)).not.toContain("worker-planner-attempt-1");
 
     const retriedWorkerEvents = events.filter(
       (e: { type: string; roleId?: string }) =>
@@ -175,6 +182,38 @@ describe("TeamRunService recovery — retry semantics", () => {
     );
     expect(retriedWorkerEvents).toHaveLength(2);
     expect(retriedWorkerEvents.map((e: { payload: { attempt?: number } }) => e.payload.attempt)).toEqual([2, 2]);
+  });
+
+  it("uses persisted blocker event ids for retry provenance", async () => {
+    const adapter = new FailOnceAdapter({
+      failRole: "planner",
+      failMessage: "ECONNREFUSED: connection refused",
+      failTimes: 1,
+    });
+    const store = new RunStore({ dataDir: join(workDir, ".pluto-provenance") });
+    const service = new TeamRunService({
+      adapter,
+      team: DEFAULT_TEAM,
+      store,
+      pumpIntervalMs: 1,
+      timeoutMs: 5_000,
+      maxRetries: 1,
+    });
+
+    const result = await service.run(buildTask("retry-provenance"));
+    expect(result.status).toBe("completed");
+
+    const eventsRaw = await readFile(
+      join(workDir, ".pluto-provenance", "runs", result.runId, "events.jsonl"),
+      "utf8",
+    );
+    const events = eventsRaw.trim().split("\n").map((l) => JSON.parse(l));
+    const retryEvent = events.find((e: { type: string }) => e.type === "retry");
+    expect(retryEvent).toBeDefined();
+    const sourceEvent = events.find((e: { id: string }) => e.id === retryEvent.payload.originalEventId);
+    expect(sourceEvent?.type).toBe("blocker");
+    expect(sourceEvent?.payload.reason).toBe("provider_unavailable");
+    expect(sourceEvent?.payload.attempt).toBe(1);
   });
 
   it("retries a retryable reason (runtime_timeout) then re-fails", async () => {

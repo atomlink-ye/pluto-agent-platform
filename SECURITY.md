@@ -15,6 +15,16 @@
 - Use `git diff --stat` to check for new sensitive files
 - Use `grep -R "sk-" -- src docker docs` as heuristic check
 
+### Persistence-boundary redaction (Slice #3)
+
+Redaction is enforced at the write boundary for persisted data:
+
+- `RunStore.appendEvent()` persists `sanitizeEventForPersistence(event)` so `events.jsonl` never keeps `transient.rawPayload` and always rewrites payload fields through the canonical redactor.
+- `writeEvidence()` validates the redacted `EvidencePacketV0` and writes only the redacted packet to `evidence.md` / `evidence.json`.
+- On evidence write failure, partial evidence files are deleted.
+
+Adapters may keep raw worker output or lead markdown in `event.transient.rawPayload` during the active run so the orchestrator can synthesize the final artifact from raw text. That raw payload is in-memory only and must never cross into `.pluto/runs/<runId>/events.jsonl`.
+
 ### Evidence redaction (MVP-beta)
 
 Evidence generation (`src/orchestrator/evidence.ts`) **must** redact before persisting `evidence.md` / `evidence.json`:
@@ -24,10 +34,11 @@ Evidence generation (`src/orchestrator/evidence.ts`) **must** redact before pers
 - **GitHub tokens** — `ghp_`, `gho_`, `ghu_`, `ghs_`, `ghr_` prefixed strings.
 - **sk-prefixed API keys** — `sk-*`, `pk-*` patterns.
 - **Raw provider stderr / debug protocol noise** — must not be reproduced verbatim; summarized only.
-- **`.env`-style values** — `KEY=VALUE` pairs where the key matches `*_TOKEN`, `*_KEY`, `*_SECRET`, `*_PASSWORD`, `*_CREDENTIAL`, `*_API_KEY`.
+- **`.env`-style values** — `KEY=VALUE` pairs where the key matches `*_TOKEN`, `*_KEY`, `*_SECRET`, `*_ID`, `*_PASSWORD`, `*_CREDENTIAL`, `*_API_KEY`.
 - **Absolute runtime workspace paths** — `EvidencePacketV0.workspace` remains `string | null`, but absolute paths are persisted as `[REDACTED:workspace-path]`.
+- **Provider stderr / debug-shaped fields** — object keys matching `stderr` / `debug` are summarized and redacted before persistence, not copied verbatim.
 
-The redactor replaces matched values with `[REDACTED]` or `[REDACTED:<ENV_NAME>]`. Smoke tests (`pnpm smoke:fake`) assert no token-shaped substrings appear in evidence files. Unit tests in `tests/evidence-redaction.test.ts` cover all patterns.
+The redactor replaces matched values with `[REDACTED]` or `[REDACTED:<ENV_NAME>]`. It also rewrites known in-process environment values when they appear in strings. Smoke tests (`pnpm smoke:fake`) assert no token-shaped substrings appear in evidence files. Unit tests in `tests/evidence-redaction.test.ts`, `tests/run-store-redaction.test.ts`, `tests/team-run-service-redaction.test.ts`, and `tests/paseo-opencode-adapter.test.ts` cover evidence redaction, persisted-event redaction, and adapter-boundary transient/raw behavior.
 
 ## Forbidden Committed Materials
 

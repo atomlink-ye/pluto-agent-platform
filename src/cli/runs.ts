@@ -1,6 +1,7 @@
 #!/usr/bin/env node
+import { watchFile, unwatchFile } from "node:fs";
 import { readFile } from "node:fs/promises";
-import { resolve, join } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import process from "node:process";
 import { RunStore } from "../orchestrator/run-store.js";
 import type {
@@ -18,6 +19,9 @@ const VALID_KINDS = [
   "worker_completed", "lead_message", "orchestrator_underdispatch_fallback",
   "artifact_created", "run_completed", "run_failed",
 ] as const;
+const FOLLOW_POLL_INTERVAL_MS = 250;
+const FOLLOW_DRAIN_MS = 5_000;
+const TERMINAL_KINDS = new Set(["run_completed", "run_failed"]);
 
 function usage(): never {
   console.error(`Usage:
@@ -92,7 +96,7 @@ async function handleList(
   flags: Record<string, string | boolean>,
   jsonMode: boolean,
 ): Promise<void> {
-  const limit = typeof flags["limit"] === "string" ? parseInt(flags["limit"], 10) : undefined;
+  const limit = parseLimitFlag(flags["limit"]);
   const statusFilter = typeof flags["status"] === "string" ? flags["status"] : undefined;
 
   const dirs = await store.listRunDirs();
@@ -138,10 +142,8 @@ async function handleShow(
   const meta = await store.readRunMeta(runId);
   if (!meta) fail(`Run not found: ${runId}`);
 
-  const events: import("../contracts/types.js").AgentEvent[] = [];
-  for await (const ev of store.readEventsRaw(runId)) {
-    events.push(ev);
-  }
+  const events = await readStoredEvents(store, runId);
+  const evidence = await store.readEvidence(runId);
 
   const workerMap = new Map<string, {
     sessionId: string | null;
@@ -149,42 +151,65 @@ async function handleShow(
     contributionSummary: string | null;
   }>();
 
+  for (const worker of evidence.json?.workers ?? []) {
+    workerMap.set(worker.role, {
+      sessionId: worker.sessionId,
+      status: "done",
+      contributionSummary: worker.contributionSummary,
+    });
+  }
+
   for (const ev of events) {
-    const role = String(ev.roleId ?? "");
+    const role = String(ev.role ?? "");
     if (!role) continue;
-    if (ev.type === "worker_started") {
+    if (ev.kind === "worker_requested") {
       workerMap.set(role, {
-        sessionId: ev.sessionId ?? null,
-        status: "running",
-        contributionSummary: null,
+        sessionId: workerMap.get(role)?.sessionId ?? null,
+        status: "pending",
+        contributionSummary: workerMap.get(role)?.contributionSummary ?? null,
       });
-    } else if (ev.type === "worker_completed") {
+    } else if (ev.kind === "worker_started") {
+      workerMap.set(role, {
+        sessionId: workerMap.get(role)?.sessionId ?? null,
+        status: "running",
+        contributionSummary: workerMap.get(role)?.contributionSummary ?? null,
+      });
+    } else if (ev.kind === "worker_completed") {
+      const payload = asRecord(ev.payload);
+      const contributionSummary = typeof payload?.["output"] === "string"
+        ? payload["output"].slice(0, 200) || null
+        : null;
       const existing = workerMap.get(role);
       if (existing) {
         existing.status = "done";
-        existing.contributionSummary = String(ev.payload?.["output"] ?? "").slice(0, 200) || null;
+        existing.contributionSummary = contributionSummary;
       } else {
         workerMap.set(role, {
-          sessionId: ev.sessionId ?? null,
+          sessionId: null,
           status: "done",
-          contributionSummary: String(ev.payload?.["output"] ?? "").slice(0, 200) || null,
+          contributionSummary,
         });
+      }
+    } else if (ev.kind === "blocker") {
+      const reason = asRecord(ev.payload)?.["reason"];
+      if (reason === "runtime_timeout") {
+        const existing = workerMap.get(role);
+        if (existing) existing.status = "timed_out";
       }
     }
   }
 
-  const runDir = store.runDir(runId);
   const artifactContent = await store.readArtifact(runId);
-  const evidence = await store.readEvidence(runId);
-  let blockerEvent: import("../contracts/types.js").AgentEvent | undefined;
+  let blockerEvent: RunsEventV0 | undefined;
   for (let i = events.length - 1; i >= 0; i--) {
-    if (events[i]!.type === "blocker") {
+    if (events[i]!.kind === "blocker") {
       blockerEvent = events[i];
       break;
     }
   }
-  const blockerMessage = typeof blockerEvent?.payload?.["message"] === "string"
-    ? blockerEvent.payload["message"]
+  const blockerPayload = asRecord(blockerEvent?.payload);
+  const blockerMessage = typeof blockerPayload?.["message"] === "string"
+    ? blockerPayload["message"]
     : null;
 
   if (jsonMode) {
@@ -196,6 +221,7 @@ async function handleShow(
       blockerReason: meta.blockerReason,
       startedAt: meta.startedAt,
       finishedAt: meta.finishedAt,
+      parseWarnings: meta.parseWarnings,
       workspace: evidence.json?.workspace ?? null,
       workers: Array.from(workerMap.entries()).map(([role, info]) => ({
         role,
@@ -203,8 +229,8 @@ async function handleShow(
         status: info.status,
         contributionSummary: info.contributionSummary,
       })),
-      artifactPath: artifactContent ? join(runDir, "artifact.md") : null,
-      evidencePath: evidence.json ? join(runDir, "evidence.json") : null,
+      artifactPath: artifactContent ? formatRunFileRef(store, runId, "artifact.md") : null,
+      evidencePath: evidence.json ? formatRunFileRef(store, runId, "evidence.json") : null,
     };
     console.log(JSON.stringify(output, null, 2));
   } else {
@@ -220,6 +246,29 @@ async function handleShow(
     console.log(`Artifact: ${artifactContent ? "present" : "absent"}`);
     console.log(`Evidence: ${evidence.json ? "present" : "absent"}`);
   }
+}
+
+function parseLimitFlag(limitFlag: string | boolean | undefined): number | undefined {
+  if (typeof limitFlag !== "string") return undefined;
+  if (!/^\d+$/.test(limitFlag)) {
+    fail(`Invalid --limit '${limitFlag}'. Expected a positive integer.`);
+  }
+
+  const limit = Number.parseInt(limitFlag, 10);
+  if (limit < 1) {
+    fail(`Invalid --limit '${limitFlag}'. Expected a positive integer.`);
+  }
+
+  return limit;
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return typeof value === "object" && value !== null ? value as Record<string, unknown> : null;
+}
+
+function formatRunFileRef(store: RunStore, runId: string, fileName: string): string {
+  const displayDataDir = basename(dirname(dirname(store.runDir(runId))));
+  return join(displayDataDir, "runs", runId, fileName);
 }
 
 async function handleEvents(
@@ -242,26 +291,25 @@ async function handleEvents(
   }
 
   const follow = flags["follow"] === true;
-  const allRawEvents: RunsEventV0[] = [];
-  for await (const ev of store.readEventsJSONL(runId)) {
-    allRawEvents.push(ev);
+  const allRawEvents = await readStoredEvents(store, runId);
+  const allEvents = filterEvents(allRawEvents, roleFilter, kindFilter, sinceFilter);
+
+  if (follow) {
+    await followEvents({
+      store,
+      runId,
+      jsonMode,
+      roleFilter,
+      kindFilter,
+      sinceFilter,
+      initialEvents: allRawEvents,
+      initialFilteredEvents: allEvents,
+    });
+    return;
   }
 
-  const sinceEvents = applySinceFilter(allRawEvents, sinceFilter);
-  const allEvents = sinceEvents.filter((ev) => {
-    if (roleFilter && ev.role !== roleFilter) return false;
-    if (kindFilter && ev.kind !== kindFilter) return false;
-    return true;
-  });
-
   if (jsonMode) {
-    if (follow) {
-      for (const ev of allEvents) {
-        console.log(JSON.stringify(ev));
-      }
-    } else {
-      console.log(JSON.stringify(allEvents, null, 2));
-    }
+    console.log(JSON.stringify(allEvents, null, 2));
   } else {
     if (allEvents.length === 0) {
       console.log("No events found.");
@@ -272,6 +320,107 @@ async function handleEvents(
       console.log(`[${ev.occurredAt}] ${ev.kind.padEnd(30)} role=${role} attempt=${ev.attempt}`);
     }
   }
+}
+
+async function followEvents(opts: {
+  store: RunStore;
+  runId: string;
+  jsonMode: boolean;
+  roleFilter?: string;
+  kindFilter?: string;
+  sinceFilter?: string;
+  initialEvents: RunsEventV0[];
+  initialFilteredEvents: RunsEventV0[];
+}): Promise<void> {
+  const eventsPath = join(opts.store.runDir(opts.runId), "events.jsonl");
+  const emittedEventIds = new Set<string>();
+  let terminalDrainTimer: NodeJS.Timeout | null = null;
+  let settled = false;
+  let pollInFlight = false;
+  let rawEvents = opts.initialEvents;
+
+  const emitEvents = (events: RunsEventV0[]) => {
+    for (const ev of events) {
+      if (emittedEventIds.has(ev.eventId)) continue;
+      emittedEventIds.add(ev.eventId);
+      if (opts.jsonMode) {
+        console.log(JSON.stringify(ev));
+      } else {
+        const role = ev.role ?? "-";
+        console.log(`[${ev.occurredAt}] ${ev.kind.padEnd(30)} role=${role} attempt=${ev.attempt}`);
+      }
+    }
+  };
+
+  const scheduleTerminalDrain = () => {
+    if (terminalDrainTimer) return;
+    terminalDrainTimer = setTimeout(() => {
+      settled = true;
+      unwatchFile(eventsPath, onWatch);
+      resolveFollow();
+    }, FOLLOW_DRAIN_MS);
+  };
+
+  const maybeScheduleTerminalDrain = (events: RunsEventV0[]) => {
+    if (events.some((ev) => TERMINAL_KINDS.has(ev.kind))) {
+      scheduleTerminalDrain();
+    }
+  };
+
+  const pollForUpdates = async () => {
+    if (settled || pollInFlight) return;
+    pollInFlight = true;
+    try {
+      rawEvents = await readStoredEvents(opts.store, opts.runId);
+      const filteredEvents = filterEvents(rawEvents, opts.roleFilter, opts.kindFilter, opts.sinceFilter);
+      emitEvents(filteredEvents);
+      maybeScheduleTerminalDrain(rawEvents);
+    } finally {
+      pollInFlight = false;
+    }
+  };
+
+  const onWatch = () => {
+    void pollForUpdates();
+  };
+
+  let resolveFollow = () => {};
+  const done = new Promise<void>((resolve) => {
+    resolveFollow = resolve;
+  });
+
+  emitEvents(opts.initialFilteredEvents);
+  maybeScheduleTerminalDrain(rawEvents);
+  watchFile(eventsPath, { interval: FOLLOW_POLL_INTERVAL_MS }, onWatch);
+
+  try {
+    await done;
+  } finally {
+    settled = true;
+    if (terminalDrainTimer) clearTimeout(terminalDrainTimer);
+    unwatchFile(eventsPath, onWatch);
+  }
+}
+
+async function readStoredEvents(store: RunStore, runId: string): Promise<RunsEventV0[]> {
+  const events: RunsEventV0[] = [];
+  for await (const ev of store.readEventsJSONL(runId)) {
+    events.push(ev);
+  }
+  return events;
+}
+
+function filterEvents(
+  events: RunsEventV0[],
+  roleFilter: string | undefined,
+  kindFilter: string | undefined,
+  sinceFilter: string | undefined,
+): RunsEventV0[] {
+  return applySinceFilter(events, sinceFilter).filter((ev) => {
+    if (roleFilter && ev.role !== roleFilter) return false;
+    if (kindFilter && ev.kind !== kindFilter) return false;
+    return true;
+  });
 }
 
 function applySinceFilter(events: RunsEventV0[], sinceFilter: string | undefined): RunsEventV0[] {

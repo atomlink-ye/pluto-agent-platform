@@ -9,6 +9,7 @@ import type {
   TeamTask,
 } from "../../contracts/types.js";
 import type { PaseoTeamAdapter } from "../../contracts/adapter.js";
+import { redactObject } from "../../orchestrator/redactor.js";
 import { DEFAULT_RUNNER, type ProcessRunner } from "./process-runner.js";
 
 /**
@@ -78,6 +79,7 @@ interface RunState {
   leadAgentId?: string;
   followers: Array<{ dispose: () => Promise<void> }>;
   workerAgentIds: Map<string, string>; // roleId → paseo agent id
+  workerAttempts: Map<string, number>;
   /** First-text-line cursor per worker so we can attribute the assistant turn. */
   workerLogCursors: Map<string, number>;
 }
@@ -128,6 +130,7 @@ export class PaseoOpenCodeAdapter implements PaseoTeamAdapter {
       cursor: 0,
       followers: [],
       workerAgentIds: new Map(),
+      workerAttempts: new Map(),
       workerLogCursors: new Map(),
     });
   }
@@ -182,7 +185,9 @@ export class PaseoOpenCodeAdapter implements PaseoTeamAdapter {
     instructions: string;
   }): Promise<AgentSession> {
     const run = this.expectRun(input.runId);
-    const prompt = this.buildWorkerPrompt(input.role, input.instructions);
+    const prompt = this.buildWorkerPrompt(run.task, input.role, input.instructions);
+    const attempt = (run.workerAttempts.get(input.role.id) ?? 0) + 1;
+    run.workerAttempts.set(input.role.id, attempt);
     const args = this.runArgs({
       title: `Pluto MVP-alpha Worker [${input.role.id}] [${input.runId}]`,
     });
@@ -206,7 +211,7 @@ export class PaseoOpenCodeAdapter implements PaseoTeamAdapter {
       type: "worker_started",
       roleId: input.role.id,
       sessionId: agentId,
-      payload: { paseoAgentId: agentId, instructions: input.instructions },
+      payload: { paseoAgentId: agentId, instructions: input.instructions, attempt },
     });
 
     const wait = await this.runner.exec(
@@ -225,7 +230,8 @@ export class PaseoOpenCodeAdapter implements PaseoTeamAdapter {
       type: "worker_completed",
       roleId: input.role.id,
       sessionId: agentId,
-      payload: { paseoAgentId: agentId, output },
+      payload: { paseoAgentId: agentId, output, attempt },
+      rawPayloadKeys: ["output"],
     });
 
     return { sessionId: agentId, role: input.role, external: { paseoAgentId: agentId } };
@@ -270,6 +276,7 @@ export class PaseoOpenCodeAdapter implements PaseoTeamAdapter {
         roleId: run.team.leadRoleId,
         sessionId: input.sessionId,
         payload: { kind: "summary", markdown },
+        rawPayloadKeys: ["markdown"],
       });
     }
   }
@@ -415,10 +422,9 @@ export class PaseoOpenCodeAdapter implements PaseoTeamAdapter {
     // plain text. Strip this protocol header even when it is not an exact full
     // prompt match; otherwise worker contributions leak "Instructions from the
     // Team Lead" into summaries and artifacts.
-    const protocolEndIdx = normalizedLines.findIndex((line, idx) => {
-      if (idx > 8) return false;
-      return line.startsWith("Reply with your contribution only");
-    });
+    const protocolEndIdx = normalizedLines.findIndex((line) =>
+      line.startsWith("Reply with your contribution only"),
+    );
     if (
       protocolEndIdx >= 0 &&
       normalizedLines
@@ -481,6 +487,7 @@ export class PaseoOpenCodeAdapter implements PaseoTeamAdapter {
         roleId: targetRole,
         sessionId: leadId,
         payload: { targetRole, instructions, source: "lead_text_marker" },
+        rawPayloadKeys: ["instructions"],
       });
     }
   }
@@ -511,22 +518,46 @@ export class PaseoOpenCodeAdapter implements PaseoTeamAdapter {
     return lines.join("\n");
   }
 
-  private buildWorkerPrompt(role: AgentRoleConfig, instructions: string): string {
-    return [
+  private buildWorkerPrompt(task: TeamTask, role: AgentRoleConfig, instructions: string): string {
+    const lines = [
       role.systemPrompt,
+      "",
+      `Task title: ${task.title}`,
+      `Goal: ${task.prompt}`,
+      `Workspace path: ${task.workspacePath}`,
+    ];
+    if (task.artifactPath) {
+      lines.push(`Artifact path the team should converge on: ${task.artifactPath}`);
+    }
+    lines.push(
       "",
       "Instructions from the Team Lead:",
       instructions,
       "",
+      "Work in the workspace directly. If the lead asks you to create or update files, make those changes before replying.",
+      "Do not only describe intended edits when the task calls for an artifact change.",
       "Reply with your contribution only. Keep it concise (under 15 lines).",
-    ].join("\n");
+    );
+    return lines.join("\n");
   }
 
   private appendEvent(
     runId: string,
-    partial: { type: AgentEventType; roleId?: string; sessionId?: string; payload: Record<string, unknown> },
+    partial: {
+      type: AgentEventType;
+      roleId?: string;
+      sessionId?: string;
+      payload: Record<string, unknown>;
+      rawPayloadKeys?: string[];
+    },
   ) {
     const run = this.expectRun(runId);
+    const redactedPayload = redactObject(partial.payload) as Record<string, unknown>;
+    const rawPayload = partial.rawPayloadKeys?.length
+      ? Object.fromEntries(
+          partial.rawPayloadKeys.map((key) => [key, partial.payload[key]]),
+        )
+      : undefined;
     const event: AgentEvent = {
       id: this.idGen(),
       runId,
@@ -536,7 +567,8 @@ export class PaseoOpenCodeAdapter implements PaseoTeamAdapter {
         ? { roleId: partial.roleId as AgentEvent["roleId"] }
         : {}),
       ...(partial.sessionId ? { sessionId: partial.sessionId } : {}),
-      payload: partial.payload,
+      payload: redactedPayload,
+      ...(rawPayload ? { transient: { rawPayload } } : {}),
     };
     run.events.push(event);
   }

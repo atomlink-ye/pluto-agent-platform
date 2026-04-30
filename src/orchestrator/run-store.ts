@@ -9,7 +9,7 @@ import type {
   RunsEventV0,
   RunsListItemV0,
 } from "../contracts/types.js";
-import { redactEventPayload, validateEvidencePacketV0 } from "./evidence.js";
+import { redactEventPayload, redactSecrets, validateEvidencePacketV0 } from "./evidence.js";
 import { normalizeBlockerReason } from "./blocker-classifier.js";
 
 /**
@@ -37,9 +37,10 @@ export class RunStore {
 
   async appendEvent(event: AgentEvent): Promise<void> {
     await this.ensure(event.runId);
+    const persistedEvent = sanitizeEventForPersistence(event);
     await appendFile(
       join(this.runDir(event.runId), "events.jsonl"),
-      JSON.stringify(event) + "\n",
+      JSON.stringify(persistedEvent) + "\n",
       "utf8",
     );
   }
@@ -47,7 +48,7 @@ export class RunStore {
   async writeArtifact(artifact: FinalArtifact): Promise<string> {
     await this.ensure(artifact.runId);
     const path = join(this.runDir(artifact.runId), "artifact.md");
-    await writeFile(path, artifact.markdown, "utf8");
+    await writeFile(path, redactSecrets(artifact.markdown), "utf8");
     return path;
   }
 
@@ -72,8 +73,17 @@ export class RunStore {
       return null;
     }
 
-    const lines = eventsRaw.trim().split("\n").filter(Boolean);
-    const events: AgentEvent[] = lines.map((l) => JSON.parse(l) as AgentEvent);
+    const events: AgentEvent[] = [];
+    let parseWarnings = 0;
+    for (const line of eventsRaw.split("\n")) {
+      if (!line.trim()) continue;
+      try {
+        events.push(JSON.parse(line) as AgentEvent);
+      } catch {
+        parseWarnings++;
+        continue;
+      }
+    }
 
     if (events.length === 0) return null;
 
@@ -96,7 +106,7 @@ export class RunStore {
     if (endEvent?.type === "run_completed") {
       status = "done";
     } else if (endEvent?.type === "run_failed") {
-      const blockerEvent = events.find((e) => e.type === "blocker");
+      const blockerEvent = [...events].reverse().find((e) => e.type === "blocker");
       if (blockerEvent) {
         status = "blocked";
         const context = typeof blockerEvent.payload?.["message"] === "string" ? blockerEvent.payload["message"] : "";
@@ -119,6 +129,7 @@ export class RunStore {
       blockerReason,
       startedAt: events[0]!.ts,
       finishedAt: endEvent?.ts ?? null,
+      parseWarnings,
       workerCount,
       artifactPresent,
       evidencePresent,
@@ -158,7 +169,7 @@ export class RunStore {
   async readArtifact(runId: string): Promise<string | null> {
     const path = join(this.runDir(runId), "artifact.md");
     try {
-      return await readFile(path, "utf8");
+      return redactSecrets(await readFile(path, "utf8"));
     } catch {
       return null;
     }
@@ -176,16 +187,24 @@ export class RunStore {
     try {
       const raw = await readFile(join(dir, "evidence.json"), "utf8");
       const parsed: unknown = JSON.parse(raw);
-      if (validateEvidencePacketV0(parsed)) {
+      if (validateEvidencePacketV0(parsed).ok) {
         json = {
-          ...parsed,
-          blockerReason: normalizeBlockerReason(parsed.blockerReason),
+          ...(parsed as EvidencePacketV0),
+          blockerReason: normalizeBlockerReason((parsed as EvidencePacketV0).blockerReason),
         };
       }
     } catch { /* absent */ }
 
     return { md, json };
   }
+}
+
+export function sanitizeEventForPersistence(event: AgentEvent): AgentEvent {
+  const { transient: _transient, ...persistableEvent } = event;
+  return {
+    ...persistableEvent,
+    payload: redactEventPayload(persistableEvent.payload) as AgentEvent["payload"],
+  };
 }
 
 function normalizeEventPayload(ev: AgentEvent): unknown {

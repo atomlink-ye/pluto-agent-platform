@@ -35,10 +35,11 @@ Live runs from the host that owns the Paseo daemon (Paseo is macOS-only). Precon
 
 - [ ] `paseo daemon status` shows the daemon running on host.
 - [ ] `paseo provider ls --json` lists `opencode` as `available` with default mode `build`.
-- [ ] `OPENCODE_BASE_URL=http://localhost:4096 pnpm smoke:live` returns `{"status":"ok",...}` (allow ~40–80s for the model).
+- [ ] `OPENCODE_BASE_URL=http://localhost:4096 pnpm smoke:live` returns `{"status":"ok",...}` or `{"status":"partial","reason":"provider_unavailable"|"quota_exceeded",...}` (allow ~40–80s for the model).
 - [ ] `events.jsonl` contains: `run_started`, `lead_started`, ≥3 `worker_requested`, ≥3 `worker_started`, ≥3 `worker_completed`, one `lead_message` (kind=`summary`), one `artifact_created`, one terminal `run_completed`.
 - [ ] `artifact.md` contains the strings `lead`, `planner`, `generator`, `evaluator` (assertion the smoke script enforces).
-- [ ] If blocked, the script prints a `{"status":"blocker","reason":...}` payload and exits with code 2.
+- [ ] Only preflight blockers print `{"status":"blocker","reason":...}` and exit with code 2.
+- [ ] If the run starts and evidence ends `blocked` for any reason other than `provider_unavailable` or `quota_exceeded`, the script prints `{"status":"failed",...}` and exits with code 1.
 
 ### 5.1 Full Docker live mode (`pnpm smoke:docker`)
 
@@ -64,7 +65,9 @@ Live runs from the host that owns the Paseo daemon (Paseo is macOS-only). Precon
 
 - [ ] `pnpm runs list` returns runs; `--json` matches `RunsListOutputV0`.
 - [ ] `pnpm runs show <runId>` prints metadata; `--json` matches `RunsShowOutputV0`.
-- [ ] `pnpm runs events <runId>` streams events; `--role` and `--kind` reject unknown values with non-zero exit.
+- [ ] `pnpm runs events <runId>` prints filtered persisted events; `--role` and `--kind` reject unknown values with non-zero exit.
+- [ ] `pnpm runs events <runId> --follow --json` emits newline-delimited JSON objects and drains through the terminal event (`tests/cli/runs-follow.test.ts`).
+- [ ] `pnpm runs events <runId> --since <eventId|timestamp>` returns only events strictly after the matched point.
 - [ ] `pnpm runs artifact <runId>` prints artifact markdown.
 - [ ] `pnpm runs evidence <runId>` prints evidence markdown; `--json` prints validated `EvidencePacketV0`.
 - [ ] Old MVP-alpha runs show `evidencePresent=false`; `runs evidence <oldRunId>` exits 0 with graceful message.
@@ -72,16 +75,26 @@ Live runs from the host that owns the Paseo daemon (Paseo is macOS-only). Precon
 ## 9. Redaction (MVP-beta)
 
 - [ ] `tests/evidence-redaction.test.ts` covers: token shapes, env-name patterns, raw provider stderr, `.env`-style key=value.
+- [ ] `tests/run-store-redaction.test.ts` proves `RunStore` persists redacted payloads and re-redacts legacy unredacted event logs on read.
+- [ ] `tests/team-run-service-redaction.test.ts` proves persisted `events.jsonl` is redacted while live orchestration can still use transient raw payloads.
+- [ ] `tests/paseo-opencode-adapter.test.ts` proves adapter events redact persisted payloads while keeping raw `output` / `markdown` transient only.
 - [ ] `pnpm smoke:fake` asserts no token-shaped substrings in evidence files.
-- [ ] Evidence generation redacts known secret env names, JWT-like tokens, GitHub tokens, sk-* API keys.
+- [ ] Evidence generation redacts known secret env names, JWT-like tokens, GitHub tokens, sk-* API keys, and absolute workspace paths.
 
 ## 10. Concurrency cap (operator)
 
 - [ ] Status doc records the `<= 2 active tasks` cap (`.paseo-pluto-mvp/root/status.md`).
 - [ ] No background retry helpers, hidden detached children, or nested OpenCode sessions used to bypass the cap.
 
-## 11. Documentation
+## 11. Retry provenance and evidence-failure handling
+
+- [ ] Retry events record `originalEventId` pointing to a real persisted `blocker` event.
+- [ ] `tests/team-run-service-recovery.test.ts` covers persisted-id provenance, retry hard cap, and non-retryable reasons.
+- [ ] `tests/evidence-failure.test.ts` proves evidence write/validation failures surface as blocker reason `runtime_error`, emit `run_failed`, and do not leave partial evidence files behind.
+
+## 12. Documentation
 
 - [ ] README quickstart reproducible by a fresh clone.
 - [ ] `docs/mvp-alpha.md` contracts match `src/contracts/`.
+- [ ] Lifecycle vocabulary note stays explicit: v0 still writes `done` / `run_completed`; readers tolerate future `succeeded` / `completion`.
 - [ ] `final-report.md` lists branch, commits, command outputs, blockers, PM status mapping.

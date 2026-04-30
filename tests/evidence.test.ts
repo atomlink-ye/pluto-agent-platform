@@ -95,7 +95,7 @@ describe("evidence packet generation", () => {
       blockerReason: null,
     });
 
-    expect(validateEvidencePacketV0(packet)).toBe(true);
+    expect(validateEvidencePacketV0(packet).ok).toBe(true);
     expect(packet.schemaVersion).toBe(0);
     expect(packet.status).toBe("done");
     expect(packet.blockerReason).toBeNull();
@@ -117,7 +117,7 @@ describe("evidence packet generation", () => {
       blockerReason: "runtime_timeout",
     });
 
-    expect(validateEvidencePacketV0(packet)).toBe(true);
+    expect(validateEvidencePacketV0(packet).ok).toBe(true);
     expect(packet.status).toBe("blocked");
     expect(packet.blockerReason).toBe("runtime_timeout");
   });
@@ -143,7 +143,7 @@ describe("evidence packet generation", () => {
       blockerReason: "unknown",
     });
 
-    expect(validateEvidencePacketV0(packet)).toBe(true);
+    expect(validateEvidencePacketV0(packet).ok).toBe(true);
     expect(packet.status).toBe("blocked");
     expect(packet.blockerReason).toBe("unknown");
   });
@@ -151,10 +151,10 @@ describe("evidence packet generation", () => {
 
 describe("validateEvidencePacketV0", () => {
   it("rejects invalid packets", () => {
-    expect(validateEvidencePacketV0(null)).toBe(false);
-    expect(validateEvidencePacketV0({})).toBe(false);
-    expect(validateEvidencePacketV0({ schemaVersion: 1 })).toBe(false);
-    expect(validateEvidencePacketV0({ schemaVersion: 0, runId: 123 })).toBe(false);
+      expect(validateEvidencePacketV0(null).ok).toBe(false);
+      expect(validateEvidencePacketV0({}).ok).toBe(false);
+      expect(validateEvidencePacketV0({ schemaVersion: 1 }).ok).toBe(false);
+      expect(validateEvidencePacketV0({ schemaVersion: 0, runId: 123 }).ok).toBe(false);
   });
 
   it("accepts a well-formed packet with extra fields", () => {
@@ -170,7 +170,7 @@ describe("validateEvidencePacketV0", () => {
     });
 
     const withExtra = { ...packet, futureField: "hello" };
-    expect(validateEvidencePacketV0(withExtra)).toBe(true);
+    expect(validateEvidencePacketV0(withExtra).ok).toBe(true);
   });
 });
 
@@ -216,6 +216,6 @@ describe("writeEvidence", () => {
 
     const jsonContent = await readFile(jsonPath, "utf8");
     const parsed = JSON.parse(jsonContent);
-    expect(validateEvidencePacketV0(parsed)).toBe(true);
+    expect(validateEvidencePacketV0(parsed).ok).toBe(true);
   });
 });
