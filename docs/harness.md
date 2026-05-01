@@ -46,7 +46,7 @@ evals/        # cases, rubrics, goldens, reports, datasets
 - **.pluto/runs/<runId>/evidence.json** — Evidence packet (machine-readable, `EvidencePacketV0`, MVP-beta)
 - **evals/reports/** — Evaluation reports
 
-The evidence packet is a new control-surface artifact introduced in MVP-beta. Successful evidence generation writes `evidence.md` and `evidence.json` for completed, blocked, and failed runs and contains: run metadata, canonical `BlockerReasonV0` (when blocked), per-worker contribution summaries, validation outcome, cited inputs (redacted), risks, and open questions. It validates against `EvidencePacketV0` schema and is redacted by `src/orchestrator/evidence.ts` before being written to disk. If evidence generation itself fails, the run is surfaced as `runtime_error` / `run_failed` and partial evidence files are cleaned up instead of being guaranteed to persist.
+The evidence packet is a new control-surface artifact introduced in MVP-beta. Successful evidence generation writes `evidence.md` and `evidence.json` for completed, blocked, and failed runs and contains: run metadata, canonical `BlockerReasonV0` (when blocked), per-worker contribution summaries, validation outcome, cited inputs (redacted), risks, and open questions. Its orchestration section records `orchestration.playbookId`, `orchestrationSource`, optional `orchestrationMode`, `transcript`, `dependencyTrace`, `revisions`, `escalation`, and `finalReconciliation`. It validates against `EvidencePacketV0` schema and is redacted by `src/orchestrator/evidence.ts` before being written to disk. If evidence generation itself fails, the run is surfaced as `runtime_error` / `run_failed` and partial evidence files are cleaned up instead of being guaranteed to persist.
 
 Persisted events are part of the same control surface. `RunStore.appendEvent()` strips `transient.rawPayload` and rewrites payloads through the same redactor, while live adapters may still keep raw payload fragments in memory long enough for orchestration and artifact synthesis.
 
@@ -70,9 +70,11 @@ Persisted events are part of the same control surface. `RunStore.appendEvent()` 
 | Paseo daemon host | `PASEO_HOST` | local socket | Optional explicit Paseo daemon/API URL; adapter passes `--host` when set |
 | Workspace | `PLUTO_LIVE_WORKSPACE` | `/Volumes/AgentsWorkspace/tmp/pluto-regression-fix/live-quickstart/` | Preferred run directory; falls back to `<repo>/.tmp/live-quickstart/` when `/Volumes/AgentsWorkspace/` is unavailable |
 | Orchestration mode | `PASEO_ORCHESTRATION_MODE` | teamlead_direct | Default TeamLead-direct path; set `lead_marker` to exercise the quarantined legacy fallback lane |
+| Team playbook | `PASEO_TEAM_PLAYBOOK` | teamlead-direct-default-v0 | Selects `teamlead-direct-default-v0` or `teamlead-direct-research-review-v0` for TeamLead-direct smoke coverage |
 | Citation requirement | `PASEO_REQUIRE_CITATIONS` | off | Fail smoke when final reconciliation omits any required playbook stage citation |
 | Endpoint (optional) | `OPENCODE_BASE_URL` | - | OpenCode HTTP debug endpoint (Docker only) |
 | Binary | `PASEO_BIN` | paseo | Path to paseo CLI |
+| Fake-live alias | `PLUTO_FAKE_LIVE` | off | Test/CI convenience alias for `PLUTO_LIVE_ADAPTER=fake` |
 
 ## CLI Surfaces
 

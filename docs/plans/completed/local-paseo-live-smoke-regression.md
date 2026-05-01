@@ -2,7 +2,7 @@
 
 ## Status
 
-Status: Active
+Status: Completed
 
 ## Goal
 
@@ -49,6 +49,6 @@ Mode distinction: default/local mode uses the local Paseo daemon/socket; Docker-
 
 ## Follow-up
 
-- Follow-up: fix existing `tests/security/permit-contracts.test.ts` and `tests/cli/runs-follow.test.ts` failures so `pnpm verify` can complete end-to-end.
+- Follow-up: the prior unrelated verify blockers in `tests/security/permit-contracts.test.ts` and `tests/cli/runs-follow.test.ts` are fixed in commit `1e82090`; rerun full `pnpm verify` in current checkout for acceptance evidence.
 - Architecture follow-up captured in `docs/plans/active/teamlead-orchestrated-agent-team-architecture.md`: live smoke currently proves real agents can run, but the target architecture is TeamLead-owned orchestration via a shared Paseo room/channel, with Pluto preparing the environment and observing evidence rather than owning worker dispatch decisions.
 - Follow-up updated 2026-05-01: new regression-fix live-artifact default is `/Volumes/AgentsWorkspace/tmp/pluto-regression-fix/live-quickstart/`.

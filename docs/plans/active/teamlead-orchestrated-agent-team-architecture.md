@@ -164,8 +164,8 @@ Important distinction:
 
 Keep live test artifacts under the external regression-fix workspace for this iteration:
 
-- Default live workspace: `/Volumes/AgentsWorkspace/tmp/pluto-regression-fix/live-quickstart/`
-- This supersedes the prior repo-local fallback guidance for regression-fix validation.
+- Preferred live workspace: `/Volumes/AgentsWorkspace/tmp/pluto-regression-fix/live-quickstart/`
+- `docker/live-smoke.ts` still falls back to `<repo>/.tmp/live-quickstart/` when `/Volumes/AgentsWorkspace/` is unavailable or not writable.
 
 Future live smoke should verify:
 

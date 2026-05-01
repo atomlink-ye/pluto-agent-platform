@@ -72,7 +72,7 @@ pnpm smoke:live         #set PASEO_HOST for explicit daemon; OPENCODE_BASE_URL o
 pnpm smoke:docker      #Docker stack + live smoke
 ```
 
-Live smoke defaults to `PASEO_ORCHESTRATION_MODE=teamlead_direct`. Use `PASEO_ORCHESTRATION_MODE=lead_marker` to exercise the quarantined legacy fallback lane. Preferred host artifact root is `/Volumes/AgentsWorkspace/tmp/pluto-regression-fix/live-quickstart/`; `docker/live-smoke.ts` falls back to `<repo>/.tmp/live-quickstart/` when `/Volumes/AgentsWorkspace/` is unavailable or not writable.
+Live smoke defaults to `PASEO_ORCHESTRATION_MODE=teamlead_direct`. Use `PASEO_ORCHESTRATION_MODE=lead_marker` to exercise the quarantined legacy fallback lane. `PASEO_TEAM_PLAYBOOK` selects `teamlead-direct-default-v0` or `teamlead-direct-research-review-v0`; see `docs/harness.md` for the canonical full live-smoke knob table. Preferred host artifact root is `/Volumes/AgentsWorkspace/tmp/pluto-regression-fix/live-quickstart/`; `docker/live-smoke.ts` falls back to `<repo>/.tmp/live-quickstart/` when `/Volumes/AgentsWorkspace/` is unavailable or not writable.
 
 ## Placement Rules
 

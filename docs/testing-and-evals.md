@@ -120,8 +120,9 @@ pnpm smoke:local
 PASEO_HOST=localhost:6767 pnpm smoke:live
 OPENCODE_BASE_URL=http://localhost:4096 pnpm smoke:live
 
-# Legacy marker fallback lane and citation enforcement knobs
+# Legacy marker fallback lane, playbook selection, and citation enforcement knobs
 PASEO_ORCHESTRATION_MODE=lead_marker pnpm smoke:live
+PASEO_TEAM_PLAYBOOK=teamlead-direct-research-review-v0 pnpm smoke:live
 PASEO_REQUIRE_CITATIONS=1 pnpm exec tsx docker/live-smoke.ts
 ```
 

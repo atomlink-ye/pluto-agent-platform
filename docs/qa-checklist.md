@@ -41,7 +41,8 @@ Live uses the local Paseo daemon/socket by default. Set `PASEO_HOST` to run agai
 - [ ] `pnpm smoke:local` returns `{"status":"ok",...}` or `{"status":"partial","reason":"provider_unavailable"|"quota_exceeded",...}` (allow ~40–80s for the model).
 - [ ] For Docker/remote Paseo daemon mode, `PASEO_HOST=<host> pnpm smoke:live` uses the same provider/model and returns the same acceptable status shape.
 - [ ] `PASEO_ORCHESTRATION_MODE=lead_marker pnpm smoke:live` still passes for the quarantined legacy fallback lane.
-- [ ] `events.jsonl` contains: `run_started`, `lead_started`, ≥3 `worker_requested`, ≥3 `worker_started`, ≥3 `worker_completed`, one `lead_message` (kind=`summary`), one `artifact_created`, one terminal `run_completed`.
+- [ ] `PASEO_TEAM_PLAYBOOK=teamlead-direct-research-review-v0 pnpm smoke:live` passes or returns an allowed provider/quota partial, proving the non-default playbook path.
+- [ ] `events.jsonl` is playbook-aware: it contains `run_started`, `lead_started`, one `coordination_transcript_created`, one `worker_requested` / `worker_started` / `worker_completed` triplet per selected playbook stage, one `lead_message` (kind=`summary`), one `artifact_created`, and one terminal `run_completed`; revision/escalation cases may also include `revision_started`, `revision_completed`, `escalation`, `final_reconciliation_validated`, and `final_reconciliation_invalid`.
 - [ ] `artifact.md` contains the strings `lead`, `planner`, `generator`, `evaluator` (assertion the smoke script enforces).
 - [ ] `summary.orchestrationMode === "teamlead_direct"` by default and `summary.finalReconciliation.valid === true` when `PASEO_REQUIRE_CITATIONS=1`.
 - [ ] Only preflight blockers print `{"status":"blocker","reason":...}` and exit with code 2.

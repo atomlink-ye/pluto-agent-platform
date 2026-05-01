@@ -102,6 +102,7 @@ Both paths use `opencode/minimax-m2.5-free` by default. Do **not** switch to a p
 
 Additional live-smoke knobs:
 - `PASEO_ORCHESTRATION_MODE=teamlead_direct|lead_marker` — TeamLead-direct is the default; `lead_marker` is the quarantined legacy lane.
+- `PASEO_TEAM_PLAYBOOK=teamlead-direct-default-v0|teamlead-direct-research-review-v0` — select the authored TeamLead-direct playbook without code changes.
 - `PASEO_REQUIRE_CITATIONS=1` — fail smoke when the final reconciliation omits any required stage citation.
 
 ### Verification
@@ -135,7 +136,7 @@ docker compose \
 - Each requested worker is spawned via Paseo, runs to idle, and reports back.
 - The final markdown artifact references all four roles (lead, planner, generator, evaluator).
 - The final reconciliation cites every required playbook stage; `PASEO_REQUIRE_CITATIONS=1` makes missing citations a hard smoke failure.
-- `events.jsonl` contains the canonical lifecycle: `run_started → lead_started → 3× worker_requested/started/completed → lead_message → artifact_created → run_completed`.
+- `events.jsonl` contains the relevant playbook-aware lifecycle: `run_started`, `lead_started`, one `coordination_transcript_created`, one `worker_requested`/`worker_started`/`worker_completed` triplet per selected playbook stage, `lead_message`, `artifact_created`, and terminal `run_completed`. Revision/escalation paths may also emit `revision_started`, `revision_completed`, `escalation`, `final_reconciliation_validated`, and `final_reconciliation_invalid`.
 - `evidence.json` validates against `EvidencePacketV0`, and `evidence.md`/`evidence.json` contain no secret-shaped substrings.
 
 ### Vocabulary note

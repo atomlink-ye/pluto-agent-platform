@@ -42,12 +42,16 @@ Runs against real Paseo + OpenCode. Local mode uses the default Paseo daemon/soc
 ```bash
 pnpm smoke:local   # No Docker, uses host paseo + opencode CLI
 PASEO_HOST=localhost:6767 pnpm smoke:live  # Explicit daemon host
+PASEO_TEAM_PLAYBOOK=teamlead-direct-research-review-v0 pnpm smoke:live  # Non-default playbook
 OPENCODE_BASE_URL=http://localhost:4096 pnpm smoke:live  # Optional OpenCode debug endpoint
 ```
+
+See `docs/harness.md` for the canonical full live-smoke knob table, including `PASEO_TEAM_PLAYBOOK=teamlead-direct-default-v0|teamlead-direct-research-review-v0`.
 
 Assertions:
 - Team Lead session created (`lead_started`)
 - TeamLead-direct default: requested stages complete in authored dependency order and `dependencyTrace` is present
+- Non-default `PASEO_TEAM_PLAYBOOK=teamlead-direct-research-review-v0` smoke path remains selectable
 - Legacy `lead_marker` lane remains selectable and green under `PASEO_ORCHESTRATION_MODE=lead_marker`
 - Artifact references lead, planner, generator, evaluator
 - No protocol fragments leaked
