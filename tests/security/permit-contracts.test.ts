@@ -21,7 +21,7 @@ const permit = {
   sandboxPosture: "local_v0",
   trustBoundary: "operator_approved",
   grantedAt: "2026-04-30T00:00:00.000Z",
-  expiresAt: "2026-05-01T00:00:00.000Z",
+  expiresAt: null,
   approvalRefs: ["approval-1"],
 };
 

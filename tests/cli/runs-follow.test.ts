@@ -38,7 +38,7 @@ describe("pnpm runs events --follow", () => {
       ["tsx", join(process.cwd(), "src/cli/runs.ts"), "events", runId, "--follow", "--since", "seed-1", "--role", "generator", "--kind", "worker_completed", "--json"],
       {
         cwd: process.cwd(),
-        env: { ...process.env, PLUTO_DATA_DIR: dataDir },
+        env: { ...npmCompatibleEnv(process.env), PLUTO_DATA_DIR: dataDir },
         stdio: ["ignore", "pipe", "pipe"],
       },
     );
@@ -104,4 +104,11 @@ describe("pnpm runs events --follow", () => {
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function npmCompatibleEnv(source: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const env = { ...source };
+  delete env.npm_config_only_built_dependencies;
+  delete env.NPM_CONFIG_ONLY_BUILT_DEPENDENCIES;
+  return env;
 }
