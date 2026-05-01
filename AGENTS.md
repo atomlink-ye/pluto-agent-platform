@@ -2,6 +2,8 @@
 
 Quick reference for agents joining this repo. Keep changes focused and observable.
 
+Regression-fix iteration note: the default orchestration path is `teamlead_direct`; `lead_marker` remains a legacy/fallback lane. Remote implementation slices in this iteration run under an OpenCode root manager using `openai/gpt-5.4` with thinking `high` and orchestrator/build-style execution depending on the lane. The shipped `teamlead_direct` lane is a Pluto-mediated bridge: Pluto enforces the TeamLead-authored playbook deterministically until an adapter/runtime can honor true host-side `spawnTeammate()` delegation.
+
 ## Repo Map
 
 ```
@@ -65,10 +67,12 @@ pnpm smoke:fake         #fake adapter E2E
 pnpm verify
 
 # Live smoke (no Docker required)
-pnpm smoke:local        #host Paseo + OpenCode (no Docker)
+pnpm smoke:local        #host Paseo + OpenCode (no Docker; TeamLead-direct default)
 pnpm smoke:live         #set PASEO_HOST for explicit daemon; OPENCODE_BASE_URL optional debug
 pnpm smoke:docker      #Docker stack + live smoke
 ```
+
+Live smoke defaults to `PASEO_ORCHESTRATION_MODE=teamlead_direct`. Use `PASEO_ORCHESTRATION_MODE=lead_marker` to exercise the quarantined legacy fallback lane. Preferred host artifact root is `/Volumes/AgentsWorkspace/tmp/pluto-regression-fix/live-quickstart/`; `docker/live-smoke.ts` falls back to `<repo>/.tmp/live-quickstart/` when `/Volumes/AgentsWorkspace/` is unavailable or not writable.
 
 ## Placement Rules
 
@@ -92,6 +96,7 @@ pnpm smoke:docker      #Docker stack + live smoke
 - Quality criteria change → update QUALITY_SCORE.md
 - Reliability policy change → update RELIABILITY.md
 - Workflow/product-shape change → update relevant docs/design-docs and plan records
+- Live smoke knob/path change → update `README.md`, `docs/harness.md`, `docs/qa-checklist.md`, and `docs/testing-and-evals.md`
 - Never duplicate docs. Point to canonical sources.
 
 ## Forbidden Actions

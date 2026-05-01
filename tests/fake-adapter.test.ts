@@ -9,6 +9,7 @@ const baseTask: TeamTask = {
   prompt: "Produce a hello-team script.",
   workspacePath: "/tmp/pluto-fake",
   minWorkers: 2,
+  orchestrationMode: "lead_marker",
 };
 
 describe("FakeAdapter protocol", () => {

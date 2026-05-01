@@ -5,6 +5,7 @@ import {
   DEFAULT_TEAM_ARTIFACT_EXPECTATION_V0,
   DEFAULT_TEAM_LOGICAL_REFS_V0,
   DEFAULT_TEAM_RUNTIME_REQUIREMENTS_V0,
+  RESEARCH_REVIEW_PLAYBOOK_ID,
   exportPortableWorkflowBundle,
   type PortableWorkflowBundleV0,
 } from "@/index.js";
@@ -28,8 +29,8 @@ describe("portable workflow export", () => {
         runtime: {
           requirements: DEFAULT_TEAM_RUNTIME_REQUIREMENTS_V0,
           envRefs: {
-            required: ["OPENCODE_BASE_URL"],
-            optional: ["PASEO_BIN", "PASEO_PROVIDER"],
+            required: [],
+            optional: ["PASEO_BIN", "PASEO_HOST", "PASEO_PROVIDER", "PASEO_MODEL", "OPENCODE_BASE_URL"],
           },
           secretRefs: {
             required: ["OPENCODE_API_KEY"],
@@ -46,10 +47,22 @@ describe("portable workflow export", () => {
 
     expect(json).not.toContain("Document");
     expect(json).not.toContain("Published Workflow");
-    expect(json).not.toContain("Review");
-    expect(json).not.toContain("Approval");
-    expect(json).not.toContain("PublishPackage");
-    expect(json).not.toContain("runHistory");
-    expect(json).not.toContain("sessionId");
+    expect(json).not.toContain('"reviews"');
+    expect(json).not.toContain('"review"');
+    expect(json).not.toContain('"approvals"');
+    expect(json).not.toContain('"approval"');
+    expect(json).not.toContain('"publishPackage"');
+    expect(json).not.toContain('"runHistory"');
+    expect(json).not.toContain('"sessionId"');
+  });
+
+  it("rejects non-default playbook export until portable workflow refs are versioned for it", () => {
+    expect(() => exportPortableWorkflowBundle({
+      team: {
+        ...DEFAULT_TEAM,
+        defaultPlaybookId: RESEARCH_REVIEW_PLAYBOOK_ID,
+      },
+      exportedAt: "2026-04-30T00:00:00.000Z",
+    })).toThrow(/portable_workflow_non_default_playbook_export_deferred/);
   });
 });

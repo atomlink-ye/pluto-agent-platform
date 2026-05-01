@@ -17,6 +17,7 @@ const baseTask: TeamTask = {
   prompt: "Produce a fake callback artifact.",
   workspacePath: "/tmp/pluto-fake-callbacks",
   minWorkers: 2,
+  orchestrationMode: "lead_marker",
 };
 
 beforeEach(async () => {

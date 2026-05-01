@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { PaseoOpenCodeAdapter } from "@/adapters/paseo-opencode/paseo-opencode-adapter.js";
 import type { ProcessRunner } from "@/adapters/paseo-opencode/process-runner.js";
 import { DEFAULT_TEAM, getRole } from "@/orchestrator/team-config.js";
+import { DEFAULT_TEAM_PLAYBOOK_V0 } from "@/orchestrator/team-playbook.js";
 import type { TeamTask } from "@/contracts/types.js";
 
 const baseTask: TeamTask = {
@@ -145,6 +146,7 @@ describe("PaseoOpenCodeAdapter — protocol with mocked runner", () => {
     run?: (args: string[]) => { stdout?: string; stderr?: string; exitCode?: number | null };
     onArgs?: (cmd: string, args: string[]) => void;
     extra?: (cmd: string, args: string[]) => { stdout?: string; stderr?: string; exitCode?: number | null } | undefined;
+    follow?: (cmd: string, args: string[], opts: { onLine: (line: string) => void }) => void;
   }): ProcessRunner {
     return {
       async exec(_cmd, args) {
@@ -178,6 +180,8 @@ describe("PaseoOpenCodeAdapter — protocol with mocked runner", () => {
         return { stdout: "", stderr: `unknown subcommand:${sub}`, exitCode: 1 };
       },
       follow(_cmd, _args, _opts) {
+        impl.onArgs?.(_cmd, _args);
+        impl.follow?.(_cmd, _args, _opts);
         return { dispose: async () => undefined };
       },
     };
@@ -186,6 +190,7 @@ describe("PaseoOpenCodeAdapter — protocol with mocked runner", () => {
   it("uses provider/mode build by default and passes --cwd", async () => {
     const captured: string[][] = [];
     const adapter = new PaseoOpenCodeAdapter({
+      host: "",
       workspaceCwd: "/tmp/pluto-live",
       runner: makeRunner({ onArgs: (_c, a) => captured.push(a) }),
       idGen: () => "fixed-id",
@@ -201,10 +206,161 @@ describe("PaseoOpenCodeAdapter — protocol with mocked runner", () => {
     expect(runArgs).toContain("--mode");
     const modeIdx = runArgs!.indexOf("--mode");
     expect(runArgs![modeIdx + 1]).toBe("build");
+    // Provider is now separate from model
     const provIdx = runArgs!.indexOf("--provider");
-    expect(runArgs![provIdx + 1]).toBe("opencode/minimax-m2.5-free");
+    expect(runArgs![provIdx + 1]).toBe("opencode");
+    const modelIdx = runArgs!.indexOf("--model");
+    expect(runArgs![modelIdx + 1]).toBe("opencode/minimax-m2.5-free");
+    expect(runArgs).not.toContain("--host");
     const cwdIdx = runArgs!.indexOf("--cwd");
     expect(runArgs![cwdIdx + 1]).toBe("/tmp/pluto-live");
+  });
+
+  it("passes playbook and transcript details to TeamLead prompt", async () => {
+    const prompts: string[] = [];
+    const adapter = new PaseoOpenCodeAdapter({
+      workspaceCwd: "/tmp/pluto-live",
+      runner: makeRunner({
+        run: (args) => {
+          prompts.push(args[args.length - 1] ?? "");
+          return { stdout: '{"agentId":"lead-agent"}' };
+        },
+      }),
+    });
+
+    await adapter.startRun({
+      runId: "r1-playbook",
+      task: { ...baseTask, orchestrationMode: "teamlead_direct" },
+      team: DEFAULT_TEAM,
+      playbook: DEFAULT_TEAM_PLAYBOOK_V0,
+      transcript: { kind: "file", path: "/tmp/pluto-live/.pluto/runs/r1/coordination-transcript.jsonl", roomRef: "file-transcript:r1" },
+    });
+    await adapter.createLeadSession({
+      runId: "r1-playbook",
+      task: { ...baseTask, orchestrationMode: "teamlead_direct" },
+      role: getRole(DEFAULT_TEAM, DEFAULT_TEAM.leadRoleId),
+      playbook: DEFAULT_TEAM_PLAYBOOK_V0,
+      transcript: { kind: "file", path: "/tmp/pluto-live/.pluto/runs/r1/coordination-transcript.jsonl", roomRef: "file-transcript:r1" },
+    });
+
+    expect(prompts[0]).toContain("TEAMLEAD-DIRECT ORCHESTRATION");
+    expect(prompts[0]).toContain("teamlead-direct-default-v0");
+    expect(prompts[0]).toContain("Selected playbook id: teamlead-direct-default-v0");
+    expect(prompts[0]).toContain("Selected playbook title: Default planner → generator → evaluator");
+    expect(prompts[0]).toContain("- planner-contract | Planner contract | role=planner | dependsOn=none");
+    expect(prompts[0]).toContain("- generator-output | Generator output | role=generator | dependsOn=planner-contract");
+    expect(prompts[0]).toContain("paseo run");
+    expect(prompts[0]).toContain("paseo chat");
+    expect(prompts[0]).toContain("Coordination transcript path: /tmp/pluto-live/.pluto/runs/r1/coordination-transcript.jsonl");
+    expect(prompts[0]).toContain("Coordination room reference: file-transcript:r1");
+    expect(prompts[0]).toContain("Orchestration mode: teamlead_direct");
+    expect(prompts[0]).toContain("do not use the legacy marker fallback unless Pluto explicitly downgrades the run");
+    expect(prompts[0]).not.toContain("WORKER_REQUEST:");
+    expect(prompts[0]).toContain("explicitly cite each required stage by stage id/name and mention the transcript path/room reference");
+  });
+
+  it("exposes spawnTeammate when PASEO_BIN is configured", () => {
+    const previousBin = process.env["PASEO_BIN"];
+    process.env["PASEO_BIN"] = "/usr/bin/paseo";
+    try {
+      const adapter = new PaseoOpenCodeAdapter({ workspaceCwd: "/tmp/pluto-live" });
+      expect(typeof adapter.spawnTeammate).toBe("function");
+    } finally {
+      if (previousBin === undefined) {
+        delete process.env["PASEO_BIN"];
+      } else {
+        process.env["PASEO_BIN"] = previousBin;
+      }
+    }
+  });
+
+  it("stamps lead_marker on worker_requested events parsed from lead logs", async () => {
+    const adapter = new PaseoOpenCodeAdapter({
+      workspaceCwd: "/tmp/pluto-live",
+      runner: makeRunner({
+        follow: (_cmd, _args, opts) => {
+          opts.onLine("WORKER_REQUEST: planner :: Plan the hello artifact.");
+        },
+      }),
+    });
+
+    await adapter.startRun({ runId: "r1-marker", task: { ...baseTask, orchestrationMode: "lead_marker" }, team: DEFAULT_TEAM });
+    await adapter.createLeadSession({
+      runId: "r1-marker",
+      task: { ...baseTask, orchestrationMode: "lead_marker" },
+      role: getRole(DEFAULT_TEAM, DEFAULT_TEAM.leadRoleId),
+    });
+
+    const events = await adapter.readEvents({ runId: "r1-marker" });
+    const workerRequested = events.find((event) => event.type === "worker_requested");
+    expect(workerRequested?.payload).toMatchObject({
+      targetRole: "planner",
+      instructions: "Plan the hello artifact.",
+      orchestratorSource: "lead_marker",
+      source: "legacy_marker_fallback",
+    });
+  });
+
+  it("passes --host to all paseo daemon commands when configured", async () => {
+    const captured: string[][] = [];
+    const adapter = new PaseoOpenCodeAdapter({
+      host: "http://127.0.0.1:6767",
+      workspaceCwd: "/tmp/pluto-live",
+      runner: makeRunner({
+        onArgs: (_c, a) => captured.push(a),
+        run: (args) => ({ stdout: `{"agentId":"agent-${args.includes("Worker") ? "worker" : "lead"}"}` }),
+      }),
+    });
+
+    await adapter.startRun({ runId: "r1-host", task: baseTask, team: DEFAULT_TEAM });
+    const lead = await adapter.createLeadSession({
+      runId: "r1-host",
+      task: baseTask,
+      role: getRole(DEFAULT_TEAM, DEFAULT_TEAM.leadRoleId),
+    });
+    await adapter.createWorkerSession({
+      runId: "r1-host",
+      role: getRole(DEFAULT_TEAM, "planner"),
+      instructions: "Plan",
+    });
+    await adapter.sendMessage({ runId: "r1-host", sessionId: lead.sessionId, message: "SUMMARIZE" });
+    await adapter.endRun({ runId: "r1-host" });
+
+    const daemonCommands = captured.filter((args) => ["run", "logs", "wait", "send", "delete"].includes(args[0] ?? ""));
+    expect(daemonCommands.length).toBeGreaterThan(0);
+    for (const args of daemonCommands) {
+      const hostIdx = args.indexOf("--host");
+      expect(hostIdx).toBeGreaterThanOrEqual(0);
+      expect(args[hostIdx + 1]).toBe("127.0.0.1:6767");
+    }
+  });
+
+  it("normalizes PASEO_HOST URL values for the paseo --host CLI argument", () => {
+    expect(PaseoOpenCodeAdapter.normalizePaseoHost("http://localhost:6767")).toBe("localhost:6767");
+    expect(PaseoOpenCodeAdapter.normalizePaseoHost("https://paseo.example.test")).toBe("paseo.example.test");
+    expect(PaseoOpenCodeAdapter.normalizePaseoHost("localhost:6767")).toBe("localhost:6767");
+  });
+
+  it("normalizes legacy provider/model strings to separate provider and model args", async () => {
+    const captured: string[][] = [];
+    const adapter = new PaseoOpenCodeAdapter({
+      provider: "opencode/minimax-m2.5-free",
+      workspaceCwd: "/tmp/pluto-live",
+      runner: makeRunner({ onArgs: (_c, a) => captured.push(a) }),
+    });
+    await adapter.startRun({ runId: "r1-legacy-provider", task: baseTask, team: DEFAULT_TEAM });
+    await adapter.createLeadSession({
+      runId: "r1-legacy-provider",
+      task: baseTask,
+      role: getRole(DEFAULT_TEAM, DEFAULT_TEAM.leadRoleId),
+    });
+
+    const runArgs = captured.find((a) => a[0] === "run");
+    expect(runArgs).toBeDefined();
+    const provIdx = runArgs!.indexOf("--provider");
+    const modelIdx = runArgs!.indexOf("--model");
+    expect(runArgs![provIdx + 1]).toBe("opencode");
+    expect(runArgs![modelIdx + 1]).toBe("opencode/minimax-m2.5-free");
   });
 
   it("emits worker_started + worker_completed and parses worker output from logs", async () => {

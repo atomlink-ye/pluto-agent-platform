@@ -78,7 +78,7 @@ describe("budget gate run creation hook", () => {
     expect(result.status).toBe("failed");
     expect(result.blockerReason).toBe("quota_exceeded");
     expect(result.failure?.message).toContain("require_override");
-    expect(result.events.map((event) => event.type)).toEqual(["run_started", "blocker", "run_failed"]);
+    expect(result.events.map((event) => event.type)).toEqual(["run_started", "coordination_transcript_created", "blocker", "run_failed"]);
     const decisions = await observabilityStore.query({ kind: "budget_decision", workspaceId });
     expect(decisions).toHaveLength(1);
     expect((decisions[0] as { behavior?: string } | undefined)?.behavior).toBe("require_override");

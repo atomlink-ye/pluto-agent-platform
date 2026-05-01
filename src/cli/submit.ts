@@ -245,7 +245,7 @@ function buildRuntimeRegistry(
       id: "opencode-default",
       provider: "opencode",
       label: "OpenCode default",
-      envRefs: { required: ["OPENCODE_BASE_URL"] },
+      envRefs: { required: [], optional: ["PASEO_BIN", "PASEO_HOST", "PASEO_PROVIDER", "PASEO_MODEL", "OPENCODE_BASE_URL"] },
       secretRefs: { required: ["OPENCODE_API_KEY"] },
       selection: {
         runtimeIds: ["opencode-live"],

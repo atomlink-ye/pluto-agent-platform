@@ -17,6 +17,16 @@ export {
   getRoleCatalogSelection,
 } from "./team-config.js";
 export type { RoleCatalogSelection, TeamCatalogSelection } from "./team-config.js";
+export {
+  DEFAULT_TEAM_PLAYBOOK_ID,
+  DEFAULT_TEAM_PLAYBOOK_V0,
+  DEFAULT_TEAM_PLAYBOOKS_V0,
+  RESEARCH_REVIEW_PLAYBOOK_ID,
+  RESEARCH_REVIEW_PLAYBOOK_V0,
+  selectTeamPlaybook,
+  validateTeamPlaybookV0,
+} from "./team-playbook.js";
+export { FileBackedCoordinationTranscript } from "./coordination-transcript.js";
 export { classifyBlocker, isRetryable, RETRYABLE_REASONS, CANONICAL_BLOCKER_REASONS, normalizeBlockerReason } from "./blocker-classifier.js";
 export type { ClassifierInput, ClassifierResult } from "./blocker-classifier.js";
 export {

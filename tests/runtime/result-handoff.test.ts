@@ -26,6 +26,7 @@ const buildTask = (id: string): TeamTask => ({
   prompt: "Produce a hello-team markdown artifact.",
   workspacePath: workDir,
   minWorkers: 2,
+  orchestrationMode: "lead_marker",
 });
 
 class ReferenceFirstAdapter implements PaseoTeamAdapter {

@@ -29,6 +29,10 @@ export interface TeamConfig {
   /** Exactly one role with kind="team_lead". */
   leadRoleId: AgentRoleId;
   roles: AgentRoleConfig[];
+  /** Authored orchestration playbooks TeamLead can select from. */
+  playbooks?: TeamPlaybookV0[];
+  /** Default playbook id when a task does not select one. */
+  defaultPlaybookId?: string;
 }
 
 export interface TeamTask {
@@ -52,6 +56,107 @@ export interface TeamTask {
     actorId?: string | null;
     principalId?: string | null;
   };
+  /** Optional authored playbook id. Defaults to the team's default playbook. */
+  playbookId?: string;
+  /** Optional orchestration path. Defaults to teamlead_direct; lead_marker remains legacy/fallback. */
+  orchestrationMode?: OrchestrationMode;
+}
+
+export type OrchestrationMode = "teamlead_direct" | "lead_marker";
+
+export type TeamPlaybookStageKindV0 = "plan" | "generate" | "evaluate" | "research" | "synthesize";
+
+export interface TeamPlaybookStageV0 {
+  id: string;
+  kind: TeamPlaybookStageKindV0;
+  roleId: AgentRoleId;
+  title: string;
+  instructions: string;
+  dependsOn: string[];
+  evidenceCitation: {
+    required: boolean;
+    label: string;
+  };
+}
+
+export interface TeamPlaybookRevisionRuleV0 {
+  fromStageId: string;
+  targetStageId: string;
+  maxRevisionCycles: number;
+  failureSignal: string;
+}
+
+export interface TeamPlaybookV0 {
+  schemaVersion: 0;
+  id: string;
+  title: string;
+  description: string;
+  orchestrationSource: "teamlead_direct" | "legacy_marker_fallback";
+  stages: TeamPlaybookStageV0[];
+  revisionRules: TeamPlaybookRevisionRuleV0[];
+  finalCitationMetadata: {
+    requiredStageIds: string[];
+    requireFinalReconciliation: boolean;
+  };
+}
+
+export interface TeamRunPlaybookMetadataV0 {
+  id: TeamPlaybookV0["id"];
+  title: TeamPlaybookV0["title"];
+  schemaVersion: TeamPlaybookV0["schemaVersion"];
+  orchestrationSource: TeamPlaybookV0["orchestrationSource"];
+}
+
+export interface TeamPlaybookValidationResultV0 {
+  ok: boolean;
+  errors: string[];
+}
+
+export interface CoordinationTranscriptRefV0 {
+  kind: "file" | "paseo_chat";
+  path: string;
+  roomRef: string;
+}
+
+export interface CoordinationTranscriptRecordV0 {
+  schemaVersion: 0;
+  runId: string;
+  seq: number;
+  ts: string;
+  source: "pluto" | "teamlead" | "worker" | "adapter";
+  type: string;
+  message: string;
+  payload?: Record<string, unknown>;
+}
+
+export interface StageDependencyTrace {
+  stageId: string;
+  role: AgentRoleId;
+  completedAt: string;
+  outputRef?: PortableRuntimeResultAnyRefV0 | null;
+}
+
+export type WorkerRequestedOrchestratorSource =
+  | "lead_marker"
+  | "pluto_fallback"
+  | "teamlead_direct";
+
+/**
+ * @deprecated Use only for the legacy marker fallback lane. TeamLead-direct is the default path after S6.
+ */
+export type LegacyLeadMarkerPayload = WorkerRequestedPayload & {
+  orchestratorSource: "lead_marker";
+};
+
+export interface WorkerRequestedPayload extends Record<string, unknown> {
+  targetRole: AgentRoleId;
+  instructions: string;
+  orchestratorSource: WorkerRequestedOrchestratorSource;
+}
+
+export interface WorkerRequestedEvent extends AgentEvent {
+  type: "worker_requested";
+  payload: WorkerRequestedPayload;
 }
 
 /** Identifier of a Paseo agent session backing a role. */
@@ -64,6 +169,7 @@ export interface AgentSession {
 
 export type AgentEventType =
   | "run_started"
+  | "coordination_transcript_created"
   | "lead_started"
   | "worker_requested"
   | "worker_started"
@@ -71,6 +177,11 @@ export type AgentEventType =
   | "lead_message"
   | "worker_message"
   | "orchestrator_underdispatch_fallback"
+  | "revision_started"
+  | "revision_completed"
+  | "escalation"
+  | "final_reconciliation_validated"
+  | "final_reconciliation_invalid"
   | "artifact_created"
   | "blocker"
   | "retry"
@@ -166,7 +277,7 @@ export interface FinalArtifact {
 
 export interface TeamRunResult {
   runId: string;
-  status: "completed" | "failed";
+  status: "completed" | "completed_with_escalation" | "completed_with_warnings" | "failed";
   artifact?: FinalArtifact;
   events: AgentEvent[];
   runtimeResultRefs?: PortableRuntimeResultAnyRefV0[];
@@ -230,6 +341,32 @@ export interface EvidencePacketV0 {
   openQuestions: string[];
   classifierVersion: 0;
   generatedAt: string;
+  orchestration?: {
+    playbookId: string;
+    orchestrationSource: string;
+    orchestrationMode?: OrchestrationMode;
+    dependencyTrace?: StageDependencyTrace[];
+    revisions?: Array<{
+      stageId: string;
+      attempt: number;
+      evaluatorVerdict: string;
+      escalated?: boolean;
+    }>;
+    escalation?: {
+      stageId: string;
+      attempts: number;
+      lastVerdict: string;
+    };
+    finalReconciliation?: {
+      citations: Array<{
+        stageId: string;
+        present: boolean;
+        snippet?: string;
+      }>;
+      valid: boolean;
+    };
+    transcript: CoordinationTranscriptRefV0;
+  };
 }
 
 export interface RunsListItemV0 {

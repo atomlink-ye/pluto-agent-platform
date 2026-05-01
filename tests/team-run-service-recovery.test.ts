@@ -33,6 +33,7 @@ const buildTask = (id: string): TeamTask => ({
   prompt: "Test recovery behavior",
   workspacePath: workDir,
   minWorkers: 2,
+  orchestrationMode: "lead_marker",
 });
 
 class FailOnceAdapter implements PaseoTeamAdapter {

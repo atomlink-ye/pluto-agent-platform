@@ -45,6 +45,14 @@ Legacy persisted aliases are normalized for readers: `worker_timeout` maps to `r
 - No global retry budget, cancel API, scheduler, or queue semantics.
 - `--max-retries 0` disables retry entirely.
 
+## TeamLead-direct Revision Policy
+
+- Default orchestration mode is `teamlead_direct`; `lead_marker` remains a legacy/fallback lane selected explicitly per task or via `PASEO_ORCHESTRATION_MODE=lead_marker`.
+- In `teamlead_direct`, evaluator `FAIL:` verdicts follow authored `playbook.revisionRules`.
+- Revisions are bounded by `maxRevisionCycles`; exhausted revision budget produces structured escalation evidence instead of a blocker.
+- Final reconciliation citations are validated deterministically against required stage outputs. `PASEO_REQUIRE_CITATIONS=1` turns missing citations into a smoke failure; otherwise the run completes with warnings.
+- Preferred live-smoke artifact root is `/Volumes/AgentsWorkspace/tmp/pluto-regression-fix/live-quickstart/` with automatic fallback to `<repo>/.tmp/live-quickstart/` when `/Volumes/AgentsWorkspace/` is unavailable.
+
 ### Blocker classification
 
 All failures are classified by `src/orchestrator/blocker-classifier.ts` into the canonical 11-value `BlockerReasonV0` taxonomy. The classifier is the single decision point; `team-run-service` calls it at the moment a blocker is recorded.
@@ -114,7 +122,8 @@ With `PASEO_HOST` set, live smoke also probes the explicit Paseo daemon/API URL 
 
 1. **Blocker:** Precondition missing → exit 2, structured JSON payload
 2. **Transient/acceptable partial:** Live smoke may return `{"status":"partial"}` only when evidence is `blocked` for `provider_unavailable` or `quota_exceeded`
-3. **Fatal:** Run records failure, exits 1
+3. **Non-fatal TeamLead-direct outcome:** run may complete with escalation or warnings while still writing evidence and transcript state
+4. **Fatal:** Run records failure, exits 1
 
 ## Debugging Failed Runs
 

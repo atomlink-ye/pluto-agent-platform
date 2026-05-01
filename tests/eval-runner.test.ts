@@ -116,6 +116,7 @@ async function runDeterministicFakeWorkflow() {
       workspacePath: workspace,
       artifactPath: join(workspace, "workflow-quality-v1.md"),
       minWorkers: 2,
+      orchestrationMode: "lead_marker",
     });
   } finally {
     await rm(workspace, { recursive: true, force: true });

@@ -2,7 +2,9 @@
 
 Pluto is a **minimal agent team control plane**. MVP-alpha proves a single closed loop:
 
-> Submit a task → Pluto starts a Team Lead via Paseo → the Team Lead dispatches at least two workers via OpenCode → Pluto persists events and a final artifact.
+> Submit a task → Pluto starts a Team Lead via Paseo → the Team Lead orchestrates authored playbook stages via the TeamLead-direct lane (legacy marker fallback still available) → Pluto persists events, transcript evidence, and a final artifact.
+
+For iteration `pluto-regression-fix-20260501`, that default `teamlead_direct` lane is a Pluto-mediated bridge: Pluto enforces the TeamLead-authored playbook deterministically, and adapters can graduate to true host-side teammate spawning through `spawnTeammate()` when the runtime supports it.
 
 Everything else (UI, multi-tenant control plane, governance, marketplace) is intentionally out of scope. See `docs/mvp-alpha.md`.
 
@@ -72,6 +74,8 @@ Every completed, blocked, or failed run attempts to produce `evidence.md` and `e
 
 The live adapter talks to Paseo through the local daemon/socket by default. Set `PASEO_HOST` to make the adapter pass `--host <host>` to `paseo run/wait/logs/send/delete` for a Docker-packaged or remote Paseo daemon. `http://` / `https://` prefixes are normalized away for the Paseo CLI. The OpenCode runtime container in `docker/compose.yml` is optional — it only exposes the OpenCode web UI on `http://localhost:4096` for debugging.
 
+The regression-fix iteration uses an OpenCode remote root manager (`openai/gpt-5.4`, thinking `high`) for remote implementation slices. Host-local live smoke artifacts prefer `/Volumes/AgentsWorkspace/tmp/pluto-regression-fix/live-quickstart/`; when that path is unavailable, `docker/live-smoke.ts` falls back to `<repo>/.tmp/live-quickstart/` and logs the reason.
+
 ```bash
 cp .env.example .env  # placeholders only — never commit real secrets
 
@@ -85,6 +89,9 @@ pnpm smoke:local
 #     OPENCODE_BASE_URL is optional and only exposes an OpenCode debug endpoint:
 PASEO_HOST=localhost:6767 pnpm smoke:live
 
+# (2b) Force the quarantined legacy marker fallback lane when needed:
+PASEO_ORCHESTRATION_MODE=lead_marker pnpm smoke:live
+
 # (3) Or have Pluto build & start the optional pluto-runtime container first.
 #     This script auto-sets OPENCODE_BASE_URL as an optional debug endpoint and
 #     passes through PASEO_HOST when you provide one:
@@ -92,6 +99,10 @@ pnpm smoke:docker
 ```
 
 Both paths use `opencode/minimax-m2.5-free` by default. Do **not** switch to a paid model without explicit authorization (see `docs/qa-checklist.md`). A live smoke result of `{"status":"partial"}` is acceptable only for evidence packets classified as blocked by `provider_unavailable` or `quota_exceeded`; other blocked/failed evidence outcomes are treated as smoke failures.
+
+Additional live-smoke knobs:
+- `PASEO_ORCHESTRATION_MODE=teamlead_direct|lead_marker` — TeamLead-direct is the default; `lead_marker` is the quarantined legacy lane.
+- `PASEO_REQUIRE_CITATIONS=1` — fail smoke when the final reconciliation omits any required stage citation.
 
 ### Verification
 
@@ -119,9 +130,11 @@ docker compose \
 ### Smoke success criteria (asserted by `docker/live-smoke.ts`)
 
 - Pluto creates a Team Lead session via Paseo and records `lead_started`.
-- The lead emits ≥ 2 `WORKER_REQUEST: <role> :: <instructions>` markers.
+- TeamLead-direct default: the selected playbook stages complete in dependency order and `dependencyTrace` records the topological stage sequence.
+- Legacy `lead_marker` mode: the lead emits `WORKER_REQUEST: <role> :: <instructions>` markers and Pluto dispatches them as a fallback lane.
 - Each requested worker is spawned via Paseo, runs to idle, and reports back.
 - The final markdown artifact references all four roles (lead, planner, generator, evaluator).
+- The final reconciliation cites every required playbook stage; `PASEO_REQUIRE_CITATIONS=1` makes missing citations a hard smoke failure.
 - `events.jsonl` contains the canonical lifecycle: `run_started → lead_started → 3× worker_requested/started/completed → lead_message → artifact_created → run_completed`.
 - `evidence.json` validates against `EvidencePacketV0`, and `evidence.md`/`evidence.json` contain no secret-shaped substrings.
 

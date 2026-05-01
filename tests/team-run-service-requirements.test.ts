@@ -53,6 +53,7 @@ describe("TeamRunService runtime requirements", () => {
     expect(adapter.startRunCalls).toBe(0);
     expect(result.events.map((event) => event.type)).toEqual([
       "run_started",
+      "coordination_transcript_created",
       "blocker",
       "run_failed",
     ]);
@@ -292,10 +293,11 @@ class SuccessfulAdapter implements PaseoTeamAdapter {
 function buildTask(id: string): TeamTask {
   return {
     id,
-    title: `Runtime selection ${id}`,
-    prompt: "Produce a runtime-gated artifact.",
+    title: `Requirements test ${id}`,
+    prompt: "Produce a hello-team markdown artifact.",
     workspacePath: workDir,
     minWorkers: 2,
+    orchestrationMode: "lead_marker",
   };
 }
 

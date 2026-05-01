@@ -8,7 +8,7 @@
  *   3. pnpm spec:hygiene (optional mirror validation)
  *   4. pnpm build      (dist/ output)
  *   5. pnpm smoke:fake (fake adapter E2E)
- *   6. No-endpoint blocker check (exit 2 if OPENCODE_BASE_URL unset)
+ *   6. No-paseo blocker check (exit 2 if PASEO_BIN unavailable)
  *
  * This script is cross-platform (macOS/Node.js) and requires no secrets.
  * Excludes: pnpm smoke:docker (broader validation — see docs/testing-and-evals.md).
@@ -39,14 +39,17 @@ function run(cmd, expectExit) {
   }
 }
 
-function checkNoEndpointBlocker() {
-  console.log("\n[verify] Running no-endpoint blocker check...");
+function checkNoPaseoBlocker() {
+  console.log("\n[verify] Running no-paseo blocker check...");
   const start = Date.now();
-  // Simulate the live smoke with OPENCODE_BASE_URL unset.
-  // Do not inherit a developer's local Docker/OpenCode endpoint here; this
-  // gate must prove the deterministic missing-endpoint blocker path.
-  const blockerEnv = { ...env, PLUTO_LIVE_ADAPTER: "paseo-opencode" };
-  delete blockerEnv.OPENCODE_BASE_URL;
+  // Simulate the live smoke with PASEO_BIN unset and no paseo on PATH.
+  // This gate must prove the deterministic missing-paseo blocker path.
+  // We set a non-existent path to simulate missing binary.
+  const blockerEnv = {
+    ...env,
+    PLUTO_LIVE_ADAPTER: "paseo-opencode",
+    PASEO_BIN: "/nonexistent/paseo",
+  };
 
   const result = spawnSync(
     "pnpm",
@@ -66,13 +69,14 @@ function checkNoEndpointBlocker() {
     console.log(`[verify] Blocker output:\n${output.substring(0, 500)}`);
   }
 
-  if (exitCode === 2 && output.includes("OPENCODE_BASE_URL")) {
-    console.log(`[verify] ✓ No-endpoint blocker correctly exits 2 with OPENCODE_BASE_URL message (${elapsed}s)`);
+  // Check for the expected blocker: paseo CLI unavailable
+  if (exitCode === 2 && output.includes("paseo CLI unavailable")) {
+    console.log(`[verify] ✓ No-paseo blocker correctly exits 2 with paseo CLI unavailable message (${elapsed}s)`);
     return { ok: true, exit: 2, elapsed };
   } else {
-    console.error(`[verify] ✗ Blocker check failed: expected exit 2 + OPENCODE_BASE_URL in output`);
+    console.error(`[verify] ✗ Blocker check failed: expected exit 2 + "paseo CLI unavailable" in output`);
     if (exitCode !== 2) console.error(`[verify]   Expected exit 2, got ${exitCode}`);
-    if (!output.includes("OPENCODE_BASE_URL")) console.error(`[verify]   Output did not contain "OPENCODE_BASE_URL"`);
+    if (!output.includes("paseo CLI unavailable")) console.error(`[verify]   Output did not contain "paseo CLI unavailable"`);
     return { ok: false, exit: exitCode, elapsed };
   }
 }
@@ -96,7 +100,7 @@ function main() {
   }
 
   if (allPassed) {
-    const blockerCheck = checkNoEndpointBlocker();
+    const blockerCheck = checkNoPaseoBlocker();
     results.push(blockerCheck);
     if (!blockerCheck.ok) {
       allPassed = false;

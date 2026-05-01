@@ -52,6 +52,7 @@ MVP-beta test lanes:
   - `ok` when evidence status is `done`
   - `partial` only when evidence status is `blocked` for `provider_unavailable` or `quota_exceeded`
   - failure for every other blocked/failed evidence outcome
+  - default mode `teamlead_direct`; use `PASEO_ORCHESTRATION_MODE=lead_marker` only for the quarantined legacy fallback lane
 
 ### Live E2E
 
@@ -118,6 +119,10 @@ pnpm smoke:local
 # Explicit Paseo daemon/API host; optional OpenCode HTTP debug endpoint
 PASEO_HOST=localhost:6767 pnpm smoke:live
 OPENCODE_BASE_URL=http://localhost:4096 pnpm smoke:live
+
+# Legacy marker fallback lane and citation enforcement knobs
+PASEO_ORCHESTRATION_MODE=lead_marker pnpm smoke:live
+PASEO_REQUIRE_CITATIONS=1 pnpm exec tsx docker/live-smoke.ts
 ```
 
 ## Future DB Testing Lane

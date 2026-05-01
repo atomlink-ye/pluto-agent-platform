@@ -50,6 +50,16 @@ The evidence packet is a new control-surface artifact introduced in MVP-beta. Su
 
 Persisted events are part of the same control surface. `RunStore.appendEvent()` strips `transient.rawPayload` and rewrites payloads through the same redactor, while live adapters may still keep raw payload fragments in memory long enough for orchestration and artifact synthesis.
 
+## Orchestrator Source Instrumentation (S1)
+
+`worker_requested` events now carry `payload.orchestratorSource` so the harness can distinguish which control-plane lane dispatched each worker:
+
+- `lead_marker` — the live lead emitted a legacy marker line.
+- `pluto_fallback` — Pluto synthesized the dispatch in `maybeDispatchUnderdispatchFallback()`.
+- `teamlead_direct` — default direct path for dispatches that intentionally bypass both marker parsing and Pluto fallback.
+
+`docker/live-smoke.ts` records the per-worker `orchestratorSource` distribution and fails when more than 50% of completed workers were dispatched via `pluto_fallback`, which guards against a misleadingly green smoke that is still relying on Pluto-owned dispatch.
+
 ## Control Knobs
 
 | Knob | Env Var | Default | Purpose |
@@ -58,7 +68,9 @@ Persisted events are part of the same control surface. `RunStore.appendEvent()` 
 | Provider | `PASEO_PROVIDER` | opencode | Paseo provider alias |
 | Model | `PASEO_MODEL` | opencode/minimax-m2.5-free | Model for the provider |
 | Paseo daemon host | `PASEO_HOST` | local socket | Optional explicit Paseo daemon/API URL; adapter passes `--host` when set |
-| Workspace | `PLUTO_LIVE_WORKSPACE` | .tmp/live-quickstart | Run directory |
+| Workspace | `PLUTO_LIVE_WORKSPACE` | `/Volumes/AgentsWorkspace/tmp/pluto-regression-fix/live-quickstart/` | Preferred run directory; falls back to `<repo>/.tmp/live-quickstart/` when `/Volumes/AgentsWorkspace/` is unavailable |
+| Orchestration mode | `PASEO_ORCHESTRATION_MODE` | teamlead_direct | Default TeamLead-direct path; set `lead_marker` to exercise the quarantined legacy fallback lane |
+| Citation requirement | `PASEO_REQUIRE_CITATIONS` | off | Fail smoke when final reconciliation omits any required playbook stage citation |
 | Endpoint (optional) | `OPENCODE_BASE_URL` | - | OpenCode HTTP debug endpoint (Docker only) |
 | Binary | `PASEO_BIN` | paseo | Path to paseo CLI |
 

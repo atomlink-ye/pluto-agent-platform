@@ -3,8 +3,10 @@ import { join } from "node:path";
 import type {
   AgentEvent,
   BlockerReasonV0,
+  CoordinationTranscriptRefV0,
   EvidencePacketStatusV0,
   EvidencePacketV0,
+  StageDependencyTrace,
   ProvenancePinRef,
   TeamRunResult,
   TeamTask,
@@ -37,7 +39,15 @@ export function redactWorkspacePath(workspacePath: string): string {
 }
 
 export function redactEvidencePacketV0(packet: EvidencePacketV0): EvidencePacketV0 {
-  return redactObject(packet) as EvidencePacketV0;
+  const redacted = redactObject(packet) as EvidencePacketV0;
+  if (packet.orchestration?.transcript && redacted.orchestration?.transcript) {
+    redacted.orchestration.transcript = {
+      kind: redactString(packet.orchestration.transcript.kind) as "file" | "paseo_chat",
+      path: redactString(packet.orchestration.transcript.path),
+      roomRef: redactString(packet.orchestration.transcript.roomRef),
+    };
+  }
+  return redacted;
 }
 
 export type EvidencePacketValidationResult =
@@ -77,6 +87,118 @@ function validateStringArray(value: unknown, path: string, errors: string[]): vo
       errors.push(`${path}[${index}] must be a string`);
     }
   });
+}
+
+function validateCoordinationTranscriptRef(
+  value: unknown,
+  path: string,
+  errors: string[],
+): void {
+  if (typeof value !== "object" || value === null) {
+    errors.push(`${path} must be an object`);
+    return;
+  }
+  const ref = value as Record<string, unknown>;
+  if (ref["kind"] !== "file" && ref["kind"] !== "paseo_chat") {
+    errors.push(`${path}.kind must be file or paseo_chat`);
+  }
+  if (typeof ref["path"] !== "string") {
+    errors.push(`${path}.path must be a string`);
+  }
+  if (typeof ref["roomRef"] !== "string") {
+    errors.push(`${path}.roomRef must be a string`);
+  }
+}
+
+function validateDependencyTrace(
+  value: unknown,
+  path: string,
+  errors: string[],
+): void {
+  if (!Array.isArray(value)) {
+    errors.push(`${path} must be an array`);
+    return;
+  }
+  value.forEach((entry, index) => {
+    if (typeof entry !== "object" || entry === null) {
+      errors.push(`${path}[${index}] must be an object`);
+      return;
+    }
+    const trace = entry as Record<string, unknown>;
+    if (typeof trace["stageId"] !== "string") errors.push(`${path}[${index}].stageId must be a string`);
+    if (typeof trace["role"] !== "string") errors.push(`${path}[${index}].role must be a string`);
+    if (typeof trace["completedAt"] !== "string") errors.push(`${path}[${index}].completedAt must be a string`);
+  });
+}
+
+function validateRevisionEntries(
+  value: unknown,
+  path: string,
+  errors: string[],
+): void {
+  if (!Array.isArray(value)) {
+    errors.push(`${path} must be an array`);
+    return;
+  }
+  value.forEach((entry, index) => {
+    if (typeof entry !== "object" || entry === null) {
+      errors.push(`${path}[${index}] must be an object`);
+      return;
+    }
+    const revision = entry as Record<string, unknown>;
+    if (typeof revision["stageId"] !== "string") errors.push(`${path}[${index}].stageId must be a string`);
+    if (typeof revision["attempt"] !== "number") errors.push(`${path}[${index}].attempt must be a number`);
+    if (typeof revision["evaluatorVerdict"] !== "string") errors.push(`${path}[${index}].evaluatorVerdict must be a string`);
+    if (revision["escalated"] !== undefined && typeof revision["escalated"] !== "boolean") {
+      errors.push(`${path}[${index}].escalated must be a boolean when present`);
+    }
+  });
+}
+
+function validateEscalation(
+  value: unknown,
+  path: string,
+  errors: string[],
+): void {
+  if (typeof value !== "object" || value === null) {
+    errors.push(`${path} must be an object`);
+    return;
+  }
+  const escalation = value as Record<string, unknown>;
+  if (typeof escalation["stageId"] !== "string") errors.push(`${path}.stageId must be a string`);
+  if (typeof escalation["attempts"] !== "number") errors.push(`${path}.attempts must be a number`);
+  if (typeof escalation["lastVerdict"] !== "string") errors.push(`${path}.lastVerdict must be a string`);
+}
+
+function validateFinalReconciliation(
+  value: unknown,
+  path: string,
+  errors: string[],
+): void {
+  if (typeof value !== "object" || value === null) {
+    errors.push(`${path} must be an object`);
+    return;
+  }
+  const finalReconciliation = value as Record<string, unknown>;
+  if (!Array.isArray(finalReconciliation["citations"])) {
+    errors.push(`${path}.citations must be an array`);
+  } else {
+    finalReconciliation["citations"].forEach((entry, index) => {
+      if (typeof entry !== "object" || entry === null) {
+        errors.push(`${path}.citations[${index}] must be an object`);
+        return;
+      }
+      const citation = entry as Record<string, unknown>;
+      if (typeof citation["stageId"] !== "string") errors.push(`${path}.citations[${index}].stageId must be a string`);
+      if (typeof citation["present"] !== "boolean") errors.push(`${path}.citations[${index}].present must be a boolean`);
+      if (citation["snippet"] !== undefined && typeof citation["snippet"] !== "string") {
+        errors.push(`${path}.citations[${index}].snippet must be a string when present`);
+      }
+    });
+  }
+  if (typeof finalReconciliation["valid"] !== "boolean") {
+    errors.push(`${path}.valid must be a boolean`);
+  }
 }
 
 function validateProvenanceRef(
@@ -225,6 +347,40 @@ export function validateEvidencePacketV0(packet: unknown): EvidencePacketValidat
   if (p["classifierVersion"] !== 0) errors.push("classifierVersion must be 0");
   if (typeof p["generatedAt"] !== "string") errors.push("generatedAt must be a string");
 
+  if (p["orchestration"] !== undefined) {
+    if (typeof p["orchestration"] !== "object" || p["orchestration"] === null) {
+      errors.push("orchestration must be an object when present");
+    } else {
+      const orchestration = p["orchestration"] as Record<string, unknown>;
+      if (typeof orchestration["playbookId"] !== "string") {
+        errors.push("orchestration.playbookId must be a string");
+      }
+      if (typeof orchestration["orchestrationSource"] !== "string") {
+        errors.push("orchestration.orchestrationSource must be a string");
+      }
+      if (orchestration["orchestrationMode"] !== undefined && typeof orchestration["orchestrationMode"] !== "string") {
+        errors.push("orchestration.orchestrationMode must be a string when present");
+      }
+      if (orchestration["dependencyTrace"] !== undefined) {
+        validateDependencyTrace(orchestration["dependencyTrace"], "orchestration.dependencyTrace", errors);
+      }
+      if (orchestration["revisions"] !== undefined) {
+        validateRevisionEntries(orchestration["revisions"], "orchestration.revisions", errors);
+      }
+      if (orchestration["escalation"] !== undefined) {
+        validateEscalation(orchestration["escalation"], "orchestration.escalation", errors);
+      }
+      if (orchestration["finalReconciliation"] !== undefined) {
+        validateFinalReconciliation(orchestration["finalReconciliation"], "orchestration.finalReconciliation", errors);
+      }
+      if (orchestration["transcript"] !== undefined) {
+        validateCoordinationTranscriptRef(orchestration["transcript"], "orchestration.transcript", errors);
+      } else {
+        errors.push("orchestration.transcript must be present");
+      }
+    }
+  }
+
   return errors.length === 0 ? { ok: true } : { ok: false, errors };
 }
 
@@ -236,6 +392,7 @@ export interface GenerateEvidenceInput {
   finishedAt: Date;
   blockerReason: BlockerReasonV0 | null;
   runtimeResultRefs?: TeamRunResult["runtimeResultRefs"];
+  transcriptRef?: CoordinationTranscriptRefV0;
 }
 
 interface WorkerEvidenceAccumulator {
@@ -247,7 +404,7 @@ interface WorkerEvidenceAccumulator {
 }
 
 function mapStatus(result: TeamRunResult, blockerReason: BlockerReasonV0 | null): EvidencePacketStatusV0 {
-  if (result.status === "completed" && !blockerReason) return "done";
+  if ((result.status === "completed" || result.status === "completed_with_escalation" || result.status === "completed_with_warnings") && !blockerReason) return "done";
   if (blockerReason) return "blocked";
   return "failed";
 }
@@ -369,6 +526,11 @@ export function generateEvidencePacket(input: GenerateEvidenceInput): EvidencePa
 
   const validation = extractValidation(events, resolveEventValue);
   const { risks, openQuestions } = extractRisksAndQuestions(events, resolveEventValue);
+  const runStarted = events.find((event) => event.type === "run_started");
+  const orchestrationTerminalEvent = [...events].reverse().find(
+    (event) => event.type === "run_completed" || event.type === "artifact_created",
+  );
+  const orchestration = extractOrchestrationEvidence(runStarted, orchestrationTerminalEvent, input.transcriptRef);
 
   const packet: EvidencePacketV0 = {
     schemaVersion: 0,
@@ -395,9 +557,67 @@ export function generateEvidencePacket(input: GenerateEvidenceInput): EvidencePa
     openQuestions: openQuestions.map((q) => redactString(q)),
     classifierVersion: 0,
     generatedAt: new Date().toISOString(),
+    ...(orchestration ? { orchestration } : {}),
   };
 
   return packet;
+}
+
+function extractOrchestrationEvidence(
+  startEvent: AgentEvent | undefined,
+  completedEvent?: AgentEvent,
+  transcriptRef?: CoordinationTranscriptRefV0,
+): EvidencePacketV0["orchestration"] | null {
+  const payload = startEvent?.payload;
+  if (!payload) return null;
+  const completionPayload = completedEvent?.payload ?? {};
+  const playbook = typeof payload["playbook"] === "object" && payload["playbook"] !== null
+    ? payload["playbook"] as Record<string, unknown>
+    : null;
+  const transcript = typeof payload["transcript"] === "object" && payload["transcript"] !== null
+    ? payload["transcript"] as Record<string, unknown>
+    : null;
+  const playbookId = payload["playbookId"] ?? playbook?.["id"];
+  const orchestrationSource = payload["orchestrationSource"] ?? playbook?.["orchestrationSource"];
+  const orchestrationMode = payload["orchestrationMode"] ?? completionPayload["orchestrationMode"];
+  const transcriptRefPath = transcriptRef?.path ?? transcript?.["path"];
+  const transcriptRefRoom = transcriptRef?.roomRef ?? transcript?.["roomRef"];
+  const transcriptRefKind = transcriptRef?.kind ?? transcript?.["kind"];
+  const dependencyTrace = Array.isArray(completionPayload["dependencyTrace"])
+    ? completionPayload["dependencyTrace"] as StageDependencyTrace[]
+    : undefined;
+  const revisions = Array.isArray(completionPayload["revisions"])
+    ? completionPayload["revisions"] as NonNullable<EvidencePacketV0["orchestration"]>["revisions"]
+    : undefined;
+  const escalation = typeof completionPayload["escalation"] === "object" && completionPayload["escalation"] !== null
+    ? completionPayload["escalation"] as NonNullable<EvidencePacketV0["orchestration"]>["escalation"]
+    : undefined;
+  const finalReconciliation = typeof completionPayload["finalReconciliation"] === "object" && completionPayload["finalReconciliation"] !== null
+    ? completionPayload["finalReconciliation"] as NonNullable<EvidencePacketV0["orchestration"]>["finalReconciliation"]
+    : undefined;
+  if (
+    typeof playbookId !== "string" ||
+    typeof orchestrationSource !== "string" ||
+    typeof transcriptRefPath !== "string" ||
+    typeof transcriptRefRoom !== "string" ||
+    typeof transcriptRefKind !== "string"
+  ) {
+    return null;
+  }
+  return {
+    playbookId: redactString(playbookId),
+    orchestrationSource: redactString(orchestrationSource),
+    ...(typeof orchestrationMode === "string" ? { orchestrationMode: redactString(orchestrationMode) as "teamlead_direct" | "lead_marker" } : {}),
+    ...(dependencyTrace ? { dependencyTrace: redactObject(dependencyTrace) as StageDependencyTrace[] } : {}),
+    ...(revisions ? { revisions: redactObject(revisions) as NonNullable<EvidencePacketV0["orchestration"]>["revisions"] } : {}),
+    ...(escalation ? { escalation: redactObject(escalation) as NonNullable<EvidencePacketV0["orchestration"]>["escalation"] } : {}),
+    ...(finalReconciliation ? { finalReconciliation: redactObject(finalReconciliation) as NonNullable<EvidencePacketV0["orchestration"]>["finalReconciliation"] } : {}),
+    transcript: {
+      kind: redactString(transcriptRefKind) as "file" | "paseo_chat",
+      path: redactString(transcriptRefPath),
+      roomRef: redactString(transcriptRefRoom),
+    },
+  };
 }
 
 function extractContributionProvenance(

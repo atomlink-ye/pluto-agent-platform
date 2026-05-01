@@ -25,6 +25,7 @@ Mode distinction: default/local mode uses the local Paseo daemon/socket; Docker-
 - A local live smoke can be run with no Docker and no `OPENCODE_BASE_URL`, using `paseo` provider `opencode` and model `opencode/minimax-m2.5-free`.
 - Docker/remote Paseo daemon mode can be selected with `PASEO_HOST`; local mode works with `PASEO_HOST` unset.
 - Documentation and scripts do not imply Docker/OpenCode HTTP is mandatory for the host-local live adapter.
+- Updated 2026-05-01: going forward, local acceptance artifacts for this regression-fix iteration default to `/Volumes/AgentsWorkspace/tmp/pluto-regression-fix/live-quickstart/`; preserve the historical run IDs and evidence below as recorded.
 
 ## Verification evidence
 
@@ -50,3 +51,4 @@ Mode distinction: default/local mode uses the local Paseo daemon/socket; Docker-
 
 - Follow-up: fix existing `tests/security/permit-contracts.test.ts` and `tests/cli/runs-follow.test.ts` failures so `pnpm verify` can complete end-to-end.
 - Architecture follow-up captured in `docs/plans/active/teamlead-orchestrated-agent-team-architecture.md`: live smoke currently proves real agents can run, but the target architecture is TeamLead-owned orchestration via a shared Paseo room/channel, with Pluto preparing the environment and observing evidence rather than owning worker dispatch decisions.
+- Follow-up updated 2026-05-01: new regression-fix live-artifact default is `/Volumes/AgentsWorkspace/tmp/pluto-regression-fix/live-quickstart/`.

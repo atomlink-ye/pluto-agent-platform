@@ -1,3 +1,8 @@
+/**
+ * S6 quarantine boundary: these tests intentionally cover the legacy
+ * marker-fallback callback lane from
+ * `.local/manager/regression-fix-iteration/dispatch/S6-marker-quarantine-and-docs.md`.
+ */
 import { describe, expect, it } from "vitest";
 
 import { PaseoOpenCodeAdapter } from "@/adapters/paseo-opencode/paseo-opencode-adapter.js";
@@ -12,9 +17,10 @@ const baseTask: TeamTask = {
   prompt: "Produce a live callback artifact.",
   workspacePath: "/tmp/pluto-live-callbacks",
   minWorkers: 2,
+  orchestrationMode: "lead_marker",
 };
 
-describe("PaseoOpenCodeAdapter callback identity", () => {
+describe("legacy marker fallback (S6 quarantine)", () => {
   it("emits callback metadata for lead, worker, and summary events", async () => {
     const followHandles: Array<(line: string) => void> = [];
     const adapter = new PaseoOpenCodeAdapter({

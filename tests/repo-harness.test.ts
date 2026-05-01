@@ -87,17 +87,56 @@ describe("repo-harness", () => {
       expect(content).toContain("smoke:fake");
     });
 
-    it("asserts no-endpoint blocker when OPENCODE_BASE_URL unset", async () => {
+    it("asserts no-paseo blocker when PASEO_BIN unavailable", async () => {
       const content = await readFile(
         resolve(PROJECT_ROOT, "scripts/verify.mjs"),
         "utf-8"
       );
-      // Must check for the blocker scenario
-      expect(content).toContain("OPENCODE_BASE_URL");
-      // Must remove any inherited endpoint before running the blocker check.
-      expect(content).toContain("delete blockerEnv.OPENCODE_BASE_URL");
+      // Must check for the blocker scenario (paseo CLI unavailable)
+      expect(content).toContain("paseo CLI unavailable");
+      // Must set PASEO_BIN to a non-existent path to simulate missing binary
+      expect(content).toContain("PASEO_BIN");
       // Must exit with code 2 for blocker
       expect(content).toContain("2");
+    });
+
+    it("live smoke preflight respects PASEO_BIN", async () => {
+      const content = await readFile(
+        resolve(PROJECT_ROOT, "docker/live-smoke.ts"),
+        "utf-8"
+      );
+      expect(content).toContain('process.env["PASEO_BIN"] ?? "paseo"');
+      expect(content).toContain("DEFAULT_RUNNER.exec(paseoBin");
+    });
+
+    it("live smoke fails when playbook/transcript evidence is missing", async () => {
+      const content = await readFile(
+        resolve(PROJECT_ROOT, "docker/live-smoke.ts"),
+        "utf-8"
+      );
+      expect(content).toContain("playbook/transcript orchestration evidence missing");
+      expect(content).toContain("coordination transcript path recorded in evidence does not exist");
+      expect(content).toContain("evidencePacket.orchestration");
+    });
+
+    it("live smoke prefers the external workspace and logs a fallback note when unavailable", async () => {
+      const content = await readFile(
+        resolve(PROJECT_ROOT, "docker/live-smoke.ts"),
+        "utf-8"
+      );
+      expect(content).toContain('/Volumes/AgentsWorkspace/tmp/pluto-regression-fix/live-quickstart');
+      expect(content).toContain('live-smoke: ');
+      expect(content).toContain('unavailable, using');
+      expect(content).toContain('.tmp/live-quickstart');
+    });
+
+    it("live smoke defaults to teamlead_direct and exposes citation enforcement knob", async () => {
+      const content = await readFile(
+        resolve(PROJECT_ROOT, "docker/live-smoke.ts"),
+        "utf-8"
+      );
+      expect(content).toContain('process.env["PASEO_ORCHESTRATION_MODE"] ?? "teamlead_direct"');
+      expect(content).toContain('process.env["PASEO_REQUIRE_CITATIONS"]');
     });
   });
 

@@ -3,6 +3,7 @@
   "description": "Static fixture documenting the expected event types and payload shapes emitted by a FakeAdapter-backed TeamRunService run.",
   "eventTypesInOrder": [
     "run_started",
+    "coordination_transcript_created",
     "lead_started",
     "worker_requested",
     "worker_requested",

@@ -1,6 +1,6 @@
 # MVP-alpha QA Checklist
 
-Run after every meaningful change. Mark `[x]` only when the actual command succeeds.
+Run after every meaningful change. Mark `[x]` only when the actual command succeeds. Default orchestration mode is `teamlead_direct`; `lead_marker` remains a legacy/fallback lane that should still be spot-checked when its tests or docs move.
 
 ## 1. Static gates
 
@@ -40,8 +40,10 @@ Live uses the local Paseo daemon/socket by default. Set `PASEO_HOST` to run agai
 - [ ] `paseo provider ls --json` lists `opencode` as `available` with default mode `build`.
 - [ ] `pnpm smoke:local` returns `{"status":"ok",...}` or `{"status":"partial","reason":"provider_unavailable"|"quota_exceeded",...}` (allow ~40–80s for the model).
 - [ ] For Docker/remote Paseo daemon mode, `PASEO_HOST=<host> pnpm smoke:live` uses the same provider/model and returns the same acceptable status shape.
+- [ ] `PASEO_ORCHESTRATION_MODE=lead_marker pnpm smoke:live` still passes for the quarantined legacy fallback lane.
 - [ ] `events.jsonl` contains: `run_started`, `lead_started`, ≥3 `worker_requested`, ≥3 `worker_started`, ≥3 `worker_completed`, one `lead_message` (kind=`summary`), one `artifact_created`, one terminal `run_completed`.
 - [ ] `artifact.md` contains the strings `lead`, `planner`, `generator`, `evaluator` (assertion the smoke script enforces).
+- [ ] `summary.orchestrationMode === "teamlead_direct"` by default and `summary.finalReconciliation.valid === true` when `PASEO_REQUIRE_CITATIONS=1`.
 - [ ] Only preflight blockers print `{"status":"blocker","reason":...}` and exit with code 2.
 - [ ] If the run starts and evidence ends `blocked` for any reason other than `provider_unavailable` or `quota_exceeded`, the script prints `{"status":"failed",...}` and exits with code 1.
 
@@ -57,6 +59,7 @@ Live uses the local Paseo daemon/socket by default. Set `PASEO_HOST` to run agai
 - [ ] `pnpm runs evidence <runId> --json` validates against `EvidencePacketV0` schema.
 - [ ] Evidence files contain no token-shaped substrings, no env KEY=VALUE secrets, no raw provider stderr.
 - [ ] `pnpm smoke:fake` asserts evidence files present, schema valid, no redacted-secret patterns.
+- [ ] `evidence.orchestration.transcript` is the only transcript reference shape; no tests or readers depend on removed flat transcript fields.
 
 ## 7. BlockerReason taxonomy (MVP-beta)
 

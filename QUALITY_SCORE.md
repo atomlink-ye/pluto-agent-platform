@@ -47,11 +47,13 @@ OPENCODE_BASE_URL=http://localhost:4096 pnpm smoke:live  # Optional OpenCode deb
 
 Assertions:
 - Team Lead session created (`lead_started`)
-- At least 2 workers requested and completed
+- TeamLead-direct default: requested stages complete in authored dependency order and `dependencyTrace` is present
+- Legacy `lead_marker` lane remains selectable and green under `PASEO_ORCHESTRATION_MODE=lead_marker`
 - Artifact references lead, planner, generator, evaluator
 - No protocol fragments leaked
 - Evidence validates and contains no secret-shaped substrings
 - `{"status":"partial"}` is acceptable only for `provider_unavailable` or `quota_exceeded`
+- `PASEO_REQUIRE_CITATIONS=1` enforces `finalReconciliation.valid === true`
 
 ## Future Eval Gates
 

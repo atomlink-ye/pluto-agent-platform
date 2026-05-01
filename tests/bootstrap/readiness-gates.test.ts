@@ -11,7 +11,7 @@ describe("bootstrap readiness gates", () => {
       sessionId: "bootstrap-session-1",
       runtimeRegistry: buildRegistry(),
       providerProfileId: "opencode-default",
-      env: { OPENCODE_BASE_URL: "https://opencode.example.test" },
+      env: {},
       secretRefs: [
         {
           schemaVersion: 0,
@@ -36,7 +36,7 @@ describe("bootstrap readiness gates", () => {
       return;
     }
     expect(result.runtimeSelection?.candidate.runtime.id).toBe("opencode-live");
-    expect(result.requiredEnvNames).toEqual(["OPENCODE_BASE_URL"]);
+    expect(result.requiredEnvNames).toEqual([]);
     expect(result.requiredSecretNames).toEqual(["OPENCODE_API_KEY"]);
   });
 
@@ -59,7 +59,6 @@ describe("bootstrap readiness gates", () => {
     }
     expect(result.failure.blockingReason).toBe("secret_ref_missing");
     expect(result.nextAction).toContain("Create local-v0 SecretRef records for OPENCODE_API_KEY");
-    expect(result.failure.resolutionHint).toContain("env OPENCODE_BASE_URL");
     expect(result.failure.resolutionHint).toContain("secret ref OPENCODE_API_KEY");
   });
 
@@ -69,7 +68,7 @@ describe("bootstrap readiness gates", () => {
       sessionId: "bootstrap-session-1",
       runtimeRegistry: buildRegistry({ adapterHealth: "unhealthy" }),
       providerProfileId: "opencode-default",
-      env: { OPENCODE_BASE_URL: "https://opencode.example.test" },
+      env: {},
       secretRefs: [secretRef()],
       policy: { storageVersion: "local-v0", state: "ready" },
       budget: { storageVersion: "local-v0", state: "ready" },
@@ -139,7 +138,7 @@ const openCodeProfile: ProviderProfileV0 = {
   id: "opencode-default",
   provider: "opencode",
   label: "OpenCode default",
-  envRefs: { required: ["OPENCODE_BASE_URL"] },
+  envRefs: { required: [], optional: ["PASEO_BIN", "PASEO_PROVIDER", "PASEO_MODEL", "OPENCODE_BASE_URL"] },
   secretRefs: { required: ["OPENCODE_API_KEY"] },
   selection: {
     runtimeIds: ["opencode-live"],

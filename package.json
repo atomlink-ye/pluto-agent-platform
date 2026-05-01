@@ -37,6 +37,7 @@
     "schedules": "tsx src/cli/schedules.ts",
     "smoke:docker": "docker compose -f docker/compose.yml up -d --build && OPENCODE_BASE_URL=${OPENCODE_BASE_URL:-http://localhost:4096} PLUTO_LIVE_ADAPTER=paseo-opencode tsx docker/live-smoke.ts",
     "smoke:fake": "PLUTO_LIVE_ADAPTER=fake tsx docker/live-smoke.ts",
+    "smoke:local": "PLUTO_LIVE_ADAPTER=paseo-opencode tsx docker/live-smoke.ts",
     "smoke:live": "PLUTO_LIVE_ADAPTER=paseo-opencode tsx docker/live-smoke.ts",
     "spec:hygiene": "node scripts/spec-hygiene.mjs",
     "submit": "tsx src/cli/submit.ts",

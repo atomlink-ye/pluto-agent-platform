@@ -5,32 +5,32 @@
 
 ---
 
-## 1. Current Architecture Summary
+## 1. Historical Baseline Summary
 
 ### Core Components
 
 | File | Role | Current Behavior |
 |------|------|------------------|
-| `src/orchestrator/team-run-service.ts` | Central orchestrator | Dispatches workers based on `worker_requested` events; owns sequencing logic |
-| `src/contracts/adapter.ts` | Adapter interface | Defines `createLeadSession`, `createWorkerSession`, `sendMessage`, `readEvents` |
-| `src/adapters/paseo-opencode/paseo-opencode-adapter.ts` | Live adapter | Parses `WORKER_REQUEST:` text markers from lead output; spawns workers via `paseo run` |
-| `src/orchestrator/team-config.ts` | Team configuration | Defines static roles (lead, planner, generator, evaluator); references playbook ID but doesn't use it |
+| `src/orchestrator/team-run-service.ts` | Central orchestrator | Baseline lane parsed worker requests and owned sequencing logic |
+| `src/contracts/adapter.ts` | Adapter interface | Baseline seam before playbook/transcript/spawn additions |
+| `src/adapters/paseo-opencode/paseo-opencode-adapter.ts` | Live adapter | Baseline lane parsed legacy marker output from the lead and spawned workers via `paseo run` |
+| `src/orchestrator/team-config.ts` | Team configuration | Defined the static role graph before playbook selection was wired end-to-end |
 | `src/governance/seed.ts` | Governance seeds | Creates `PlaybookRecordV0` with ID `playbook-default-governance` (unused in orchestration) |
 | `docker/live-smoke.ts` | Integration test | Verifies lead started, >=2 workers completed, artifact mentions roles |
 
-### Current Flow
+### Baseline Flow
 
 ```
 TeamRunService.run()
   ├── adapter.startRun()
   ├── adapter.createLeadSession() → spawns lead agent
-  ├── Loop: readEvents() → parses WORKER_REQUEST markers
+  ├── Loop: readEvents() → parses legacy marker lines
   │   └── dispatchWorkerWithRetry() → spawns worker agents
   ├── When contributions >= required: sendMessage("SUMMARIZE")
   └── Collects lead_summary → writes artifact
 ```
 
-### Key Code Evidence
+### Baseline Code Evidence
 
 **team-run-service.ts:340-353** — Pluto parses worker requests:
 ```typescript
@@ -41,31 +41,21 @@ if (ev.type === "worker_requested") {
 }
 ```
 
-**paseo-opencode-adapter.ts:99** — Marker regex:
-```typescript
-const WORKER_REQUEST_RE = /^WORKER_REQUEST:\s*([a-zA-Z0-9_-]+)\s*::\s*(.*)$/;
-```
-
-**paseo-opencode-adapter.ts:578-602** — Lead prompt instructs emit markers:
-```
-Emit one line per worker you want dispatched, in EXACTLY this format:
-   WORKER_REQUEST: <roleId> :: <one-line instructions>
-```
+**paseo-opencode-adapter.ts** — The baseline live adapter prompt instructed the lead to emit a strict legacy marker format that Pluto parsed.
 
 ---
 
 ## 2. Gap List vs Agent Teams/Harness Target
 
-### Critical Gaps
+### Remaining Critical Gaps After S6
 
 | # | Gap | Target | Current | Severity |
 |---|-----|--------|---------|----------|
-| 1 | **No shared coordination channel** | Paseo room/channel for all team communication | Workers spawned independently via CLI; no shared substrate | Critical |
-| 2 | **Pluto owns orchestration** | TeamLead owns flow; Pluto only prepares env and observes | `TeamRunService` parses markers and dispatches workers | Critical |
-| 3 | **No playbook passed to TeamLead** | Playbook is authored data, not TypeScript control flow | `defaultPlaybookId` exists in config but is never used for orchestration | Critical |
-| 4 | **No dependency enforcement** | Generator must consume planner output; evaluator must review generator | Workers run in parallel once requested; no contract enforcement | High |
-| 5 | **No TeamLead revision loop** | TeamLead manages evaluator→generator feedback loop | Evaluator failure becomes blocker; no retry orchestration | High |
-| 6 | **No room transcript in evidence** | Room messages persisted as evidence | Only worker outputs and lead summary in evidence | Medium |
+| 1 | **No shared coordination channel** | Paseo room/channel for all team communication | File-backed transcript shipped; no live room/channel yet | Critical |
+| 2 | **Pluto-mediated bridge still owns direct-lane dispatch** | TeamLead owns flow; Pluto only prepares env and observes | `runTeamleadDirectFlow()` enforces the playbook and uses adapter spawn hooks only as a bridge seam | Critical |
+| 3 | **Role graph / export surface still constrained** | Playbooks and logical refs can evolve without static role-order assumptions | Non-default playbook selection is shipped, but role order and portable export remain constrained by default-team assumptions | High |
+| 4 | **Live smoke still cannot prove TeamLead-owned host spawning** | Smoke demonstrates TeamLead-created child agents or room-backed delegation | Smoke proves transcript/evidence/dependency order, but not true TeamLead-owned runtime spawning | High |
+| 5 | **Room transcript is not yet the live source of truth** | Room messages persisted as evidence | Nested transcript evidence is shipped, but it is file-backed only | Medium |
 
 ### Playbook Customizability Gaps
 
@@ -76,21 +66,21 @@ Emit one line per worker you want dispatched, in EXACTLY this format:
 | **Custom playbook unit coverage exists** | Non-default research-review playbook selection is tested; live smoke still uses default unless configured later |
 | **Role graph not configurable** | `ROLE_ORDER: AgentRoleId[] = ["lead", "planner", "generator", "evaluator"]` is hardcoded |
 
-### First bounded seam added (2026-05-01)
+### Regression-fix iteration outcomes through S6 (2026-05-01)
 
 - Authored playbooks live in `src/orchestrator/team-playbook.ts` and are attached to `DEFAULT_TEAM`.
 - `TeamTask.playbookId` selects a non-default playbook without adding per-playbook branches to `TeamRunService`.
 - A file-backed coordination transcript records TeamLead/transcript intent at `.pluto/runs/<runId>/coordination-transcript.jsonl`.
-- Run events and `evidence.json` now include `playbookId`, `orchestrationSource`, `transcriptPath`, `transcriptRoomRef`, and transcript kind.
+- Run events and `evidence.json` now include `playbookId`, `orchestrationSource`, `orchestrationMode`, revision/escalation/final-reconciliation evidence, and the nested `orchestration.transcript` ref.
 - `docker/live-smoke.ts` now fails when playbook/transcript orchestration evidence is missing or the recorded transcript file does not exist.
-- Live adapter prompts explicitly instruct TeamLead to use `paseo run/chat/wait/logs/inspect` when shell/Paseo CLI exists; `WORKER_REQUEST` is documented as fallback-only.
+- Default `teamlead_direct` runs now enforce playbook dependency order, record `dependencyTrace`, and support a bounded revision/escalation loop.
+- Live adapter prompts explicitly instruct TeamLead to use `paseo run/chat/wait/logs/inspect` when shell/Paseo CLI exists, while the legacy marker lane remains fallback-only.
 
 Remaining critical gaps after this seam:
 
 - Paseo chat room creation/post/read/wait is not wired yet.
-- Pluto still performs mechanical worker spawning from fallback marker events.
-- Dependency evidence is represented, but not yet content-verified across planner/generator/evaluator outputs.
-- Revision rules are modeled, but TeamLead-owned revision execution is not implemented.
+- Pluto still performs the deterministic direct-lane bridge orchestration instead of observing a fully agent-driven TeamLead runtime.
+- Live smoke still does not prove room-backed coordination or TeamLead-owned host spawning.
 
 ---
 
@@ -106,29 +96,29 @@ Remaining critical gaps after this seam:
 | `pnpm smoke:local` (when paseo available) | ✅ Passes | **MISLEADING** |
 | Live smoke assertions | ✅ Passes | **MISLEADING** |
 
-### Why It's Misleading
+### Why It Is Still Misleading
 
-1. **Live smoke only verifies:**
+1. **Live smoke now verifies:**
    - Lead session created
-   - ≥2 workers completed
+   - Playbook/transcript evidence exists and the transcript file is present
+   - Default direct-lane stages complete in dependency order
+   - Final reconciliation citations validate when required
    - Artifact mentions roles (lead, planner, generator, evaluator)
 
-2. **Live smoke does NOT verify:**
-   - TeamLead actually orchestrated the flow (vs Pluto dispatching)
+2. **Live smoke still does NOT verify:**
+   - TeamLead actually spawned teammates from its own runtime (vs Pluto using the bridge)
    - Any room/channel was created or used
-   - Planner output was consumed by generator
-   - Generator output was reviewed by evaluator
-   - Any revision loop occurred on evaluator failure
-   - Playbook was referenced or used
+   - A real room transcript was the source of truth
 
 3. **The architecture looks functional** because:
    - Agents do run end-to-end
    - Artifact contains contributions from all roles
    - Evidence is persisted
+   - Dependency/citation/revision evidence is present
 
 4. **But it's fundamentally different** from the target:
    - Target: TeamLead owns orchestration, Pluto observes
-   - Current: Pluto owns orchestration, TeamLead emits markers
+   - Current: Pluto ships a playbook-enforcing bridge for `teamlead_direct`, while the legacy lane still relies on markers
 
 ---
 
@@ -232,7 +222,7 @@ All reviewers agree on the same core diagnosis:
 - Current Pluto is a useful MVP harness, but **not yet a TeamLead-owned agent-team runtime**.
 - The main architectural problem is not provider/model wiring; it is **control-plane ownership**.
 - `TeamRunService` still owns dispatch, sequencing, fallback, summarization timing, and evaluator failure behavior.
-- `PaseoOpenCodeAdapter` still uses the `WORKER_REQUEST` marker protocol as the effective control plane.
+- `PaseoOpenCodeAdapter` still uses the legacy marker protocol as the effective control plane for the fallback lane.
 - The platform needs a playbook-driven, room/transcript-backed execution seam where TeamLead decisions are durable and observable.
 
 ### Oracle review highlights
@@ -287,7 +277,7 @@ Acceptance:
 
 - Docs state that current live smoke proves real agents run, not TeamLead-owned orchestration.
 - Evidence distinguishes marker/bridge/fallback sources.
-- Existing `.tmp/live-quickstart/` local evidence remains inspectable.
+- Existing repo-local fallback evidence path remains inspectable when the preferred `/Volumes/AgentsWorkspace/tmp/pluto-regression-fix/live-quickstart/` workspace is unavailable.
 
 ### Stage B — Add data-driven playbook contract
 
@@ -353,7 +343,7 @@ Acceptance:
 - Generator cannot run before planner stage output exists when default playbook declares that dependency.
 - Evaluator cannot run before generator output exists.
 - Duplicate TeamLead spawn requests are idempotent.
-- No `WORKER_REQUEST` regex path is used in the new team-led path.
+- No legacy marker regex path is used in the new team-led path.
 - Underdispatch fallback is disabled or explicitly marked invalid for the team-led path.
 
 ### Stage F — Add revision loop and stronger live smoke

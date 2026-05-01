@@ -18,6 +18,7 @@ import {
   DEFAULT_TEAM_RUNTIME_REQUIREMENTS_V0,
   DEFAULT_TEAM_SECRET_REFS_V0,
 } from "../orchestrator/team-config.js";
+import { DEFAULT_TEAM_PLAYBOOK_ID } from "../orchestrator/team-playbook.js";
 import { redactString } from "../orchestrator/redactor.js";
 
 const FORBIDDEN_KEY_RE = /^(?:document|documents|publishedWorkflow|publishedWorkflows|review|reviews|approval|approvals|publishPackage|publishPackages|runHistory|runHistories|history|events|eventLog|credentials|credential|rawCredentials|workspaceBinding|workspaceBindings|tenantBinding|tenantBindings|workspacePath|workspaceRoot|workspaceId|tenantId|tenantSlug|hostedEndpoint|hostedEndpoints|endpoint|endpoints|baseUrl|queueId|queueIds|providerSession|providerSessions|sessionId|sessionIds|agentId|agentIds|paseoAgentId|cwd|privatePath|privatePaths)$/i;
@@ -264,7 +265,15 @@ function sanitizePortableImportSourcePath(path: string): string {
 export function exportPortableWorkflowBundle(
   input: PortableWorkflowExportInputV0 = {},
 ): PortableWorkflowBundleV0 {
-  const team = sanitizeTeam(input.team ?? DEFAULT_TEAM);
+  const sourceTeam = input.team ?? DEFAULT_TEAM;
+  if ((sourceTeam.defaultPlaybookId ?? DEFAULT_TEAM_PLAYBOOK_ID) !== DEFAULT_TEAM_PLAYBOOK_ID) {
+    // TODO(S2/D3): expand portable workflow export once non-default playbook
+    // logical refs and artifact expectations are versioned explicitly.
+    throw new Error(
+      `portable_workflow_non_default_playbook_export_deferred:${sourceTeam.defaultPlaybookId}`,
+    );
+  }
+  const team = sanitizeTeam(sourceTeam);
   const logicalRefs = sanitizeLogicalRefs(DEFAULT_TEAM_LOGICAL_REFS_V0);
   const runtime = sanitizeRuntime({
     requirements: DEFAULT_TEAM_RUNTIME_REQUIREMENTS_V0,

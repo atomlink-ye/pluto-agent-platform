@@ -2,7 +2,9 @@ import type {
   AgentEvent,
   AgentRoleConfig,
   AgentSession,
+  CoordinationTranscriptRefV0,
   TeamConfig,
+  TeamPlaybookV0,
   TeamTask,
 } from "./types.js";
 
@@ -19,6 +21,8 @@ export interface PaseoTeamAdapter {
     runId: string;
     task: TeamTask;
     team: TeamConfig;
+    playbook?: TeamPlaybookV0;
+    transcript?: CoordinationTranscriptRefV0;
   }): Promise<void>;
 
   /** Create the Team Lead session. Implementations subscribe to its events. */
@@ -26,6 +30,8 @@ export interface PaseoTeamAdapter {
     runId: string;
     task: TeamTask;
     role: AgentRoleConfig;
+    playbook?: TeamPlaybookV0;
+    transcript?: CoordinationTranscriptRefV0;
   }): Promise<AgentSession>;
 
   /**
@@ -37,6 +43,27 @@ export interface PaseoTeamAdapter {
     role: AgentRoleConfig;
     instructions: string;
   }): Promise<AgentSession>;
+
+  /**
+   * Optional TeamLead-direct teammate spawn seam.
+   *
+   * In iteration `pluto-regression-fix-20260501`, the shipped direct lane is a
+   * Pluto-mediated bridge: when this hook is absent, or an implementation
+   * explicitly reports that host spawning is unsupported, Pluto falls back to
+   * `createWorkerSession()` while still enforcing the TeamLead-authored
+   * playbook against the durable transcript.
+   *
+   * The fully agent-driven path arrives when an adapter can honor this hook by
+   * delegating teammate creation to a runtime with shell/Paseo CLI access.
+   */
+  spawnTeammate?(input: {
+    runId: string;
+    stageId: string;
+    role: AgentRoleConfig;
+    instructions: string;
+    dependencies: string[];
+    transcript: CoordinationTranscriptRefV0;
+  }): Promise<{ workerSessionId: string }>;
 
   /** Send a follow-up message into an existing session. */
   sendMessage(input: {

@@ -3,6 +3,20 @@ import { describe, expect, it } from "vitest";
 import { classifyLiveSmokeEvidence } from "../docker/live-smoke.js";
 import type { EvidencePacketV0 } from "@/contracts/types.js";
 
+const baseOrchestration = {
+  playbookId: "teamlead-direct-default-v0",
+  orchestrationSource: "teamlead_direct",
+  orchestrationMode: "teamlead_direct" as const,
+  dependencyTrace: [],
+  revisions: [],
+  finalReconciliation: { citations: [], valid: true },
+  transcript: {
+    kind: "file" as const,
+    path: "/tmp/transcript.jsonl",
+    roomRef: "file-transcript:test",
+  },
+};
+
 function makeEvidence(
   overrides: Partial<EvidencePacketV0> = {},
 ): EvidencePacketV0 {
@@ -79,6 +93,40 @@ describe("classifyLiveSmokeEvidence", () => {
     expect(
       classifyLiveSmokeEvidence(
         makeEvidence({ status: "done", blockerReason: null }),
+      ),
+    ).toEqual({ outcome: "done" });
+  });
+
+  it("treats completed_with_escalation evidence as done classification", () => {
+    expect(
+      classifyLiveSmokeEvidence(
+        makeEvidence({
+          status: "done",
+          blockerReason: null,
+          orchestration: {
+            ...baseOrchestration,
+            revisions: [{ stageId: "generator-output", attempt: 1, evaluatorVerdict: "FAIL: retry" }],
+            escalation: { stageId: "generator-output", attempts: 1, lastVerdict: "FAIL: retry" },
+          },
+        }),
+      ),
+    ).toEqual({ outcome: "done" });
+  });
+
+  it("treats completed_with_warnings evidence as done classification", () => {
+    expect(
+      classifyLiveSmokeEvidence(
+        makeEvidence({
+          status: "done",
+          blockerReason: null,
+          orchestration: {
+            ...baseOrchestration,
+            finalReconciliation: {
+              citations: [{ stageId: "evaluator-verdict", present: false }],
+              valid: false,
+            },
+          },
+        }),
       ),
     ).toEqual({ outcome: "done" });
   });

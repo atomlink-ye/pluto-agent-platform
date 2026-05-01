@@ -13,6 +13,7 @@ import type {
   PortableWorkflowLogicalRefsV0,
 } from "../portable-workflow/contracts.js";
 import { DEFAULT_GOVERNANCE_SEED_IDS } from "../governance/seed.js";
+import { DEFAULT_TEAM_PLAYBOOK_ID, DEFAULT_TEAM_PLAYBOOKS_V0 } from "./team-playbook.js";
 
 type DefaultTeamSeedLinks = {
   defaultPlaybookId: string;
@@ -97,8 +98,9 @@ function materializeDefaultTeam(seed: DefaultCatalogSeed): DefaultTeamConfig {
     id: "default-mvp-alpha",
     name: "Default Pluto MVP-alpha team",
     leadRoleId: "lead",
-    defaultPlaybookId: DEFAULT_GOVERNANCE_SEED_IDS.playbookId,
+    defaultPlaybookId: DEFAULT_TEAM_PLAYBOOK_ID,
     defaultScenarioId: DEFAULT_GOVERNANCE_SEED_IDS.scenarioId,
+    playbooks: [...DEFAULT_TEAM_PLAYBOOKS_V0],
     roles,
   };
   teamSelectionRegistry.set(team, { source: seed.source, roles: selections });
@@ -168,8 +170,8 @@ export const DEFAULT_TEAM_RUNTIME_REQUIREMENTS_V0: RuntimeRequirementsV0 = {
 };
 
 export const DEFAULT_TEAM_ENV_REFS_V0: PortableNameRefSetV0 = {
-  required: ["OPENCODE_BASE_URL"],
-  optional: ["PASEO_BIN", "PASEO_PROVIDER"],
+  required: [],
+  optional: ["PASEO_BIN", "PASEO_HOST", "PASEO_PROVIDER", "PASEO_MODEL", "OPENCODE_BASE_URL"],
 };
 
 export const DEFAULT_TEAM_SECRET_REFS_V0: PortableNameRefSetV0 = {

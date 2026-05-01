@@ -4,8 +4,12 @@ import type {
   AgentEventType,
   AgentRoleConfig,
   AgentSession,
+  CoordinationTranscriptRefV0,
+  OrchestrationMode,
   TeamConfig,
+  TeamPlaybookV0,
   TeamTask,
+  WorkerRequestedPayload,
 } from "../../contracts/types.js";
 import type { PaseoTeamAdapter } from "../../contracts/adapter.js";
 import { redactObject } from "../../orchestrator/redactor.js";
@@ -33,6 +37,15 @@ import { buildPortableRuntimeResultValueRefV0 } from "../../runtime/result-contr
 export class FakeAdapter implements PaseoTeamAdapter {
   private readonly team: TeamConfig;
   private readonly workerOutputs?: Partial<Record<string, string>>;
+  private readonly stageOutputResolver?: (input: {
+    task: TeamTask;
+    role: AgentRoleConfig;
+    instructions: string;
+    stageId?: string;
+    stageAttempt?: number;
+    workerAttempt: number;
+    dependencies: string[];
+  }) => string | undefined;
   private readonly summaryBuilder?: (
     contributions: ReadonlyArray<{ roleId: string; output: string }>,
     task: TeamTask,
@@ -44,11 +57,16 @@ export class FakeAdapter implements PaseoTeamAdapter {
     string,
     {
       task: TeamTask;
+      orchestrationMode: OrchestrationMode;
+      playbook?: TeamPlaybookV0;
+      transcript?: CoordinationTranscriptRefV0;
       events: AgentEvent[];
       cursor: number;
       leadSessionId?: string;
       workerSessions: Map<string, AgentSession>;
       workerAttempts: Map<string, number>;
+      directStageAttempts: Map<string, number>;
+      directStageByRole: Map<string, { stageId: string; attempt: number; dependencies: string[] }>;
       contributions: Map<string, string>;
       callbackSequence: number;
       ended: boolean;
@@ -58,6 +76,15 @@ export class FakeAdapter implements PaseoTeamAdapter {
   constructor(opts: {
     team: TeamConfig;
     workerOutputs?: Partial<Record<string, string>>;
+    stageOutputResolver?: (input: {
+      task: TeamTask;
+      role: AgentRoleConfig;
+      instructions: string;
+      stageId?: string;
+      stageAttempt?: number;
+      workerAttempt: number;
+      dependencies: string[];
+    }) => string | undefined;
     summaryBuilder?: (
       contributions: ReadonlyArray<{ roleId: string; output: string }>,
       task: TeamTask,
@@ -67,12 +94,13 @@ export class FakeAdapter implements PaseoTeamAdapter {
   }) {
     this.team = opts.team;
     this.workerOutputs = opts.workerOutputs;
+    this.stageOutputResolver = opts.stageOutputResolver;
     this.summaryBuilder = opts.summaryBuilder;
     this.clock = opts.clock ?? (() => new Date());
     this.idGen = opts.idGen ?? (() => randomUUID());
   }
 
-  async startRun(input: { runId: string; task: TeamTask; team: TeamConfig }): Promise<void> {
+  async startRun(input: { runId: string; task: TeamTask; team: TeamConfig; playbook?: TeamPlaybookV0; transcript?: CoordinationTranscriptRefV0 }): Promise<void> {
     if (input.team.id !== this.team.id) {
       throw new Error(
         `fake_adapter_team_mismatch: expected ${this.team.id}, got ${input.team.id}`,
@@ -83,10 +111,15 @@ export class FakeAdapter implements PaseoTeamAdapter {
     }
     this.runs.set(input.runId, {
       task: input.task,
+      orchestrationMode: input.task.orchestrationMode ?? "teamlead_direct",
+      playbook: input.playbook,
+      transcript: input.transcript,
       events: [],
       cursor: 0,
       workerSessions: new Map(),
       workerAttempts: new Map(),
+      directStageAttempts: new Map(),
+      directStageByRole: new Map(),
       contributions: new Map(),
       callbackSequence: 0,
       ended: false,
@@ -97,6 +130,8 @@ export class FakeAdapter implements PaseoTeamAdapter {
     runId: string;
     task: TeamTask;
     role: AgentRoleConfig;
+    playbook?: TeamPlaybookV0;
+    transcript?: CoordinationTranscriptRefV0;
   }): Promise<AgentSession> {
     const run = this.expectRun(input.runId);
     if (input.role.kind !== "team_lead") {
@@ -109,7 +144,12 @@ export class FakeAdapter implements PaseoTeamAdapter {
       type: "lead_started",
       roleId: input.role.id,
       sessionId,
-      payload: { systemPrompt: input.role.systemPrompt },
+      payload: {
+        systemPrompt: input.role.systemPrompt,
+        playbookId: input.playbook?.id ?? run.playbook?.id ?? null,
+        transcript: input.transcript ?? run.transcript ?? null,
+        orchestrationSource: input.playbook?.orchestrationSource ?? run.playbook?.orchestrationSource ?? "legacy_marker_fallback",
+      },
       callback: this.callbackIdentity({
         source: "fake_adapter",
         batchId: leadBatchId,
@@ -119,27 +159,38 @@ export class FakeAdapter implements PaseoTeamAdapter {
       }),
     });
 
-    // Simulate the lead deciding to dispatch every non-lead role in config order.
-    const workerRoles = this.team.roles.filter((r) => r.kind === "worker");
-    for (const worker of workerRoles) {
-      const instructions = this.workerInstructionsFor(input.task, worker);
-      this.appendEvent(input.runId, {
-        type: "worker_requested",
-        roleId: worker.id,
-        sessionId,
-        payload: {
+    if (run.orchestrationMode === "lead_marker") {
+      // Simulate the legacy lead emitting marker-driven worker requests.
+      const playbook = input.playbook ?? run.playbook;
+      const workerStages = playbook?.stages ?? this.team.roles.filter((r) => r.kind === "worker").map((role) => ({ id: role.id, roleId: role.id, instructions: this.workerInstructionsFor(input.task, role), dependsOn: [] }));
+      for (const stage of workerStages) {
+        const worker = this.team.roles.find((role) => role.id === stage.roleId);
+        if (!worker || worker.kind !== "worker") continue;
+        const instructions = this.stageInstructionsFor(input.task, stage, playbook);
+        const payload: WorkerRequestedPayload = {
           targetRole: worker.id,
           instructions,
-        },
-        rawPayloadKeys: ["instructions"],
-        callback: this.callbackIdentity({
-          source: "fake_adapter",
-          batchId: leadBatchId,
-          lineageKey: `worker_request:${sessionId}:${worker.id}`,
-          status: "in_progress",
-          dedupeParts: ["worker_requested", sessionId, worker.id, instructions],
-        }),
-      });
+          orchestratorSource: "lead_marker",
+          playbookId: playbook?.id ?? null,
+          playbookStageId: stage.id,
+          dependsOn: stage.dependsOn,
+          source: "legacy_marker_fallback",
+        };
+        this.appendEvent(input.runId, {
+          type: "worker_requested",
+          roleId: worker.id,
+          sessionId,
+          payload,
+          rawPayloadKeys: ["instructions"],
+          callback: this.callbackIdentity({
+            source: "fake_adapter",
+            batchId: leadBatchId,
+            lineageKey: `worker_request:${sessionId}:${worker.id}`,
+            status: "in_progress",
+            dedupeParts: ["worker_requested", sessionId, worker.id, instructions],
+          }),
+        });
+      }
     }
 
     return { sessionId, role: input.role };
@@ -175,7 +226,7 @@ export class FakeAdapter implements PaseoTeamAdapter {
       }),
     });
 
-    const output = this.workerOutputFor(input.role, input.instructions);
+    const output = this.workerOutputFor(run, input.role, input.instructions, attempt);
     run.contributions.set(input.role.id, output);
 
     this.appendEvent(input.runId, {
@@ -194,6 +245,31 @@ export class FakeAdapter implements PaseoTeamAdapter {
     });
 
     return session;
+  }
+
+  async spawnTeammate(input: {
+    runId: string;
+    stageId: string;
+    role: AgentRoleConfig;
+    instructions: string;
+    dependencies: string[];
+    transcript: CoordinationTranscriptRefV0;
+  }): Promise<{ workerSessionId: string }> {
+    const run = this.expectRun(input.runId);
+    const stageAttempt = (run.directStageAttempts.get(input.stageId) ?? 0) + 1;
+    run.directStageAttempts.set(input.stageId, stageAttempt);
+    run.directStageByRole.set(input.role.id, {
+      stageId: input.stageId,
+      attempt: stageAttempt,
+      dependencies: [...input.dependencies],
+    });
+    void input.transcript;
+    const session = await this.createWorkerSession({
+      runId: input.runId,
+      role: input.role,
+      instructions: input.instructions,
+    });
+    return { workerSessionId: session.sessionId };
   }
 
   async sendMessage(input: {
@@ -339,9 +415,41 @@ export class FakeAdapter implements PaseoTeamAdapter {
     }
   }
 
-  private workerOutputFor(role: AgentRoleConfig, instructions: string): string {
+  private stageInstructionsFor(
+    task: TeamTask,
+    stage: { id: string; instructions: string; dependsOn: string[] },
+    playbook: TeamPlaybookV0 | undefined,
+  ): string {
+    if (!playbook) return stage.instructions;
+    return [
+      `Playbook ${playbook.id} stage ${stage.id}: ${stage.instructions}`,
+      stage.dependsOn.length > 0 ? `Depends on stage(s): ${stage.dependsOn.join(", ")}. Consume their transcript evidence before responding.` : "No upstream stage dependencies.",
+      `Task: ${task.title}`,
+    ].join("\n");
+  }
+
+  private workerOutputFor(
+    run: {
+      task: TeamTask;
+      directStageByRole: Map<string, { stageId: string; attempt: number; dependencies: string[] }>;
+    },
+    role: AgentRoleConfig,
+    instructions: string,
+    workerAttempt: number,
+  ): string {
     const override = this.workerOutputs?.[role.id];
     if (override !== undefined) return override;
+    const stageMeta = run.directStageByRole.get(role.id);
+    const resolved = this.stageOutputResolver?.({
+      task: run.task,
+      role,
+      instructions,
+      stageId: stageMeta?.stageId,
+      stageAttempt: stageMeta?.attempt,
+      workerAttempt,
+      dependencies: stageMeta?.dependencies ?? [],
+    });
+    if (resolved !== undefined) return resolved;
     switch (role.id) {
       case "planner":
         return `1. Outline the artifact.\n2. Cover acceptance criteria.\n3. Flag risks.`;
