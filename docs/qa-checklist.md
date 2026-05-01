@@ -101,3 +101,5 @@ Live runs from the host that owns the Paseo daemon (Paseo is macOS-only). Precon
 - [ ] `docs/mvp-alpha.md` contracts match `src/contracts/`.
 - [ ] Lifecycle vocabulary note stays explicit: v0 still writes `done` / `run_completed`; readers tolerate future `succeeded` / `completion`.
 - [ ] `final-report.md` lists branch, commits, command outputs, blockers, PM status mapping.
+- [ ] Repository-documentation consistency check passes: code, contracts, CLI behavior, docs/plans, design docs, and reference docs do not contradict each other.
+- [ ] Non-trivial completed work has a completed plan record with verification evidence and remaining follow-up; no stale active plan remains for completed work.

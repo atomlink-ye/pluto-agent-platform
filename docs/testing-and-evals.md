@@ -9,6 +9,19 @@
 
 **Never mix them.** tests/ runs in CI. evals/ is for evaluation pipelines.
 
+## Evaluation Acceptance Gate
+
+Every evaluation, checklist, review, or acceptance pass must include a
+repository-documentation consistency check. Code, contracts, CLI behavior,
+generated evidence expectations, docs/plans, design docs, and reference docs must
+not contradict each other.
+
+If implementation changed behavior, contracts, workflows, or product shape and
+affected docs were not updated, the evaluation must fail or mark the work
+blocked. If non-trivial planned work is completed, the related active plan must
+be moved to `docs/plans/completed/` with verification evidence and remaining
+follow-up recorded.
+
 ## Placement Rules
 
 ### Unit Tests (`tests/*.test.ts`)

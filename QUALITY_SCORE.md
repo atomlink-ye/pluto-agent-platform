@@ -68,7 +68,8 @@ Before merging a PR:
 - [ ] `pnpm test` passes
 - [ ] `pnpm build` passes
 - [ ] No new leaked secrets in git diff
-- [ ] docs/ synchronized if behavior changed
+- [ ] Repository-documentation consistency check passes: code, contracts, CLI behavior, docs/plans, design docs, and reference docs do not contradict each other
+- [ ] Affected docs are synchronized when behavior, contracts, workflows, or product shape changed
 
 ## Quality Checklist (from docs/qa-checklist.md)
 

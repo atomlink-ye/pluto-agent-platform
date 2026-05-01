@@ -18,6 +18,11 @@ This directory protects model/agent/workflow quality (vs `tests/` which protects
 - **evals/** = workflow/model quality evaluation pipelines
 - **Never mix them**
 - Reports are evidence, not source-of-truth
+- Every eval pass must include the repository-documentation consistency gate from
+  `AGENTS.md`: code, contracts, CLI behavior, docs/plans, design docs, and
+  reference docs must not contradict each other.
+- If behavior, contracts, workflows, or product shape changed without matching
+  affected docs, the eval result must fail or mark the work blocked.
 
 ## Workflow Quality Eval
 
@@ -45,6 +50,10 @@ Add evals when:
 - You want to measure model quality (not correctness)
 - You want to measure workflow convergence
 - You need human-in-the-loop evaluation
+
+When an eval is part of non-trivial planned work, keep the active plan updated
+while the eval changes and move it to `docs/plans/completed/` only after the
+verification evidence and remaining follow-up are recorded.
 
 ## Reference
 

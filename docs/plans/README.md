@@ -1,12 +1,26 @@
-# docs/plans/README.md — Active Plans
+# docs/plans/README.md — Pluto Plans
 
-This directory holds active work plans for Pluto MVP-alpha.
+This directory holds active and completed work plans for Pluto.
 
 ## Purpose
 
-- Preserve durable work state
-- Make active plans explicit and visible
-- Track progress on features/debt
+- Preserve durable work state from `.local/manager` records.
+- Make active follow-up plans explicit and visible.
+- Archive completed iteration records without copying external repository content.
+
+## Lifecycle
+
+- For non-trivial planned work, create or update a plan in `docs/plans/active/` before implementation.
+- Active plans are living records. Keep scope, status, blockers, verification target, and follow-up current as the work changes.
+- When work is completed and verified, move the plan file to `docs/plans/completed/`.
+- Completed plans must include verification/evidence summary and any remaining follow-up.
+- Do not leave stale active plans for work that has already been accepted or completed.
+
+Trivial/local edits do not need a plan record.
+
+## Docs-Consistency Gate
+
+Every evaluation, checklist, review, or acceptance pass must check repository-documentation consistency. Code, contracts, CLI behavior, docs/plans, design docs, and reference docs must not contradict each other. If implementation changed behavior, contracts, workflows, or product shape and affected docs were not updated, evaluation must fail or mark the work blocked.
 
 ## Format
 
@@ -41,13 +55,17 @@ Each plan is a markdown file. Use this template:
 
 ## Active Plans
 
-List active plans here:
+- `active/full-product-shape-hardening.md` — post-PRODUCT_COMPLETE hardening and cleanup.
 
-- (none yet)
+## Completed Plans
 
-## Archived Plans
+- `completed/slice-3-hardening.md`
+- `completed/wave-a-governance-portability-catalog-spec-hygiene.md`
+- `completed/wave-b-review-publish-identity-security-storage.md`
+- `completed/wave-cd-schedule-observability-compliance-bootstrap.md`
+- `completed/product-complete-final-check.md`
 
-Move completed plans to `docs/plans/archive/`.
+Completed plans are stored in `docs/plans/completed/` with verification/evidence notes and remaining follow-up.
 
 ## Related
 

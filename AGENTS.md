@@ -32,11 +32,25 @@ evals/           #cases, rubrics, goldens, reports, datasets
 ## Task Workflow
 
 1. Understand the change and identify affected files.
-2. Run fast gates: `pnpm typecheck && pnpm test`.
-3. Implement changes. Keep changes minimal and focused.
-4. Add regression test in `tests/` (not `evals/`).
-5. Run full verify: `pnpm verify`.
-6. Update docs only if behavior changed.
+2. For non-trivial planned work, create or update a plan under `docs/plans/active/` before implementation.
+3. Run fast gates: `pnpm typecheck && pnpm test`.
+4. Implement changes. Keep changes minimal and focused.
+5. Add regression test in `tests/` (not `evals/`) when behavior changes.
+6. Keep the active plan current as scope, blockers, verification, or follow-up changes.
+7. Run full verify: `pnpm verify`.
+8. Update user-facing docs, design docs, and reference docs whenever behavior, contracts, workflows, or product shape change.
+9. When completed and verified, move the plan from `docs/plans/active/` to `docs/plans/completed/` with evidence, verification summary, and remaining follow-up.
+
+Trivial/local edits do not need a plan record. Do not leave stale active plans for completed work.
+
+## Evaluation and Acceptance Gate
+
+Every evaluation, checklist, review, or acceptance pass must include a repository-documentation consistency check:
+
+- Code, contracts, CLI behavior, generated evidence expectations, docs/plans, design docs, and reference docs must not contradict each other.
+- If implementation changed behavior, contracts, workflows, or product shape and affected docs were not updated, the evaluation must fail or mark the work blocked.
+- If docs changed without matching source-of-truth updates where required, the evaluation must flag the mismatch before acceptance.
+- Completed plan records must cite the verification evidence and any remaining follow-up.
 
 ## Canonical Commands
 
@@ -76,6 +90,7 @@ pnpm smoke:docker      #Docker stack + live smoke
 - Contract change → update docs/mvp-alpha.md and src/contracts/
 - Quality criteria change → update QUALITY_SCORE.md
 - Reliability policy change → update RELIABILITY.md
+- Workflow/product-shape change → update relevant docs/design-docs and plan records
 - Never duplicate docs. Point to canonical sources.
 
 ## Forbidden Actions
