@@ -1,140 +1,149 @@
-# Product Shape
+# Pluto Product Shape
 
-Pluto is a document-first, governance-first AI work platform. The product thesis
-is that AI-assisted work should be organized around durable content, versioned
-decisions, evidence, and controlled publishing rather than around raw chat
-sessions or runtime consoles.
-
-This document describes the intended complete product shape at a high level. It
-also marks the boundary between the current local file-backed skeleton and the
-future production product.
+Canonical reference: `docs/design-docs/agent-playbook-scenario-runprofile.md`.
+PM Space context: [Playbook-first Information Architecture](https://ocnb314kma1f.feishu.cn/wiki/CKqawMjLJi4Z3LkHN2Mc2beOnEc),
+[Core Object Model](https://ocnb314kma1f.feishu.cn/wiki/E2Itw8ERliNZOpkw4fTcIjA5nAf),
+and [Run, Audit Middleware & Evidence Packet Model](https://ocnb314kma1f.feishu.cn/wiki/V4mcwu6DmiYim1kEhI2cd8G3nMb).
 
 ## Product thesis
 
-Pluto treats governed work as a chain of product objects:
+Pluto is a playbook-driven, governance-first agent operations platform. Users
+author a small set of YAML files--Agent, Playbook, Scenario, and RunProfile--to
+describe the team, workflow, specialization, and execution policy. They launch
+governed Runs, observe those Runs through audit middleware, and consume
+audit-grade EvidencePackets. v1 hard-binds to Paseo as the agent runtime.
 
-```text
-Workspace -> Document -> Version -> Review -> Approval -> Publish Package
-```
+The product entry point is Playbook + Run, not Document. Documents, Versions,
+Reviews, Approvals, and PublishPackages remain important downstream governance
+objects, but they consume EvidencePackets rather than owning execution truth.
+This keeps AI work governable without turning raw chat sessions or provider
+consoles into the navigation model.
 
-AI execution supports that chain. Runs, adapters, provider sessions, artifacts,
-and evidence generation are necessary, but they are not the main object users are
-expected to manage. The main user promise is that an organization can know what
-was authored, which version was reviewed, who approved it, what evidence was
-considered, and what was published.
+## User-facing surfaces
 
-## Primary user-facing surfaces
+### Playbook Catalog
 
-### Workspace
+The Playbook Catalog is the first-class discovery surface for repeatable agent
+team workflows. It lists governed Playbooks, their descriptions, owners,
+compatible Scenarios, required Agents, version metadata, and operational status.
+PM Space: [Portable Workflow Contract](https://ocnb314kma1f.feishu.cn/wiki/G4Y8w2cgliV7v7kdosfcAxeWnHd).
 
-The Workspace is the product and tenant boundary. It scopes documents,
-playbooks, scenarios, schedules, integrations, catalog selections, governance
-records, runs, artifacts, evidence, compliance controls, and audit records.
+### Playbook Detail (with Scenario picker, RunProfile binder)
 
-### Document
+Playbook Detail shows the team lead, member Agents, workflow narrative, audit
+rules, known Scenarios, and compatible RunProfiles. The user can choose a
+Scenario, bind a RunProfile, review pre-launch gates, and start a Run.
 
-The Document is the primary content object. Users create, import, edit, and
-organize work through Documents rather than through runtime sessions.
+### Scenario Detail
 
-### Version
+Scenario Detail explains the business context: fixed or templated task,
+role-specific prompt overlays, knowledge references, evaluator rubric, and
+whether runtime task override is allowed. It is the domain-specialization
+surface for repeatable work.
 
-A Version is the decision target for review, approval, provenance, and publish
-readiness. A Version must be stable enough that a reviewer or approver can later
-reconstruct what was considered.
+### RunProfile Binder
 
-### Playbook
+RunProfile Binder is the launch-policy surface. It resolves workspace,
+worktree, required reads, acceptance commands, artifact contract, stdout
+contract, concurrency, approval gates, and secrets redaction before launch. It
+should fail closed on missing gates or invalid contracts.
 
-A Playbook is a reusable governed definition of work. It describes goals,
-expected outputs, team shape, policy constraints, runtime requirements, and
-portable workflow intent.
+### Run Observation (logs + checkpoint files + STAGE/DEVIATION + commands)
 
-### Scenario
+Run Observation shows the bounded runtime signals Pluto is allowed to treat as
+evidence: team lead stdout, required file checkpoints, `STAGE` and `DEVIATION`
+events from the Paseo chat room, acceptance command results, and terminal audit
+status. It is not a raw provider-session console.
 
-A Scenario is a concrete use case or variant under a Playbook. It narrows the
-Playbook for a business context, input class, trigger path, or schedule.
+### EvidencePacket Inspector
 
-### Review
+EvidencePacket Inspector is the decision-grade audit view. It shows the Run,
+resolved Playbook/Scenario/RunProfile refs, agent versions, events, file
+checkpoints, stdout matches, command results, revision summary, redaction
+summary, downstream refs, and sealed status. PM Space:
+[Run, Audit Middleware & Evidence Packet Model](https://ocnb314kma1f.feishu.cn/wiki/V4mcwu6DmiYim1kEhI2cd8G3nMb).
 
-A Review is a quality or suitability decision request. It can request changes,
-pass, reject, expire, or be blocked. Review does not grant publish authority by
-itself.
+### Downstream governance views
 
-### Approval
+Document Detail, Review queue, Approval queue, and PublishPackage view consume
+EvidencePackets by `evidence_packet_id`. They should display the evidence basis
+for decisions without recomputing Run truth from raw logs. PM Space:
+[Review & Approval Flow](https://ocnb314kma1f.feishu.cn/wiki/HASVwhHZ6iJ70Ok67HxcoahinDg)
+and [Publish Package Model](https://ocnb314kma1f.feishu.cn/wiki/A3x3w14jKiecXVkraZocF1ySnqh).
 
-An Approval is a distinct responsibility grant for a Version or Publish Package.
-It records who authorized progress, under what role basis, with which evidence
-and diff context.
+### Schedule and Trigger views
 
-### Publish Package
+Schedule and Trigger views resolve Playbook + Scenario + RunProfile before
+submitting a Run. They should show the selected stack, owner, launch policy,
+budget or concurrency constraints, missed-run behavior, and any manual gates.
+They should not embed secrets or raw provider session state. PM Space:
+[Schedule, Trigger & Subscription Model](https://ocnb314kma1f.feishu.cn/wiki/G2f9wz2Ruivc1AkASPuc1vISn2g).
 
-A Publish Package is the delivery object. It assembles source Version refs,
-approval refs, sealed evidence refs, release readiness refs, channel targets,
-export assets, publish attempts, and audit events.
+### Integration and writeback views
 
-### Schedule
+Integration views map inbound work sources to Scenarios and outbound writeback
+targets to downstream EvidencePackets. Inbound work should create or enqueue a
+Run through the same four-layer resolution path as a manual launch. Outbound
+writeback should attach the EvidencePacket considered by the decision or
+publish path. PM Space: [Integration, Webhook & Work Source Adapter Model](https://ocnb314kma1f.feishu.cn/wiki/KMnkwxN5jiZ8vqkOTfqcNym0neg).
 
-A Schedule binds a Playbook and Scenario to future execution intent, such as
-manual, cron, API, or event-driven triggers. Schedules should contain references
-and policy, not secret values.
+### Portability views
 
-### Catalog
+Portability views export and import safe Playbook bundles and related summaries
+without tenant-private state, credentials, raw provider sessions, or private
+storage paths. Workflow portability starts with Agent, Playbook, Scenario, and
+RunProfile; broader portability can include Document, template, PublishPackage,
+and EvidencePacket summaries. PM Space: [Portability Beyond Workflow](https://ocnb314kma1f.feishu.cn/wiki/XlavwwfW9i6kAFk3RGCcM3dQnyf).
 
-The Catalog governs reusable capability assets: worker roles, skills, templates,
-policy packs, catalog entries, and extensions. Catalog versions provide
-provenance for worker contributions.
+## Differentiation vs Anthropic Claude Managed Agents
 
-### Integration
+Anthropic Claude Managed Agents provide Agent + Environment + Session
+primitives, with `callable_agents` for one-level multi-agent delegation. Those
+are useful runtime primitives but do not by themselves define a portable,
+governed enterprise workflow model.
 
-An Integration connects Pluto to external work sources, trigger sources, and
-publish targets. It should expose provider-neutral refs, redacted summaries,
-dedupe, idempotency, and approval state rather than raw provider payloads.
-
-## Backstage surfaces
-
-Backstage surfaces support product governance but should not become the main
-navigation model.
-
-- **Run:** observable execution attempt for a task, Playbook, Scenario, or team.
-- **Adapter:** provider-neutral seam used to dispatch work and receive callbacks.
-- **Provider session:** runtime-specific execution context that remains opaque to
-  governance consumers.
-- **Event log:** append-only execution timeline for dispatch, progress, blockers,
-  retries, artifact creation, and completion.
-- **Artifact:** output produced by a Run, often used as input to a Document
-  Version or Publish Package, but not the final business delivery object.
-- **Evidence generation:** redaction, validation, classification, and summarizing
-  process that turns run signals into governance-facing evidence.
-- **Local stores:** file-backed persistence used by the current skeleton to
-  validate object shape and flow semantics.
+Pluto extends the shape with Playbook, Scenario, RunProfile, and audit
+middleware. Playbook composes Agents and provides workflow narrative. Scenario
+specializes a Playbook for a business context and knowledge set. RunProfile
+binds operational policy: workspace, worktree, gates, file/stdout contracts,
+commands, concurrency, and secrets handling. Audit middleware turns runtime
+activity into an EvidencePacket. The result is that an enterprise team can
+stand up governed, auditable agent team workflows as configuration rather than
+glue code.
 
 ## Capability map
 
-| Capability | Product meaning |
+| Capability | Surface |
 |---|---|
-| Authoring | Create and evolve Documents, Versions, templates, and structured work inputs. |
-| Orchestration | Dispatch agent teams from Playbooks and Scenarios through eligible runtimes. |
-| Evidence | Convert execution results into redacted, validated Evidence Packets and Sealed Evidence. |
-| Review and approval | Separate quality review from authorization, with evidence and diff context. |
-| Publishing | Package approved Versions, sealed evidence, channel targets, exports, and publish attempts. |
-| Scheduling and integration | Trigger governed work from schedules, APIs, webhooks, or external work sources. |
-| Portability | Export safe definitions and summaries without tenant-private or runtime-private state. |
-| Observability | Track run health, adapter health, metrics, budgets, alerts, and redacted traces. |
-| Compliance | Apply retention, legal hold, deletion decisions, audit export, and regulated publish gates. |
-| Extension and catalog | Govern reusable worker roles, skills, templates, policies, and installable extensions. |
+| Authoring | Agent / Playbook / Scenario / RunProfile YAML |
+| Composition | Playbook references Agents; Scenario specializes Playbook |
+| Operational policy | RunProfile defines workspace, gates, contracts, concurrency |
+| Orchestration | team_lead owns end-to-end; spawns members via paseo CLI |
+| Audit | required_files / required_sections / stdout_contract / STAGE+DEVIATION events / acceptance_commands / revision cap (fail-closed) |
+| Evidence | EvidencePacket aggregates events, file checkpoints, command outputs, redaction summary, downstream refs |
+| Governance | Document/Version/Review/Approval/PublishPackage attach by `evidence_packet_id` |
+| Portability | Playbook bundle export/import (Portable Workflow Contract) |
+| Schedule/Trigger | Resolves Playbook+Scenario+RunProfile, submits Run |
+| Integration | Inbound work spawns Run via Scenario; outbound writeback attaches EvidencePacket |
 
-## Current local skeleton vs intended full product
+## Local skeleton vs production
 
-The current repository is a local file-backed skeleton. It is useful for proving
-contract shape, object relationships, orchestration semantics, evidence
-generation, redaction boundaries, readiness gates, and CLI flows.
+The current repository is a local file-backed skeleton suitable for shape and
+contract validation. It validates the playbook-first object model, local
+orchestration semantics, evidence generation shape, redaction boundaries,
+readiness gates, and CLI flows. It is appropriate for product-shape hardening
+and offline tests.
 
-It does not claim production readiness. In particular, the local skeleton does
-not enforce production multi-tenant isolation, transactional persistence,
-durable queues, hosted secret resolution, webhook delivery infrastructure,
-centralized observability, backup and restore, or jurisdiction-specific
-compliance policy.
+Production needs durable persistence, transactional stores, queueing, webhook
+delivery, secret resolution, observability, compliance enforcement,
+multi-tenant isolation, backup and restore, and operational incident controls.
+Product concepts in this doc remain stable across that transition: Agent,
+Playbook, Scenario, RunProfile, Run, and EvidencePacket stay foreground, while
+Document, Review, Approval, and PublishPackage stay downstream consumers of
+EvidencePacket lineage.
 
-The intended full product keeps the same document-first and governance-first
-shape while replacing local stores and local-only controls with production-grade
-persistence, authorization, queueing, event delivery, key management,
-observability, and compliance enforcement.
+Production scope is tracked in PM Space specs including
+[Storage, Persistence & Retention Model](https://ocnb314kma1f.feishu.cn/wiki/KH0HwrIHZinKfxkR5OCc3U4inIg),
+[Identity, Access, RBAC & Multi-tenant Boundary](https://ocnb314kma1f.feishu.cn/wiki/GFM6waZPtiLrJ9kQJHLcQAiDnVe),
+[Security, Privacy & Scoped Tool Gateway](https://ocnb314kma1f.feishu.cn/wiki/WSgwwvjSUiTquykyFgzcn6Gcnkw),
+and [Compliance & Regulatory Controls](https://ocnb314kma1f.feishu.cn/wiki/RO0PwjJlLiwLRokB6dJcxEhanrf).

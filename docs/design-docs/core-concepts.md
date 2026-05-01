@@ -1,263 +1,218 @@
-# Core Product Concepts
+# Pluto Core Concepts (Glossary)
 
-Pluto is a document-first, governance-first platform for AI-assisted work. Users
-primarily manage governed content and decisions. Runtime sessions, provider
-details, raw logs, and low-level storage remain backstage implementation detail.
+This glossary defines Pluto's canonical product objects in alignment with
+`agent-playbook-scenario-runprofile.md`, which is the source of truth for the
+playbook-first model. The foreground product is the four authored layers plus
+Run and EvidencePacket: those are the objects users author, launch, inspect,
+and govern. Downstream governance objects--Document, Version, Review,
+Approval, and PublishPackage--consume EvidencePackets. Backstage objects such
+as provider sessions, runtime adapters, raw logs, and file paths support
+execution but do not become the product entry point.
 
-## Concept glossary
+Canonical reference: `docs/design-docs/agent-playbook-scenario-runprofile.md`.
 
-### Workspace / Tenant boundary
+## Foreground primary objects
 
-A Workspace is the main product boundary for content, governance records,
-integrations, schedules, catalog selections, runs, artifacts, and evidence. In a
-production deployment, tenant and workspace identity must determine visibility,
-authorization, storage partitioning, audit scope, and secret resolution. The
-current implementation records `workspaceId` on many contracts but stores data in
-local files, so it validates object boundaries without enforcing production
-multi-tenant isolation.
+### Agent
 
-### Document and Version
+An Agent is a stable role definition stored as `agents/<name>.yaml`. It says
+what the role is, which model/provider alias it uses through Paseo, what it is
+good at, and what baseline system prompt should frame the role. Agents are
+reused across Playbooks and are the lowest authored layer in the stack.
 
-A Document is the primary user-facing content object. A Version is an immutable
-or versioned snapshot of document content that can be reviewed, approved,
-published, or linked to run provenance. Decisions should target a specific
-Version, not a mutable document draft or raw artifact.
+Key fields include `name`, `description`, `model`, `system`, and optional v1
+Paseo bridge fields such as `provider`, `mode`, and `thinking`. The lifecycle
+is author -> review -> version/pin -> referenced by Playbook members ->
+included in Run evidence as `agent_versions[]`. Ownership belongs to the team
+or platform owner who governs reusable execution roles. PM Space:
+[Agent Definition & Skill Catalog](https://ocnb314kma1f.feishu.cn/wiki/N9w2wtcElimwOokPE34clO6onOf).
 
 ### Playbook
 
-A Playbook is a reusable governed definition of work: goals, expected outputs,
-team shape, catalog references, runtime requirements, and policies. It is the
-user-facing unit for repeatable AI-assisted workflows. A Playbook can be exported
-as a portable workflow definition, but platform-only state such as approvals,
-credentials, run history, workspace bindings, and raw runtime state must stay out
-of the portable core.
+A Playbook is the composition and workflow layer stored as
+`playbooks/<name>.yaml`. It names the `team_lead`, lists member Agents, and
+contains the natural-language workflow narrative. It is prompt text, not a DAG;
+Pluto does not topologically sort Playbook stages.
+
+Key fields include `name`, `description`, `team_lead`, `members`, `workflow`,
+and `audit`. `audit.required_roles`, `audit.max_revision_cycles`, and
+`audit.final_report_sections` give audit middleware enough machine-checkable
+discipline to validate the Run. The lifecycle is author -> validate member refs
+-> bind to Scenario and RunProfile -> launch Run -> cite in EvidencePacket.
+Ownership belongs to product/platform teams defining repeatable governed work.
+PM Space: [Portable Workflow Contract](https://ocnb314kma1f.feishu.cn/wiki/G4Y8w2cgliV7v7kdosfcAxeWnHd).
 
 ### Scenario
 
-A Scenario is a concrete use case or variant under a Playbook. It narrows the
-Playbook for a business context, input class, schedule, or trigger path. A
-Scenario is usually what a user chooses when starting or scheduling a run.
+A Scenario is the specialization layer stored as `scenarios/<name>.yaml`. It
+binds to one Playbook and adds a concrete business context: fixed or templated
+task, per-role overlays, knowledge references, and evaluator rubrics. Scenario
+is the prompt-engineering surface for a reproducible benchmark or reusable
+business variant.
 
-### Agent Team
+Key fields include `name`, `playbook`, `task`, `task_mode`,
+`allow_task_override`, and `overlays`. Overlay fields include role-specific
+`prompt`, `knowledge_refs`, and `rubric_ref`. `knowledge_refs` are loaded by
+Pluto under a `## Knowledge` heading and are capped at three refs, 8k tokens
+total, and 4k per ref. The lifecycle is author -> validate Playbook ref and
+caps -> choose at launch -> append to rendered role prompts -> cite in
+EvidencePacket. PM Space: [Portable Workflow Contract](https://ocnb314kma1f.feishu.cn/wiki/G4Y8w2cgliV7v7kdosfcAxeWnHd).
 
-An Agent Team is the logical team configuration used by a Playbook or Scenario:
-one lead role plus worker roles. In the current code, the default team has lead,
-planner, generator, and evaluator roles. Product users should reason about the
-team as a governed capability selection; runtime sessions and provider-specific
-agent IDs remain backstage.
+### RunProfile
 
-### Agent Role / Worker Contribution
+A RunProfile is the operational policy layer stored as
+`run-profiles/<name>.yaml`. It is not prompt content. It defines where the Run
+happens, what must be read, which commands must pass, what files and sections
+must exist, what stdout must contain, what approval gates apply, and how
+secrets are redacted.
 
-An Agent Role defines a worker responsibility, prompt posture, and expected
-evidence. Roles may reference catalog assets such as WorkerRole, SkillDefinition,
-Template, PolicyPack, and SkillCatalogEntry versions. A Worker Contribution is
-the recorded result from a role during a Run, including version pins for the
-role, skill, template, policy pack, catalog entry, or extension install that
-shaped the contribution.
+Key fields include `workspace`, `required_reads`, `acceptance_commands`,
+`artifact_contract`, `stdout_contract`, `concurrency`, `approval_gates`, and
+`secrets`. The lifecycle is author -> validate workspace and gates -> bind at
+Run launch -> enforce pre-launch and post-run checks -> feed EvidencePacket.
+Ownership belongs to operators or platform teams responsible for execution
+policy. PM Space: [Run, Audit Middleware & Evidence Packet Model](https://ocnb314kma1f.feishu.cn/wiki/V4mcwu6DmiYim1kEhI2cd8G3nMb)
+and [Schedule, Trigger & Subscription Model](https://ocnb314kma1f.feishu.cn/wiki/G2f9wz2Ruivc1AkASPuc1vISn2g).
 
 ### Run
 
-A Run is an observable execution attempt for a Playbook/Scenario/Team against a
-task and workspace. It records dispatch, worker progress, blockers, retries,
-artifact creation, terminal status, and evidence finalization. Run detail is
-supporting provenance, not the primary product home.
+A Run is one observable execution attempt for a resolved Agent + Playbook +
+Scenario + RunProfile stack. It launches the team lead through Paseo, observes
+execution through audit middleware, and ends in a terminal status and
+EvidencePacket emission.
 
-### Artifact
+Key fields include `id`, `playbook_id`, optional `scenario_id`,
+`run_profile_id`, runtime state, timestamps, launch actor, workspace/worktree
+refs, terminal status, blocker reason, and evidence ref. Lifecycle states are
+`queued -> launching -> running -> paused_for_gate -> validating -> completed`
+or `failed_audit`, `failed_command`, `failed_artifact`, or `cancelled`. PM
+Space: [Run, Audit Middleware & Evidence Packet Model](https://ocnb314kma1f.feishu.cn/wiki/V4mcwu6DmiYim1kEhI2cd8G3nMb).
 
-An Artifact is output produced by a Run, such as a generated markdown report or
-other structured output. Artifacts support Documents, Versions, Reviews, and
-Publish Packages, but they are not the final business delivery object. A user may
-promote or incorporate artifact content into a Document Version.
+### EvidencePacket
 
-### Evidence Packet / Sealed Evidence
+An EvidencePacket is the audit-grade result emitted by Pluto after the Run is
+observed and validated. It aggregates the rendered stack identity, chat events,
+file checkpoints, stdout matches, command outputs, revision summary, redaction
+summary, downstream refs, and audit status. It is the signal downstream
+governance objects attach to by `evidence_packet_id`.
 
-An Evidence Packet is the governance-facing summary of a Run: status, blocker
-reason, runtime result refs, worker contribution summaries, validation outcome,
-cited inputs, risks, and open questions. Sealed Evidence is an immutable,
-redacted, validated evidence packet suitable for review, approval, compliance,
-and publish gates. Raw transcripts and provider diagnostics are backstage and
-should not become foreground evidence.
+Key fields include `id`, `run_id`, `playbook_id`, optional `scenario_id`,
+`run_profile_id`, `agent_versions[]`, `events[]`, `file_checkpoints[]`,
+`stdout_matches[]`, `command_results[]`, `revision_summary`,
+`redaction_summary`, `audit_status`, `downstream_refs[]`, `created_at`, and
+`sealed_at`. Once sealed, it is immutable; redaction is irreversible. PM Space:
+[Run, Audit Middleware & Evidence Packet Model](https://ocnb314kma1f.feishu.cn/wiki/V4mcwu6DmiYim1kEhI2cd8G3nMb).
 
-### Review / Approval
+## Downstream governance objects
 
-A Review is a quality or suitability decision request for a Document, Version,
-section, or Publish Package. An Approval is a distinct responsibility grant for a
-Version or package. Review can request changes; Approval authorizes governed
-progress. Both should cite precise targets and required evidence.
+### Document / Version
 
-### Publish Package
+Document and Version are downstream content governance objects, not Pluto's
+execution entry point. A Document is authored content. A Version is the stable
+decision target for review, approval, and publish readiness. They may include
+or reference Run artifacts, but they consume Run truth through
+`evidence_packet_id` rather than recomputing it from raw logs.
 
-A Publish Package assembles approved Version refs, sealed evidence refs, release
-readiness refs, channel targets, export assets, publish attempts, and audit
-events. It is the delivery object for publishing and compliance, not the raw
-artifact. Packages should be superseded rather than silently mutating approved
-history when sources, targets, approvals, or evidence change.
+Version decisions should cite the specific EvidencePacket considered by the
+reviewer or approver. If the evidence changes, a new EvidencePacket or Version
+relationship should be recorded rather than silently mutating decision history.
+PM Space: [Core Object Model](https://ocnb314kma1f.feishu.cn/wiki/E2Itw8ERliNZOpkw4fTcIjA5nAf).
 
-### Schedule / Trigger / Subscription
+### Review
 
-A Schedule binds a Playbook and Scenario to future execution intent. Triggers are
-the concrete firing mechanisms, such as cron, manual, API, or event sources.
-Subscriptions connect schedules to event streams or deliveries. In the current
-code only selected trigger kinds are enabled locally; production needs durable
-queues and webhook/event infrastructure.
+A Review is a quality or suitability decision request over a Version, section,
+or package. In the playbook-first model, Review consumes the EvidencePacket that
+proves what ran, which audit checks passed or failed, which deviations were
+cited, and whether the artifact is decision-ready.
 
-### Integration / Work Source / Webhook
+Review records attach by `evidence_packet_id`. They may pass, fail, request
+changes, expire, or block, but they do not re-run acceptance commands or parse
+provider transcripts as their source of truth. PM Space:
+[Review & Approval Flow](https://ocnb314kma1f.feishu.cn/wiki/HASVwhHZ6iJ70Ok67HxcoahinDg).
 
-An Integration connects Pluto to external systems. A Work Source represents an
-external source of incoming work; a Work Source Binding maps it into a workspace
-target such as a document seed, playbook, or scenario. Inbound work items carry
-provider refs, payload refs, dedupe keys, and provenance. Webhook subscriptions
-and delivery attempts represent outbound or event delivery with signing,
-idempotency, replay protection, retry state, and redacted payload summaries.
+### Approval
 
-### Extension / Catalog item
+An Approval is an explicit authorization by an eligible approver. It is distinct
+from Review: Review evaluates quality; Approval grants responsibility to
+proceed. Approval inherits its evidence basis from the attached
+EvidencePacket and the governed target it authorizes.
 
-The Catalog governs reusable capabilities: Worker Roles, Skills, Templates,
-Policy Packs, and Skill Catalog Entries. An Extension is an installable package
-that can contribute skills, templates, or policies and declare compatibility,
-capabilities, secrets, tool surfaces, sensitivity, and outbound-write claims.
-Catalog and extension assets require review/trust checks before activation; they
-are internal capability governance, not the foreground content model.
+Approval records attach by `evidence_packet_id` when the authorization depends
+on agent-produced work or audit middleware output. Missing, failed, invalid, or
+unredacted evidence must block approval where policy requires evidence. PM
+Space: [Review & Approval Flow](https://ocnb314kma1f.feishu.cn/wiki/HASVwhHZ6iJ70Ok67HxcoahinDg).
 
-### Portability bundle
+### PublishPackage
 
-A Portability Bundle exports safe, portable assets such as documents, templates,
-publish-package summaries, evidence summaries, or portable workflow bundles. It
-uses logical references, compatibility metadata, checksums, import requirements,
-and redaction summaries. It must exclude tenant-private state, raw runtime
-payloads, credentials, provider sessions, private storage paths, and workspace
-bindings.
+A PublishPackage is the governed delivery object. It assembles source Versions,
+approval refs, EvidencePacket refs, release-readiness refs, channel targets,
+export assets, publish attempts, rollback/retract/supersede records, and audit
+events.
 
-## Relationship diagram
+Publish readiness consumes EvidencePackets by `evidence_packet_id`. It should
+block on failed audit, missing approvals, missing evidence, credential leakage,
+or regulated publish gates. PM Space: [Publish Package Model](https://ocnb314kma1f.feishu.cn/wiki/A3x3w14jKiecXVkraZocF1ySnqh).
 
-```mermaid
-flowchart TD
-  WS[Workspace / Tenant]
-  Doc[Document]
-  Ver[Version]
-  Rev[Review]
-  Appr[Approval]
-  Pub[Publish Package]
-  Export[Export Asset / Portability Bundle]
+## Backstage execution objects
 
-  PB[Playbook]
-  Sc[Scenario]
-  Team[Agent Team]
-  Role[Agent Role]
-  Cat[Catalog Item / Extension]
-  Sched[Schedule]
-  Trig[Trigger / Subscription]
-  Int[Integration / Work Source / Webhook]
+### Runtime Adapter / Provider Session
 
-  Run[Run]
-  Art[Artifact]
-  Ev[Evidence Packet]
-  Seal[Sealed Evidence]
+The Runtime Adapter lets Pluto launch and observe a runtime without putting
+provider-specific state into core product types. v1 is hard-bound to Paseo, but
+core objects stay runtime-neutral. The provider session is the runtime execution
+instance created during a Run.
 
-  WS --> Doc --> Ver
-  Ver --> Rev --> Appr --> Pub --> Export
-  WS --> PB --> Sc --> Team --> Role
-  Role --> Cat
-  Sc --> Sched --> Trig
-  Int --> Trig
-  Sc --> Run
-  Team --> Run
-  Run --> Art
-  Run --> Ev --> Seal
-  Art --> Ver
-  Seal --> Rev
-  Seal --> Pub
-  PB --> Export
-```
+Provider sessions, callback payloads, raw transcripts, stderr, endpoints, and
+private file paths are operator diagnostics. Governance consumers should see
+redacted summaries and EvidencePacket refs, not raw provider state. PM Space:
+[Runtime Adapter & Provider Contract](https://ocnb314kma1f.feishu.cn/wiki/IhdDwIqlwi0PpfkTUxEcz6v1nGe).
 
-## Foreground vs backstage objects
+### Coordination Channel (paseo chat)
 
-Foreground objects are the objects users govern and make decisions about:
-Workspace, Document, Version, Review, Approval, Publish Package, Playbook,
-Scenario, Schedule, Catalog selection, Integration binding, and the observable Run
-summary.
+The coordination channel is the shared Paseo chat room handle passed to the
+team lead at launch. Team lead owns orchestration and spawns members directly
+through the Paseo CLI. The channel gives Pluto an observable surface for
+`STAGE` and `DEVIATION` events.
 
-Backstage objects support execution and auditability: runtime adapters, provider
-profiles, provider sessions, raw callbacks, low-level event logs, raw transcripts,
-storage paths, payload envelopes, queues, retry internals, and unredacted
-diagnostics. They may be inspected by operators, but they should not become the
-default subject of document, review, approval, or publish workflows.
+The chat room is not a foreground object. Pluto records relevant events into
+the EvidencePacket after validation and redaction.
 
-## Ownership and source-of-truth rules
+### Audit Middleware
 
-- Document is the primary product home. Version is the source of truth for review,
-  approval, and publish decisions.
-- Playbook and Scenario are the source of truth for repeatable work intent.
-- Agent Team and Agent Roles are governed execution definitions. Runtime sessions
-  are internal instances, not product subjects.
-- Run is the source of truth for execution occurrence and status. It does not, by
-  itself, redefine a Document or Version state.
-- Artifact is supporting output. A Publish Package, not an Artifact, is the source
-  of truth for delivery.
-- Evidence Packet is the source of truth for run provenance. Sealed Evidence is
-  the immutable review/publish-ready form.
-- Review and Approval are separate decision records with explicit targets.
-- Schedule, Trigger, and Subscription own recurring and inbound execution intent;
-  they should not embed secret values.
-- Integration records own provider-neutral source/target refs, dedupe, signing,
-  idempotency, and redacted payload summaries; raw provider payloads stay private.
-- Catalog items and Extensions own reusable capability versions and activation
-  status; runtime capability matching still happens at dispatch time.
-- Portability bundles own export/import transfer semantics, not platform state.
+Audit Middleware is the fail-closed validation layer driven by RunProfile and
+Playbook audit fields. It observes file checkpoints, stdout matches,
+`STAGE`/`DEVIATION` events, acceptance commands, required role citations, and
+revision cap behavior.
+
+It does not decide the workflow. It verifies that the team lead's claimed work
+is supported by contracted files, stdout, events, citations, and command
+outputs. Any missing required element marks the run `failed_audit`,
+`failed_command`, or `failed_artifact` as appropriate. PM Space:
+[Run, Audit Middleware & Evidence Packet Model](https://ocnb314kma1f.feishu.cn/wiki/V4mcwu6DmiYim1kEhI2cd8G3nMb).
+
+## Boundary rules
+
+- Foreground objects are user-facing and governed: Agent, Playbook, Scenario,
+  RunProfile, Run, and EvidencePacket.
+- Downstream surfaces consume EvidencePackets; they do not recompute Run truth
+  from raw logs, provider sessions, or mutable artifacts.
+- Backstage is implementation detail; core types use runtime-neutral
+  abstractions even though v1 launches through Paseo.
+- Stacking is additive: Agent -> Playbook -> Scenario -> RunProfile appends
+  context and policy; higher layers do not rewrite lower layers.
+- EvidencePacket is the audit lineage signal across Document, Review,
+  Approval, PublishPackage, compliance, portability, and audit export.
 
 ## Lifecycle examples
 
-### 1. Document-first authoring and review
+### Playbook-first governed execution
 
-1. A user creates or imports a Document in a Workspace.
-2. The user creates a Version from the current content.
-3. The user requests Review for that Version and attaches evidence requirements.
-4. Reviewers comment, request changes, or mark the review succeeded.
-5. If the Version needs authorization, an Approval request targets the same
-   Version and records a separate decision.
+Playbook authoring -> Scenario specialization -> RunProfile binding -> Run
+launch -> audit middleware -> EvidencePacket emission -> downstream
+Document/Review/Approval/Publish consumption by `evidence_packet_id`.
 
-### 2. Playbook-driven agent team run
+### Schema versioning
 
-1. A user selects a Playbook and Scenario from a Document or workflow context.
-2. Pluto resolves the Agent Team, role catalog pins, runtime requirements, and
-   policy constraints.
-3. Runtime selection fails closed if hard requirements are not met.
-4. The lead dispatches worker roles; worker contributions are recorded with
-   catalog provenance.
-5. The Run creates an Artifact and Evidence Packet. Redacted, validated evidence
-   can be sealed and linked back to a Version, Review, or Publish Package.
-
-### 3. Scheduled or inbound trigger to run
-
-1. A Schedule references a Playbook, Scenario, owner, triggers, and subscriptions.
-2. A cron/manual/API/event Trigger fires, or an Integration receives an inbound
-   work item from a Work Source/Webhook.
-3. Pluto validates workspace, signature/credential refs, dedupe keys, filters,
-   and target bindings.
-4. The accepted trigger enqueues or starts a Run; blocked or missed runs record
-   diagnosable reasons.
-
-### 4. Publish, compliance, and export path
-
-1. A Publish Package selects approved Version refs, sealed evidence refs, release
-   readiness refs, and channel targets.
-2. Readiness blocks on missing approvals, missing sealed evidence, failed gates,
-   duplicate idempotency keys, or credential leakage.
-3. Export assets are produced with redaction summaries, checksums, and channel
-   target refs.
-4. Publish attempts and rollback/retract/supersede events create audit records.
-5. Portability bundles can export safe summaries and portable definitions while
-   excluding platform-private and runtime-private state.
-
-## Current local file-backed skeleton vs production persistence
-
-The current repository is intentionally local-first and file-backed. It validates
-contract shapes, orchestration semantics, provenance, redaction boundaries,
-readiness gates, and CLI flows. It is useful for product-shape hardening and
-offline tests.
-
-It is not yet production persistence. Production must add a transactional store,
-migrations, tenant-aware authorization enforcement, durable queues, webhook/event
-delivery infrastructure, secret resolution, observability backends, retention and
-legal-hold controls, and operational recovery semantics. The product concepts in
-this document should remain stable across that persistence change.
+The v1 four-layer YAML schema uses `pluto.dev/v1`. Additive changes should
+preserve import/export compatibility where possible; breaking changes require a
+compatibility report and migration plan. PM Space: [Versioning, Migration & Compatibility](https://ocnb314kma1f.feishu.cn/wiki/LVg4w7uYIiIBckkI6vNcofPmnDh).
