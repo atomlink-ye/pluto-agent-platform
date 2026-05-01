@@ -86,13 +86,17 @@ pnpm docker:up
 pnpm smoke:docker
 ```
 
-## OPENCODE_BASE_URL Blocker
+## Paseo CLI Blocker
 
-If `OPENCODE_BASE_URL` is unset with live adapter:
+If `PASEO_BIN` points to an unavailable binary or `paseo` is not on PATH with the live adapter:
 
-- `docker/live-smoke.ts` prints structured blocker: `{"status":"blocker","reason":"OPENCODE_BASE_URL unset",...}`
+- `docker/live-smoke.ts` prints structured blocker: `{"status":"blocker","reason":"paseo CLI unavailable",...}`
 - Exits with code 2 (not 1)
-- This is intentional: distinguishes configuration missing from runtime failure
+- This is intentional: distinguishes missing host Paseo from runtime failure
+
+With `PASEO_HOST` set, live smoke also probes the explicit Paseo daemon/API URL and reports `{"status":"blocker","reason":"paseo daemon unavailable",...}` with exit code 2 when it cannot be reached. When `PASEO_HOST` is unset, the adapter uses the local Paseo daemon/socket.
+
+`OPENCODE_BASE_URL` is optional for the live adapter and is only used as an OpenCode HTTP debug endpoint when running Docker-oriented helper paths.
 
 ## Log Parsing Contamination Guard
 

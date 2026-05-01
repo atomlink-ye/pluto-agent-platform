@@ -70,7 +70,7 @@ Every completed, blocked, or failed run attempts to produce `evidence.md` and `e
 
 ## Live smoke (host Paseo + OpenCode free model)
 
-The Paseo CLI is a macOS app bundle and is not installable inside a Linux Docker container, so the live adapter runs on the **host** that owns the Paseo daemon. The OpenCode runtime container in `docker/compose.yml` is optional — it only exposes the OpenCode web UI on `http://localhost:4096` for debugging.
+The live adapter talks to Paseo through the local daemon/socket by default. Set `PASEO_HOST` to make the adapter pass `--host <host>` to `paseo run/wait/logs/send/delete` for a Docker-packaged or remote Paseo daemon. `http://` / `https://` prefixes are normalized away for the Paseo CLI. The OpenCode runtime container in `docker/compose.yml` is optional — it only exposes the OpenCode web UI on `http://localhost:4096` for debugging.
 
 ```bash
 cp .env.example .env  # placeholders only — never commit real secrets
@@ -78,12 +78,16 @@ cp .env.example .env  # placeholders only — never commit real secrets
 # (1) Live smoke directly from host. Requires:
 #       - paseo CLI on PATH (the host running the Paseo macOS app)
 #       - opencode CLI on PATH, signed in for the free profile
-#       - OPENCODE_BASE_URL set (kept as a deterministic safety gate)
-OPENCODE_BASE_URL=http://localhost:4096 pnpm smoke:live
+#       - provider/model default to opencode + opencode/minimax-m2.5-free
+pnpm smoke:local
 
-# (2) Or have Pluto build & start the optional pluto-runtime container first,
-#     and then run the same host-mode smoke against it (this script auto-sets
-#     OPENCODE_BASE_URL):
+# (2) Use an explicit Paseo daemon/API URL for Docker-packaged or remote mode.
+#     OPENCODE_BASE_URL is optional and only exposes an OpenCode debug endpoint:
+PASEO_HOST=localhost:6767 pnpm smoke:live
+
+# (3) Or have Pluto build & start the optional pluto-runtime container first.
+#     This script auto-sets OPENCODE_BASE_URL as an optional debug endpoint and
+#     passes through PASEO_HOST when you provide one:
 pnpm smoke:docker
 ```
 
@@ -97,7 +101,7 @@ Run the full verify command (fast local gates):
 pnpm verify
 ```
 
-This runs: `pnpm typecheck && pnpm test && pnpm build && pnpm smoke:fake && no-endpoint-blocker-check`.
+This runs: `pnpm typecheck && pnpm test && pnpm build && pnpm smoke:fake && no-paseo-blocker-check`.
 
 See `scripts/verify.mjs` for details.
 
@@ -125,13 +129,13 @@ docker compose \
 
 Slice #3 documents a compatibility note only: the current v0 runtime still writes `status: done` and event kind `run_completed`. Readers should tolerate the future `succeeded`/`completion` vocabulary, but this branch does not rename stored files, event kinds, or CLI fields.
 
-### Quick-fail (no-endpoint blocker)
+### Quick-fail (no-paseo blocker)
 
-If `OPENCODE_BASE_URL` is unset and `PLUTO_LIVE_ADAPTER=paseo-opencode`, the smoke script short-circuits with a structured blocker payload and exits with code 2 BEFORE probing Paseo:
+If `PASEO_BIN` points to an unavailable binary (or `paseo` is not on PATH) and `PLUTO_LIVE_ADAPTER=paseo-opencode`, the smoke script short-circuits with a structured blocker payload and exits with code 2:
 
 ```bash
-PLUTO_LIVE_ADAPTER=paseo-opencode pnpm exec tsx docker/live-smoke.ts
-# → {"status":"blocker","reason":"OPENCODE_BASE_URL unset",...}, exit 2
+PASEO_BIN=/nonexistent/paseo PLUTO_LIVE_ADAPTER=paseo-opencode pnpm exec tsx docker/live-smoke.ts
+# → {"status":"blocker","reason":"paseo CLI unavailable",...}, exit 2
 ```
 
 ## Architecture

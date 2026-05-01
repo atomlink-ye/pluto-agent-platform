@@ -61,11 +61,12 @@ pnpm test               #vitest run
 pnpm build              #dist/ output
 pnpm smoke:fake         #fake adapter E2E
 
-# Full verify (includes fast gates + no-endpoint blocker)
+# Full verify (includes fast gates + no-paseo blocker)
 pnpm verify
 
-# Live smoke (requires OPENCODE_BASE_URL)
-pnpm smoke:live         #host Paseo + OpenCode
+# Live smoke (no Docker required)
+pnpm smoke:local        #host Paseo + OpenCode (no Docker)
+pnpm smoke:live         #set PASEO_HOST for explicit daemon; OPENCODE_BASE_URL optional debug
 pnpm smoke:docker      #Docker stack + live smoke
 ```
 
@@ -75,7 +76,7 @@ pnpm smoke:docker      #Docker stack + live smoke
 |------|-------|-------|
 | Unit tests | `tests/*.test.ts` | Fast, no I/O, deterministic |
 | Integration/smoke | `tests/*.test.ts` or `docker/live-smoke.ts` | Use fake adapter |
-| Live E2E | `docker/live-smoke.ts` | Requires OPENCODE_BASE_URL |
+| Live E2E | `docker/live-smoke.ts` | Requires paseo CLI; PASEO_HOST selects explicit daemon; OPENCODE_BASE_URL optional debug |
 | Eval cases | `evals/cases/` | Model/workflow quality |
 | Rubrics | `evals/rubrics/` | Scoring criteria |
 | Golden outputs | `evals/goldens/` | Reference artifacts |

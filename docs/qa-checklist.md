@@ -34,11 +34,12 @@ Run after every meaningful change. Mark `[x]` only when the actual command succe
 
 ## 5. Live smoke (host paseo + opencode free model)
 
-Live runs from the host that owns the Paseo daemon (Paseo is macOS-only). Preconditions in `.paseo-pluto-mvp/root/integration-plan.md` §1.
+Live uses the local Paseo daemon/socket by default. Set `PASEO_HOST` to run against an explicit Docker-packaged or remote Paseo daemon/API URL via `paseo --host`. Preconditions in `.paseo-pluto-mvp/root/integration-plan.md` §1.
 
 - [ ] `paseo daemon status` shows the daemon running on host.
 - [ ] `paseo provider ls --json` lists `opencode` as `available` with default mode `build`.
-- [ ] `OPENCODE_BASE_URL=http://localhost:4096 pnpm smoke:live` returns `{"status":"ok",...}` or `{"status":"partial","reason":"provider_unavailable"|"quota_exceeded",...}` (allow ~40–80s for the model).
+- [ ] `pnpm smoke:local` returns `{"status":"ok",...}` or `{"status":"partial","reason":"provider_unavailable"|"quota_exceeded",...}` (allow ~40–80s for the model).
+- [ ] For Docker/remote Paseo daemon mode, `PASEO_HOST=<host> pnpm smoke:live` uses the same provider/model and returns the same acceptable status shape.
 - [ ] `events.jsonl` contains: `run_started`, `lead_started`, ≥3 `worker_requested`, ≥3 `worker_started`, ≥3 `worker_completed`, one `lead_message` (kind=`summary`), one `artifact_created`, one terminal `run_completed`.
 - [ ] `artifact.md` contains the strings `lead`, `planner`, `generator`, `evaluator` (assertion the smoke script enforces).
 - [ ] Only preflight blockers print `{"status":"blocker","reason":...}` and exit with code 2.
@@ -47,7 +48,7 @@ Live runs from the host that owns the Paseo daemon (Paseo is macOS-only). Precon
 ### 5.1 Full Docker live mode (`pnpm smoke:docker`)
 
 - [ ] Builds the `pluto-runtime` image and brings it up healthy on port 4096.
-- [ ] Auto-sets `OPENCODE_BASE_URL=http://localhost:4096` and runs the host-mode live smoke.
+- [ ] Auto-sets `OPENCODE_BASE_URL=http://localhost:4096` (optional debug endpoint) and passes through `PASEO_HOST` when provided.
 - [ ] Returns `{"status":"ok",...}` end-to-end with three real worker contributions.
 
 ## 6. Evidence packet (MVP-beta)

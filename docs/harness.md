@@ -52,12 +52,15 @@ Persisted events are part of the same control surface. `RunStore.appendEvent()` 
 
 ## Control Knobs
 
-| Knob | Env Var | Purpose |
-|------|--------|---------|
-| Adapter | `PLUTO_LIVE_ADAPTER` | fake or paseo-opencode |
-| Endpoint | `OPENCODE_BASE_URL` | Live smoke guard |
-| Workspace | `PLUTO_LIVE_WORKSPACE` | Run directory |
-| Free model | `opencode/minimax-m2.5-free` | Default (do not change) |
+| Knob | Env Var | Default | Purpose |
+|------|---------|---------|---------|
+| Adapter | `PLUTO_LIVE_ADAPTER` | paseo-opencode | fake or paseo-opencode |
+| Provider | `PASEO_PROVIDER` | opencode | Paseo provider alias |
+| Model | `PASEO_MODEL` | opencode/minimax-m2.5-free | Model for the provider |
+| Paseo daemon host | `PASEO_HOST` | local socket | Optional explicit Paseo daemon/API URL; adapter passes `--host` when set |
+| Workspace | `PLUTO_LIVE_WORKSPACE` | .tmp/live-quickstart | Run directory |
+| Endpoint (optional) | `OPENCODE_BASE_URL` | - | OpenCode HTTP debug endpoint (Docker only) |
+| Binary | `PASEO_BIN` | paseo | Path to paseo CLI |
 
 ## CLI Surfaces
 

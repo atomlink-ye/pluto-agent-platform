@@ -55,9 +55,11 @@ MVP-beta test lanes:
 
 ### Live E2E
 
-- Requires `OPENCODE_BASE_URL` set
 - Runs outside CI (human in loop)
-- Example: `pnpm smoke:live`
+- Requires `paseo` CLI on PATH (or `PASEO_BIN` env var)
+- Uses local Paseo daemon/socket by default; set `PASEO_HOST` for Docker-packaged or remote daemon/API mode (`paseo --host`)
+- Optional: `OPENCODE_BASE_URL` for OpenCode HTTP debug endpoint (Docker only)
+- Example: `pnpm smoke:local` (local daemon/socket) or `PASEO_HOST=localhost:6767 pnpm smoke:live` (explicit daemon host)
 
 ### Eval Cases (`evals/cases/`)
 
@@ -101,16 +103,20 @@ pnpm smoke:fake
 # Deterministic workflow-quality eval (fake adapter, no live calls)
 pnpm eval:workflow
 
-# No-endpoint blocker (asserts exit 2)
-PLUTO_LIVE_ADAPTER=paseo-opencode pnpm exec tsx docker/live-smoke.ts
+# No-paseo blocker (asserts exit 2 when PASEO_BIN unavailable)
+PASEO_BIN=/nonexistent/paseo PLUTO_LIVE_ADAPTER=paseo-opencode pnpm exec tsx docker/live-smoke.ts
 
 # Full verify (includes all fast gates)
 pnpm verify
 
-# Docker smoke (broader, requires Docker)
+# Docker smoke (broader, requires Docker; pass PASEO_HOST when using an explicit daemon/API URL)
 pnpm smoke:docker
 
-# Live smoke (requires OPENCODE_BASE_URL, host Paseo)
+# Local live smoke (no Docker, uses host paseo + opencode CLI)
+pnpm smoke:local
+
+# Explicit Paseo daemon/API host; optional OpenCode HTTP debug endpoint
+PASEO_HOST=localhost:6767 pnpm smoke:live
 OPENCODE_BASE_URL=http://localhost:4096 pnpm smoke:live
 ```
 
