@@ -4,73 +4,35 @@
 
 | Module | Responsibility | Owns |
 |--------|---------------|------|
-| `src/contracts/adapter.ts` | Adapter interface | `PaseoTeamAdapter` seam |
-| `src/orchestrator/` | Team run lifecycle | Events, artifact, state machine |
-| `src/adapters/fake/` | In-process adapter | Deterministic test runtime |
-| `src/adapters/paseo-opencode/` | Live adapter | Paseo CLI + OpenCode |
-| `docker/live-smoke.ts` | Live E2E | Host-driven smoke |
-| `scripts/verify.mjs` | Fast gates | typecheck→test→build→smoke:fake→blocker |
-
-## Dependency Direction
-
-```
-src/contracts/     ← orchestrator/ ← adapters/
-                    ↑                 ↑
-                 scripts/          docker/
-```
-
-The orchestrator imports the adapter interface, never implementations. Adapters are injected via factory.
+| `src/contracts/four-layer.ts` | authored/runtime schema | Agent, Playbook, Scenario, RunProfile, Run, EvidencePacket, MailboxMessage, Task |
+| `src/contracts/adapter.ts` | adapter interface | `PaseoTeamAdapter` seam |
+| `src/four-layer/` | mailbox/tasks/hooks/plan approval + render/load/audit | file-backed runtime primitives |
+| `src/orchestrator/manager-run-harness.ts` | main runtime orchestration | run lifecycle, evidence integration |
+| `src/adapters/fake/` | deterministic adapter | in-memory mailbox/task runtime |
+| `src/adapters/paseo-opencode/` | live adapter | paseo chat transport + OpenCode launch |
+| `docker/live-smoke.ts` | live E2E | smoke assertions |
 
 ## Control Flow
 
-```
-User: pnpm submit → TeamRunService.run()
-                     ↓
-               adapter.startRun()
-               adapter.createLeadSession()
-                     ↓
-               Team Lead via Paseo/OpenCode
-                     ↓
-               adapter.createWorkerSession() × N
-                     ↓
-               adapter.waitForCompletion()
-                     ↓
-               orchestrator writes artifact.md
+```text
+pnpm pluto:run
+  -> load four-layer YAML
+  -> render prompts
+  -> create mailbox.jsonl + tasks.json
+  -> launch lead via adapter
+  -> coordinate teammates through mailbox/task runtime
+  -> run hooks + acceptance
+  -> write artifact + evidence packet
 ```
 
-## Data Flow
+## Runtime Evidence Surfaces
 
-- **Input:** TeamTask (title, prompt, workspace, minWorkers)
-- **Events:** `.pluto/runs/<runId>/events.jsonl` (append-only)
-- **Output:** `.pluto/runs/<runId>/artifact.md` (Team Lead markdown)
+- `.pluto/runs/<runId>/mailbox.jsonl`
+- `.pluto/runs/<runId>/tasks.json`
+- `.pluto/runs/<runId>/artifact.md`
+- `.pluto/runs/<runId>/evidence-packet.{md,json}`
 
 ## Adapter Boundary
 
-The adapter is the only seam to runtime:
-
-```typescript
-interface PaseoTeamAdapter {
-  startRun(input: { runId, task, team }): Promise<void>
-  createLeadSession(input: { runId, task, role }): Promise<AgentSession>
-  createWorkerSession(input: { runId, role, instructions }): Promise<AgentSession>
-  sendMessage(input: { runId, sessionId, message }): Promise<void>
-  readEvents(input: { runId }): Promise<AgentEvent[]>
-  waitForCompletion(input: { runId, timeoutMs }): Promise<AgentEvent[]>
-  endRun(input: { runId }): Promise<void>
-}
-```
-
-All runtime-specific concepts (Paseo agent IDs, OpenCode handles, model names) live inside adapter `external` payloads.
-
-## Runtime State
-
-- **.pluto/runs/** — gitignored, per-run state
-- **.paseo-pluto-mvp/** — gitignored, Paseo daemon state
-
-## MVP Invariants
-
-1. At least 2 workers must complete per run.
-2. Events must follow canonical lifecycle: `run_started → lead_started → worker_* → lead_message → artifact_created → run_completed`.
-3. Artifact must not leak protocol fragments (`TEAM LEAD ASSIGNMENT`, `WORKER ASSIGNMENT`, `[User]`, `[Thought]`, `[Tool]`, `# System`, `Instructions from the Team Lead`, `Reply with your contribution only`).
-4. No-endpoint blocker exits with code 2 if OPENCODE_BASE_URL unset.
-5. Free model is `opencode/minimax-m2.5-free`.
+The adapter is the only seam to runtime-specific behavior. Provider IDs, model names,
+CLI flags, and transport quirks stay inside adapter implementations.

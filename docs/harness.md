@@ -1,96 +1,46 @@
 # docs/harness.md — Repo as Control Surface
 
-The repo harness is Pluto MVP-alpha's operating environment. It makes work **observable**, **verifiable**, **repeatable**, and **convergent**.
-
-## What the Harness Provides
+## What the harness provides
 
 | Surface | Purpose |
 |---------|---------|
-| **AGENTS.md** | Entry point for new agents: where to read, change, validate |
-| **ARCHITECTURE.md** | Module responsibilities, dependency direction |
-| **DESIGN.md** | Design principles, tradeoffs, constraints |
-| **QUALITY_SCORE.md** | Quality dimensions, PR gates |
-| **RELIABILITY.md** | Timeout, retry, cleanup, error handling |
-| **SECURITY.md** | Secret handling, redaction, forbidden materials |
-| **docs/harness.md** | This file — repo as control surface |
-| **docs/testing-and-evals.md** | Tests vs evals split, placement rules |
-| **scripts/verify.mjs** | Fast local gates (typecheck→test→build→smoke:fake→blocker) |
-| **src/orchestrator/manager-run-harness.ts** | Mainline four-layer harness runtime |
+| `AGENTS.md` | repo entry point |
+| `docs/mvp-alpha.md` | contract reference |
+| `src/orchestrator/manager-run-harness.ts` | main runtime |
+| `src/four-layer/` | mailbox/task/hooks/plan-approval primitives |
+| `docker/live-smoke.ts` | smoke assertions |
+| `scripts/verify.mjs` | fast verification |
 
-## Repo Memory (Authoritative Sources)
+## Generated evidence surfaces
 
-When in doubt, check source-of-truth order in AGENTS.md:
+- `.pluto/runs/<runId>/mailbox.jsonl`
+- `.pluto/runs/<runId>/tasks.json`
+- `.pluto/runs/<runId>/artifact.md`
+- `.pluto/runs/<runId>/evidence-packet.md`
+- `.pluto/runs/<runId>/evidence-packet.json`
 
-1. **package.json** — canonical scripts, dependencies
-2. **src/contracts/adapter.ts** — adapter interface (only seam)
-3. **docs/mvp-alpha.md** — object contracts, acceptance criteria
-4. **docker/live-smoke.ts** — live behavior, artifact quality guards
-5. **QUALITY_SCORE.md** — quality dimensions and PR gates
-6. **RELIABILITY.md** — timeout, retry, cleanup policy
-
-## Map of the Repo
-
-```
-src/          # Contracts, orchestrator, adapters
-tests/        # Unit + fake adapter E2E (fast, offline; some file-backed checks)
-docker/       # compose.yml, runtime, live-smoke.ts
-docs/         # mvp-alpha.md, qa-checklist.md, harness docs
-scripts/     # verify.mjs
-evals/        # cases, rubrics, goldens, reports, datasets
-```
-
-## Evidence (Generated)
-
-- **.pluto/runs/<runId>/events.jsonl** — Event log
-- **.pluto/runs/<runId>/artifact.md** — Final artifact
-- **.pluto/runs/<runId>/evidence-packet.md** — Canonical four-layer evidence packet (human-readable)
-- **.pluto/runs/<runId>/evidence-packet.json** — Canonical four-layer evidence packet (machine-readable)
-- **.pluto/runs/<runId>/evidence.md** — Compatibility evidence packet (human-readable, `EvidencePacketV0`)
-- **.pluto/runs/<runId>/evidence.json** — Compatibility evidence packet (machine-readable, `EvidencePacketV0`)
-- **evals/reports/** — Evaluation reports
-
-The canonical evidence packet is now a first-class control-surface artifact. Successful four-layer runs write `evidence-packet.md` and `evidence-packet.json` for completed and failed runs, capturing command outputs, transitions, artifact refs, role citations, and lineage back to stdout/transcript/final-report artifacts. Compatibility `evidence.md` and `evidence.json` are still written for legacy readers and run-inspection tooling. If evidence generation itself fails, the run is surfaced as `runtime_error` / `run_failed` and partial evidence files are cleaned up instead of being guaranteed to persist.
-
-Persisted events are part of the same control surface. `RunStore.appendEvent()` strips `transient.rawPayload` and rewrites payloads through the same redactor, while live adapters may still keep raw payload fragments in memory long enough for orchestration and artifact synthesis.
-
-## Orchestrator Source Instrumentation (S1)
-
-`worker_requested` events now carry `payload.orchestratorSource` so the harness can distinguish which control-plane lane produced the lead intent that preceded each worker launch:
-
-- `lead_marker` — the live lead emitted a legacy marker line.
-- `pluto_fallback` — Pluto synthesized the dispatch in `maybeDispatchUnderdispatchFallback()`.
-- `teamlead_direct` — the manager-run harness mainline team-lead-owned orchestration path (v1.5). The lead spawns workers directly via `paseo run` and Pluto observes STAGE/DEVIATION events.
-
-`docker/live-smoke.ts` records the per-worker `orchestratorSource` distribution and fails when more than 50% of completed workers were dispatched via `pluto_fallback`, which guards against a misleadingly green smoke that is still relying on Pluto-owned dispatch instead of observed lead intent.
-
-## Control Knobs
+## Runtime control knobs
 
 | Knob | Env Var | Default | Purpose |
 |------|---------|---------|---------|
-| Adapter | `PLUTO_LIVE_ADAPTER` | paseo-opencode | fake or paseo-opencode |
-| Provider | `PASEO_PROVIDER` | opencode | Paseo provider alias |
-| Model | `PASEO_MODEL` | opencode/minimax-m2.5-free | Model for the provider |
-| Paseo daemon host | `PASEO_HOST` | local socket | Optional explicit Paseo daemon/API URL; adapter passes `--host` when set |
-| Workspace | `PLUTO_LIVE_WORKSPACE` | `/Volumes/AgentsWorkspace/tmp/pluto-regression-fix/live-quickstart/` | Preferred run directory; falls back to `<repo>/.tmp/live-quickstart/` when `/Volumes/AgentsWorkspace/` is unavailable |
-| Scenario | `PLUTO_SCENARIO` | hello-team | Selects the authored scenario used by the manager-run harness |
-| Run profile | `PLUTO_RUN_PROFILE` | fake-smoke | Selects the authored run profile |
-| Playbook override | `PLUTO_PLAYBOOK` | - | Overrides the scenario's playbook binding |
-| Endpoint (optional) | `OPENCODE_BASE_URL` | - | OpenCode HTTP debug endpoint (Docker only) |
-| Binary | `PASEO_BIN` | paseo | Path to paseo CLI |
-| Fake-live alias | `PLUTO_FAKE_LIVE` | off | Test/CI convenience alias for `PLUTO_LIVE_ADAPTER=fake` |
+| Adapter | `PLUTO_LIVE_ADAPTER` | `paseo-opencode` | fake or live adapter |
+| Fake alias | `PLUTO_FAKE_LIVE` | off | alias for fake adapter |
+| Provider | `PASEO_PROVIDER` | `opencode` | paseo provider alias |
+| Model | `PASEO_MODEL` | `opencode/minimax-m2.5-free` | model id |
+| Mode | `PASEO_MODE` | `orchestrator` | paseo launch mode |
+| Host | `PASEO_HOST` | local socket | explicit paseo daemon host |
+| Binary | `PASEO_BIN` | `paseo` | paseo CLI path |
+| Scenario | `PLUTO_SCENARIO` | `hello-team` | scenario selection |
+| Run profile | `PLUTO_RUN_PROFILE` | `fake-smoke` | run-profile selection |
+| Playbook | `PLUTO_PLAYBOOK` | scenario default | playbook override |
+| Workspace | `PLUTO_LIVE_WORKSPACE` | auto | live workspace override |
+| OpenCode debug | `OPENCODE_BASE_URL` | unset | optional debug endpoint |
 
-## CLI Surfaces
+## CLI surfaces
 
-- `pnpm pluto:run --scenario <name> --run-profile <name> [--workspace <path>]` is the mainline runtime entrypoint for the four-layer team-lead-owned orchestration (v1.5).
-- `pnpm runs list/show/events/artifact/evidence` all read from `.pluto/runs/`.
-- `pnpm runs events --follow` is a real file-backed follow mode over `events.jsonl`, with role/kind/since filters applied to each poll.
-- `pnpm runs evidence` degrades gracefully for pre-evidence runs instead of failing.
-- `pnpm observability` and `pnpm ops` are local read-only operator query surfaces backed by Store-managed readiness data; detailed schemas stay in `src/contracts/observability.ts`, `src/contracts/ops.ts`, and `src/ops/upgrade-events.ts`.
-
-## For New Agents
-
-1. Read **AGENTS.md** for repo map and workflow.
-2. Read **ARCHITECTURE.md** for module responsibilities.
-3. Make minimal changes, add regression test in `tests/`.
-4. Run `pnpm verify` before stopping.
-5. Update docs only if behavior changed.
+- `pnpm pluto:run --scenario <name> --run-profile <name> [--workspace <path>]`
+- `pnpm runs list/show/events/artifact/evidence`
+- `pnpm smoke:fake`
+- `pnpm smoke:local`
+- `pnpm smoke:live`
+- `pnpm verify`

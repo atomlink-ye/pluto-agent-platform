@@ -2,25 +2,29 @@
 
 Quick reference for agents joining this repo. Keep changes focused and observable.
 
-Regression-fix iteration note: the default runtime path is now the four-layer manager-run harness (`src/orchestrator/manager-run-harness.ts`) driven by authored `Agent`/`Playbook`/`Scenario`/`RunProfile` YAML. The v1.5 mainline is team-lead-owned orchestration: the lead spawns workers directly via `paseo run` and Pluto observes STAGE/DEVIATION events. Both the legacy `lead_marker` bridge (`TeamRunService`) and the v1 `lead-intent compatibility bridge` remain quarantined fallbacks only.
+v1.6 runtime note: the default and only runtime path is the four-layer manager-run
+harness (`src/orchestrator/manager-run-harness.ts`) with Claude-Code-Agent-Teams-aligned
+coordination: mailbox + shared task list + active hooks + plan-approval round-trip.
+Paseo chat is the mailbox transport; Pluto mirrors mailbox/task-list state into the run
+directory for evidence.
 
 ## Repo Map
 
-```
+```text
 src/
-  contracts/      #types + PaseoTeamAdapter interface
-  orchestrator/   #manager-run harness, RunStore, legacy TeamRunService, static team config
+  contracts/      # types + PaseoTeamAdapter interface
+  orchestrator/   # manager-run harness, RunStore, static team config
   adapters/
-    fake/                #in-process deterministic adapter
-    paseo-opencode/      #live adapter (Paseo CLI + OpenCode)
-  cli/run.ts           #pnpm pluto:run CLI
-  cli/submit.ts        #legacy compatibility CLI
+    fake/         # deterministic in-memory mailbox/task runtime
+    paseo-opencode/ # live adapter (Paseo CLI + OpenCode)
+  cli/run.ts      # pnpm pluto:run CLI
+  cli/submit.ts   # legacy compatibility CLI
 
-tests/            #vitest specs (unit + E2E)
-docker/           #compose.yml, runtime, live-smoke.ts
-docs/            #harness.md, testing-and-evals.md, mvp-alpha.md, qa-checklist.md
-scripts/         #verify.mjs
-evals/           #cases, rubrics, goldens, reports, datasets
+tests/            # vitest specs (unit + E2E)
+docker/           # compose.yml, runtime, live-smoke.ts
+docs/             # harness.md, testing-and-evals.md, mvp-alpha.md, qa-checklist.md
+scripts/          # verify.mjs
+evals/            # cases, rubrics, goldens, reports, datasets
 ```
 
 ## Source-of-Truth Order
@@ -59,22 +63,25 @@ Every evaluation, checklist, review, or acceptance pass must include a repositor
 
 ```bash
 # Fast local gates (no Docker, no live runtime)
-pnpm typecheck          #TypeScript strict
-pnpm test               #vitest run
-pnpm build              #dist/ output
+pnpm typecheck
+pnpm test
+pnpm build
 pnpm pluto:run --scenario hello-team --run-profile fake-smoke --workspace .tmp/pluto-cli
-pnpm smoke:fake         #fake adapter E2E
+pnpm smoke:fake
 
-# Full verify (includes fast gates + no-paseo blocker)
+# Full verify
 pnpm verify
 
-# Live smoke (no Docker required)
-pnpm smoke:local        #host Paseo + OpenCode (no Docker; TeamLead-direct default)
-pnpm smoke:live         #set PASEO_HOST for explicit daemon; OPENCODE_BASE_URL optional debug
-pnpm smoke:docker      #Docker stack + live smoke
+# Live smoke
+pnpm smoke:local
+pnpm smoke:live
+pnpm smoke:docker
 ```
 
-Live smoke defaults to scenario `hello-team` and run profile `fake-smoke`; override with `PLUTO_SCENARIO`, `PLUTO_RUN_PROFILE`, or `PLUTO_PLAYBOOK`. Preferred host artifact root is `/Volumes/AgentsWorkspace/tmp/pluto-regression-fix/live-quickstart/`; `docker/live-smoke.ts` falls back to `<repo>/.tmp/live-quickstart/` when `/Volumes/AgentsWorkspace/` is unavailable or not writable.
+See `docs/harness.md` for the canonical live-smoke knob table (`PASEO_PROVIDER`,
+`PASEO_MODEL`, `PASEO_MODE`, `PASEO_HOST`, `PLUTO_SCENARIO`, `PLUTO_RUN_PROFILE`,
+`PLUTO_PLAYBOOK`, `PLUTO_LIVE_WORKSPACE`, `PLUTO_LIVE_ADAPTER`, `PLUTO_FAKE_LIVE`,
+`PASEO_BIN`, `OPENCODE_BASE_URL`).
 
 ## Placement Rules
 
@@ -82,7 +89,7 @@ Live smoke defaults to scenario `hello-team` and run profile `fake-smoke`; overr
 |------|-------|-------|
 | Unit tests | `tests/*.test.ts` | Fast, no I/O, deterministic |
 | Integration/smoke | `tests/*.test.ts` or `docker/live-smoke.ts` | Use fake adapter |
-| Live E2E | `docker/live-smoke.ts` | Requires paseo CLI; PASEO_HOST selects explicit daemon; OPENCODE_BASE_URL optional debug |
+| Live E2E | `docker/live-smoke.ts` | Requires paseo CLI |
 | Eval cases | `evals/cases/` | Model/workflow quality |
 | Rubrics | `evals/rubrics/` | Scoring criteria |
 | Golden outputs | `evals/goldens/` | Reference artifacts |
@@ -93,11 +100,11 @@ Live smoke defaults to scenario `hello-team` and run profile `fake-smoke`; overr
 
 ## Documentation Sync Rules
 
-- Behavior change → update docs/harness.md summary
-- Contract change → update docs/mvp-alpha.md and src/contracts/
-- Quality criteria change → update QUALITY_SCORE.md
-- Reliability policy change → update RELIABILITY.md
-- Workflow/product-shape change → update relevant docs/design-docs and plan records
+- Behavior change → update `docs/harness.md`
+- Contract change → update `docs/mvp-alpha.md` and `src/contracts/`
+- Quality criteria change → update `QUALITY_SCORE.md`
+- Reliability policy change → update `RELIABILITY.md`
+- Workflow/product-shape change → update relevant `docs/design-docs/` and plan records
 - Live smoke knob/path change → update `README.md`, `docs/harness.md`, `docs/qa-checklist.md`, and `docs/testing-and-evals.md`
 - Never duplicate docs. Point to canonical sources.
 

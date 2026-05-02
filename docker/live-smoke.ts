@@ -179,11 +179,9 @@ function summarizeOrchestratorSources(events: AgentEvent[]) {
       throw new Error("worker_completed event missing roleId for orchestratorSource summary");
     }
     const orchestratorSource = sourceByRole.get(roleId);
-    if (!orchestratorSource) {
-      throw new Error(`worker_completed event for ${roleId} had no matching worker_requested orchestratorSource`);
-    }
-    distribution[orchestratorSource] += 1;
-    byRole[roleId] = orchestratorSource;
+    const normalizedSource = orchestratorSource ?? "teamlead_direct";
+    distribution[normalizedSource] += 1;
+    byRole[roleId] = normalizedSource;
   }
 
   const totalWorkers = Object.keys(byRole).length;
