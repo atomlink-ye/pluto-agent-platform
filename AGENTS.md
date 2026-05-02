@@ -2,18 +2,19 @@
 
 Quick reference for agents joining this repo. Keep changes focused and observable.
 
-Regression-fix iteration note: the default orchestration path is `teamlead_direct`; `lead_marker` remains a legacy/fallback lane. Remote implementation slices in this iteration run under an OpenCode root manager using `openai/gpt-5.4` with thinking `high` and orchestrator/build-style execution depending on the lane. The shipped `teamlead_direct` lane is a Pluto-mediated bridge: Pluto enforces the TeamLead-authored playbook deterministically until an adapter/runtime can honor true host-side `spawnTeammate()` delegation.
+Regression-fix iteration note: the default runtime path is now the four-layer manager-run harness (`src/orchestrator/manager-run-harness.ts`) driven by authored `Agent`/`Playbook`/`Scenario`/`RunProfile` YAML. The shipped harness is still a lead-intent compatibility bridge: Pluto waits for adapter-emitted lead delegation intent, then performs the mechanical worker launch/spawn fallback. `TeamRunService` remains a legacy/quarantined compatibility lane only.
 
 ## Repo Map
 
 ```
 src/
   contracts/      #types + PaseoTeamAdapter interface
-  orchestrator/   #TeamRunService, RunStore, static team config
+  orchestrator/   #manager-run harness, RunStore, legacy TeamRunService, static team config
   adapters/
     fake/                #in-process deterministic adapter
     paseo-opencode/      #live adapter (Paseo CLI + OpenCode)
-  cli/submit.ts         #pnpm submit CLI
+  cli/run.ts           #pnpm pluto:run CLI
+  cli/submit.ts        #legacy compatibility CLI
 
 tests/            #vitest specs (unit + E2E)
 docker/           #compose.yml, runtime, live-smoke.ts
@@ -61,6 +62,7 @@ Every evaluation, checklist, review, or acceptance pass must include a repositor
 pnpm typecheck          #TypeScript strict
 pnpm test               #vitest run
 pnpm build              #dist/ output
+pnpm pluto:run --scenario hello-team --run-profile fake-smoke --workspace .tmp/pluto-cli
 pnpm smoke:fake         #fake adapter E2E
 
 # Full verify (includes fast gates + no-paseo blocker)
@@ -72,7 +74,7 @@ pnpm smoke:live         #set PASEO_HOST for explicit daemon; OPENCODE_BASE_URL o
 pnpm smoke:docker      #Docker stack + live smoke
 ```
 
-Live smoke defaults to `PASEO_ORCHESTRATION_MODE=teamlead_direct`. Use `PASEO_ORCHESTRATION_MODE=lead_marker` to exercise the quarantined legacy fallback lane. `PASEO_TEAM_PLAYBOOK` selects `teamlead-direct-default-v0` or `teamlead-direct-research-review-v0`; see `docs/harness.md` for the canonical full live-smoke knob table. Preferred host artifact root is `/Volumes/AgentsWorkspace/tmp/pluto-regression-fix/live-quickstart/`; `docker/live-smoke.ts` falls back to `<repo>/.tmp/live-quickstart/` when `/Volumes/AgentsWorkspace/` is unavailable or not writable.
+Live smoke defaults to scenario `hello-team` and run profile `fake-smoke`; override with `PLUTO_SCENARIO`, `PLUTO_RUN_PROFILE`, or `PLUTO_PLAYBOOK`. Preferred host artifact root is `/Volumes/AgentsWorkspace/tmp/pluto-regression-fix/live-quickstart/`; `docker/live-smoke.ts` falls back to `<repo>/.tmp/live-quickstart/` when `/Volumes/AgentsWorkspace/` is unavailable or not writable.
 
 ## Placement Rules
 

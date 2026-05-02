@@ -1,0 +1,17 @@
+name: research-review
+description: Planner to generator to evaluator, finalized by the lead.
+team_lead: lead
+members: [planner, generator, evaluator]
+workflow: |-
+  As team lead:
+  1. Request a plan from planner.
+  2. Request an artifact draft from generator.
+  3. Request a verdict from evaluator.
+  4. Write the final summary with role citations.
+audit:
+  required_roles: [planner, generator, evaluator]
+  max_revision_cycles: 1
+  final_report_sections:
+    - workflow_steps_executed
+    - required_role_citations
+    - deviations

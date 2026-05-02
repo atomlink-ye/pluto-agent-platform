@@ -130,13 +130,13 @@ describe("repo-harness", () => {
       expect(content).toContain('.tmp/live-quickstart');
     });
 
-    it("live smoke defaults to teamlead_direct and exposes citation enforcement knob", async () => {
+    it("live smoke defaults to the checked-in four-layer scenario and run profile", async () => {
       const content = await readFile(
         resolve(PROJECT_ROOT, "docker/live-smoke.ts"),
         "utf-8"
       );
-      expect(content).toContain('process.env["PASEO_ORCHESTRATION_MODE"] ?? "teamlead_direct"');
-      expect(content).toContain('process.env["PASEO_REQUIRE_CITATIONS"]');
+      expect(content).toContain('process.env["PLUTO_SCENARIO"] ?? "hello-team"');
+      expect(content).toContain('process.env["PLUTO_RUN_PROFILE"] ?? "fake-smoke"');
     });
   });
 

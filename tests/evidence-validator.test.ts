@@ -115,4 +115,22 @@ describe("validateEvidencePacketV0", () => {
 
     expect(result.ok).toBe(true);
   });
+
+  it("rejects provider-specific transcript kinds in core evidence contracts", () => {
+    const result = validateEvidencePacketV0({
+      ...makePacket(),
+      orchestration: {
+        playbookId: "playbook-1",
+        orchestrationSource: "teamlead_direct",
+        transcript: {
+          kind: "paseo_chat",
+          path: "/tmp/transcript.jsonl",
+          roomRef: "room-1",
+        },
+      },
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.ok ? [] : result.errors).toContain("orchestration.transcript.kind must be file or shared_channel");
+  });
 });

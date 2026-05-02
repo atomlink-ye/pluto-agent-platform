@@ -113,7 +113,7 @@ export interface TeamPlaybookValidationResultV0 {
 }
 
 export interface CoordinationTranscriptRefV0 {
-  kind: "file" | "paseo_chat";
+  kind: "file" | "shared_channel";
   path: string;
   roomRef: string;
 }

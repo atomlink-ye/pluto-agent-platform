@@ -7,17 +7,18 @@ and [Portable Workflow Contract](https://ocnb314kma1f.feishu.cn/wiki/G4Y8w2cgliV
 
 ## Runtime boundary
 
-Pluto is the harness and observer. The `team_lead` Agent is the orchestrator.
-Member Agents are spawned by `team_lead` via the Paseo CLI directly. Pluto does
-not bridge spawning, does not topologically sort stages, and does not parse
-legacy marker requests as part of the canonical manager-run harness.
+Pluto is the harness and observer. The `team_lead` Agent still authors the
+orchestration decisions, but the shipped v1 manager-run path is a lead-intent
+compatibility bridge: adapters surface lead delegation intent to Pluto, and
+Pluto performs the mechanical worker launch/spawn fallback in observed order.
+Legacy marker requests remain quarantined fallback-only.
 
 This boundary keeps responsibilities clear. Pluto loads and validates the four
 YAML layers, renders prompts, enforces gates, launches the team lead, observes
 contracted surfaces, runs acceptance commands, validates artifacts, redacts
 evidence, and emits an EvidencePacket. The team lead decides how to execute the
-Playbook workflow narrative and coordinates members in the shared Paseo chat
-room.
+Playbook workflow narrative; Pluto should report the current bridge honestly
+until true TeamLead-owned child spawning is delivered.
 
 ## Manager-run harness path (the new code path)
 
@@ -32,27 +33,30 @@ room.
    specialization/knowledge/rubric where applicable, then Task last.
 5. Render member prompts in the same stack order, without Available Roles or
    Workflow. Members do not receive the team roster or orchestration narrative.
-6. Apply pre-launch gates such as `manual_gate`, missing required reads, or
-   workspace not ready.
-7. Materialize the worktree per `RunProfile.workspace.worktree`.
-8. Launch `team_lead` via
+6. Apply pre-launch gates and fail-closed runtime policy checks before
+   materializing workspace state.
+7. Verify repo required reads stay contained to the declared repo root.
+8. Materialize the supported workspace/run directories.
+9. Launch `team_lead` via
    `paseo run --detach --json --provider <agent.provider> ...`, passing the
-   rendered prompt and a Paseo chat room handle.
-9. Include spawn command templates for each available member role in the
-   team-lead prompt so the lead can launch members directly through Paseo.
-10. Tail `paseo logs --filter text` for team-lead stdout.
-11. Observe the shared chat room for `STAGE` and `DEVIATION` events.
-12. After `team_lead` exits, run `RunProfile.acceptance_commands`; honor
+   rendered prompt and the transcript / coordination handle.
+10. Wait for adapter-emitted worker delegation intent from the lead, then launch
+    workers through the mechanical bridge in the observed order.
+11. Tail `paseo logs --filter text` for team-lead stdout.
+12. Synthesize workflow/deviation traces from routed worker intent/completions
+    plus any explicit lead `DEVIATION:` output. v1 does not yet observe a live
+    STAGE/DEVIATION room stream.
+13. After `team_lead` exits, run `RunProfile.acceptance_commands`; honor
     `blocker_ok` flags while still recording the result.
-13. Validate `RunProfile.artifact_contract.required_files` and each declared
+14. Validate `RunProfile.artifact_contract.required_files` and each declared
     `required_sections` entry.
-14. Validate `RunProfile.stdout_contract.required_lines` against team-lead
+15. Validate `RunProfile.stdout_contract.required_lines` against team-lead
     stdout.
-15. Validate `STAGE` coverage and final-report citations against
+16. Validate synthesized transition coverage and final-report citations against
     `Playbook.audit.required_roles` and `final_report_sections`.
-16. Validate revision-loop count against `Playbook.audit.max_revision_cycles`.
-17. Apply redaction per `RunProfile.secrets` and security policy.
-18. Emit an EvidencePacket aggregating events, file checkpoints, command
+17. Validate revision-loop count against `Playbook.audit.max_revision_cycles`.
+18. Apply redaction per `RunProfile.secrets` and security policy.
+19. Emit an EvidencePacket aggregating events, file checkpoints, command
     outputs, stdout matches, revision summary, redaction summary, and audit
     status.
 
@@ -62,8 +66,9 @@ Three observable surfaces must agree:
 
 - **Files**: every required file exists and contains required sections.
 - **Stdout**: every required line or regex appears in team-lead stdout.
-- **Events**: `STAGE` and `DEVIATION` events are emitted to the chat room; the
-  final report cites them in the required sections.
+- **Workflow/deviation trace**: the shipped v1 bridge records routed worker
+  intent/completions plus any explicit lead `DEVIATION:` output, and the final
+  report cites that synthesized trace honestly.
 
 Validation is fail-closed. Missing any required file, required section, stdout
 match, event citation, required role citation, or justified deviation marks the
@@ -126,9 +131,10 @@ Pluto as a deterministic dispatcher that reacted to marker requests from a lead
 session and launched workers on the lead's behalf.
 
 The canonical model supersedes that path. The new harness lives in a parallel
-code path where the team lead owns orchestration and uses Paseo directly.
-Legacy `TeamRunService` remains available for back-compat during transition;
-new development should target the manager-run harness.
+code path where the team lead owns the orchestration decisions, but Pluto still
+bridges the mechanical spawn in v1. Legacy `TeamRunService` remains available
+for back-compat during transition; new development should target the manager-run
+harness.
 
 ## Run lifecycle states
 
@@ -162,18 +168,19 @@ Pluto's runtime responsibility mirrors the canonical model:
 1. Load Agent + Playbook + Scenario + RunProfile.
 2. Validate references, caps, and required reads.
 3. Render team-lead and member prompts according to the canonical stack order.
-4. Enforce `RunProfile.approval_gates.pre_launch` if enabled.
-5. Materialize the worktree per `RunProfile.workspace.worktree`.
+4. Fail closed on unsupported runtime policy before workspace materialization.
+5. Materialize the supported workspace/run directories.
 6. Launch team lead via `paseo run --detach --json --provider <agent.provider>
-   ...`, passing the rendered system prompt and chat room handle.
-7. Tail `paseo logs --filter text` and the chat room for stdout,
-   `STAGE`, and `DEVIATION` events.
+   ...`, passing the rendered system prompt and transcript / coordination
+   handle.
+7. Wait for adapter-emitted delegation intent and perform the mechanical worker
+   launch fallback in observed order.
 8. After team lead exits, run `RunProfile.acceptance_commands` and validate
-   `artifact_contract`, `stdout_contract`, role citations, event citations, and
-   revision cap.
-9. Emit an EvidencePacket aggregating chat events, file checkpoints, command
-   outputs, stdout matches, final-report citations, revision summary, and
-   redaction summary.
+   `artifact_contract`, `stdout_contract`, synthesized routing transitions,
+   final-report citations, and revision cap.
+9. Emit an EvidencePacket aggregating routed transitions, file checkpoints,
+   command outputs, stdout matches, final-report citations, revision summary,
+   and redaction summary.
 
 Pluto must not silently heal missing evidence by trusting the final summary. It
 must not expose raw provider sessions as decision-grade evidence. It must keep

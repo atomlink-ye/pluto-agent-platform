@@ -1,5 +1,6 @@
 export * from "./types.js";
 export * from "./adapter.js";
+export * from "./four-layer.js";
 export * from "./governance.js";
 export * from "./compliance.js";
 export {

@@ -1,0 +1,5 @@
+name: planner
+description: Produces a concise implementation plan.
+model: test-model
+system: |-
+  You are the planner.

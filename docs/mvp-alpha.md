@@ -2,35 +2,49 @@
 
 ## Goal
 
-Prove the smallest closed loop where Pluto, Paseo, and an OpenCode runtime cooperate to run an agent team led by a Team Lead.
+Prove the smallest closed loop where Pluto loads authored `Agent`, `Playbook`, `Scenario`, and `RunProfile` objects, renders a four-layer run, launches it through a manager-run harness, and emits audit-grade evidence.
+
+## Mainline runtime
+
+- Mainline entrypoint: `src/orchestrator/manager-run-harness.ts`
+- Mainline CLI: `src/cli/run.ts` (`pnpm pluto:run ...`)
+- Mainline evidence: `.pluto/runs/<runId>/evidence-packet.{md,json}`
+- Mainline orchestration mode: lead-intent compatibility bridge — the harness waits for adapter-emitted lead delegation intent, then performs the mechanical worker launch/spawn fallback.
+- Compatibility-only path: `TeamRunService`, `pnpm submit`, and legacy `EvidencePacketV0` readers
 
 ## Objects
 
 | Object | Where it lives | Notes |
 | --- | --- | --- |
-| `TeamTask` | submitted by user, kept in-memory only | id, title, prompt, workspace path, minWorkers >= 2 |
-| `TeamConfig` | `src/orchestrator/team-config.ts` | static `DEFAULT_TEAM` with lead + planner + generator + evaluator |
-| `AgentRoleConfig` | `src/contracts/types.ts` | id, kind, system prompt |
+| `Agent` | `agents/*.yaml` | authored role/system/model definition |
+| `Playbook` | `playbooks/*.yaml` | authored team composition + workflow + audit policy |
+| `Scenario` | `scenarios/*.yaml` | authored task specialization and overlays |
+| `RunProfile` | `run-profiles/*.yaml` | authored workspace + acceptance + artifact/stdout policy |
+| `Run` | `.pluto/runs/<runId>/` | materialized runtime record for the selected four-layer stack |
+| `EvidencePacket` | `.pluto/runs/<runId>/evidence-packet.{md,json}` | canonical evidence packet for command outputs, transitions, artifact refs, and citations |
+| `TeamTask` | compatibility bridge only | still used to drive legacy `EvidencePacketV0` writes and older adapter seams |
+| `TeamConfig` | compatibility bridge only | synthesized by the harness when an adapter still expects the legacy seam |
+| `AgentRoleConfig` | `src/contracts/types.ts` | legacy adapter-facing role contract |
 | `AgentSession` | adapter-owned | opaque sessionId; adapter-specific `external` payload |
 | `AgentEvent` | `.pluto/runs/<runId>/events.jsonl` | append-only JSONL |
-| `FinalArtifact` | `.pluto/runs/<runId>/artifact.md` | markdown produced by the lead, contains worker contributions |
-| `EvidencePacketV0` | `.pluto/runs/<runId>/evidence.{md,json}` | redacted persisted evidence packet |
+| `FinalArtifact` | `.pluto/runs/<runId>/artifact.md` | markdown produced by the run |
+| `EvidencePacketV0` | `.pluto/runs/<runId>/evidence.{md,json}` | compatibility evidence packet for legacy readers |
 
 ## Contract
 
-`PaseoTeamAdapter` (`src/contracts/adapter.ts`):
+`PaseoTeamAdapter` (`src/contracts/adapter.ts`) remains the only runtime seam the four-layer harness uses when launching a run:
 
 | Method | Responsibility |
 | --- | --- |
 | `startRun` | bootstrap per-run state |
-| `createLeadSession` | create Team Lead; emit `lead_started` and the lead's `worker_requested` events |
-| `createWorkerSession` | create worker; emit `worker_started` then `worker_completed` with the worker's output |
+| `createLeadSession` | create Team Lead; emit `lead_started` and surface lead-originated delegation intent as `worker_requested` events |
+| `createWorkerSession` | create worker only after the harness has observed lead intent; emit `worker_started` then `worker_completed` with the worker's output |
 | `sendMessage` | forward operator/orchestrator messages to a session (MVP: lead only) |
 | `readEvents` | drain buffered events in arrival order |
 | `waitForCompletion` | block until the run is terminal |
 | `endRun` | tear down processes, watchers, sessions |
 
-The orchestrator owns lifecycle events: `run_started`, `artifact_created`, `run_completed`, `run_failed`. Adapters never emit those four.
+The harness owns lifecycle events: `run_started`, `artifact_created`, `run_completed`, `run_failed`. Adapters never emit those four.
 
 Persistence note: adapters may attach in-memory `transient.rawPayload` fields to events so orchestration can read unredacted `instructions`, `output`, or `markdown` during the active run. `RunStore` strips that transient object and redacts payloads before any event is written to `events.jsonl`.
 
@@ -54,7 +68,8 @@ A run is acceptable iff:
 
 1. `events.jsonl` contains at least one `run_started`, `lead_started`, two `worker_started`, two `worker_completed`, one `lead_message` of `kind="summary"`, one `artifact_created`, one terminal `run_completed`.
 2. `artifact.md` exists and references each contributing worker role by name.
-3. The final `TeamRunResult.contributions` length is `>= max(team.workers, task.minWorkers)`.
+3. `evidence-packet.json` exists and records command outputs, transitions, artifact refs, and role citations.
+4. Compatibility `evidence.json` still validates against `EvidencePacketV0` for existing readers.
 
 ## Non-goals
 
@@ -64,6 +79,15 @@ A run is acceptable iff:
 - No marketplace / playbook / harness governance.
 - No paid models without explicit authorization.
 - No copy of the legacy monorepo into `main`.
+
+## Canonical four-layer contract and runtime
+
+- `src/contracts/four-layer.ts` defines the runtime-neutral authored/object surfaces for `Agent`, `Playbook`, `Scenario`, `RunProfile`, `Run`, and `EvidencePacket`.
+- `src/four-layer/loader.ts` loads and validates the authored YAML stack.
+- `src/four-layer/render.ts` renders prompts in canonical order.
+- `src/four-layer/acceptance-runner.ts` and `src/four-layer/audit-middleware.ts` enforce fail-closed post-run checks.
+- `src/four-layer/evidence-packet.ts` aggregates the canonical evidence packet and lineage.
+- `src/orchestrator/manager-run-harness.ts` is the main runtime path that ties those primitives together through a lead-intent compatibility bridge rather than true runtime-owned child spawning.
 
 ## Where each phase lives
 
@@ -130,7 +154,7 @@ MVP-beta builds on top of the merged MVP-alpha runtime (PR #60) to add run inspe
 
 ### Backward compatibility
 
-- `pnpm submit` unchanged in default mode
+- `pnpm submit` remains available only as a legacy compatibility surface
 - Old MVP-alpha runs without evidence files remain listable/showable
 - Slice #1 blocker aliases normalize on read/display (`worker_timeout` → `runtime_timeout`; `quota_or_model_error` → `quota_exceeded` for quota/rate-limit/payment cases, otherwise `runtime_error`)
 - Existing event shapes and adapter contract remain additive; new transient raw payload fields are in-memory only and never part of persisted v0 JSONL/CLI output

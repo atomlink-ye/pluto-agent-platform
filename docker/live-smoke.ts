@@ -2,9 +2,10 @@
 /**
  * Pluto MVP-alpha live smoke.
  *
- * Submits a fixed team task to the live PaseoOpenCodeAdapter and asserts:
- *   - Team Lead session was created.
- *   - At least 2 worker sessions completed.
+ * Runs the checked-in four-layer scenario/run-profile through the manager-run
+ * harness and asserts:
+ *   - The Team Lead session was created.
+ *   - The canonical evidence packet was written.
  *   - The final artifact references each contributing role.
  *
  * Architecture note:
@@ -32,13 +33,12 @@ import * as process from "node:process";
 import { FakeAdapter } from "../src/adapters/fake/index.js";
 import { PaseoOpenCodeAdapter } from "../src/adapters/paseo-opencode/index.js";
 import { DEFAULT_RUNNER } from "../src/adapters/paseo-opencode/process-runner.js";
-import { DEFAULT_TEAM, RunStore, TeamRunService, normalizeBlockerReason, selectTeamPlaybook, validateEvidencePacketV0 } from "../src/orchestrator/index.js";
-import type { PaseoTeamAdapter } from "../src/contracts/adapter.js";
+import { normalizeBlockerReason, runManagerHarness, validateEvidencePacketV0 } from "../src/orchestrator/index.js";
+import type { EvidencePacket } from "../src/contracts/four-layer.js";
 import type {
   AgentEvent,
   BlockerReasonV0,
   EvidencePacketV0,
-  OrchestrationMode,
   WorkerRequestedOrchestratorSource,
 } from "../src/contracts/types.js";
 
@@ -48,11 +48,9 @@ function normalizePaseoHostForCli(host: string | undefined): string | undefined 
   return trimmed.replace(/^https?:\/\//i, "");
 }
 
-const REQUESTED_PLAYBOOK_ID = process.env["PASEO_TEAM_PLAYBOOK"];
-const REQUESTED_ORCHESTRATION_MODE = ((process.env["PASEO_ORCHESTRATION_MODE"] ?? "teamlead_direct") === "teamlead_direct"
-  ? "teamlead_direct"
-  : "lead_marker") as OrchestrationMode;
-const REQUIRE_CITATIONS = process.env["PASEO_REQUIRE_CITATIONS"] === "1" || process.env["PASEO_REQUIRE_CITATIONS"]?.toLowerCase() === "true";
+const REQUESTED_SCENARIO = process.env["PLUTO_SCENARIO"] ?? "hello-team";
+const REQUESTED_RUN_PROFILE = process.env["PLUTO_RUN_PROFILE"] ?? "fake-smoke";
+const REQUESTED_PLAYBOOK = process.env["PLUTO_PLAYBOOK"];
 const ADAPTER_KIND: "paseo-opencode" | "fake" = (() => {
   // Two equivalent ways to opt in to fake mode:
   //   PLUTO_LIVE_ADAPTER=fake   (the canonical knob)
@@ -297,58 +295,34 @@ async function main() {
     process.exit(2);
   }
 
-  const adapter: PaseoTeamAdapter =
-    ADAPTER_KIND === "fake"
-      ? new FakeAdapter({ team: DEFAULT_TEAM })
-      : new PaseoOpenCodeAdapter({ workspaceCwd: WORKSPACE });
-
-  const store = new RunStore({ dataDir: DATA_DIR });
-  const service = new TeamRunService({
-    adapter,
-    team: DEFAULT_TEAM,
-    store,
-    timeoutMs: 8 * 60 * 1000,
-    pumpIntervalMs: 250,
-  });
-  const selectedPlaybook = selectTeamPlaybook(DEFAULT_TEAM, REQUESTED_PLAYBOOK_ID);
-  const expectedWorkerRoles = selectedPlaybook.stages.map((stage) => stage.roleId);
+  const expectedWorkerRoles = ["planner", "generator", "evaluator"];
 
   const startedAt = Date.now();
-  const result = await service.run({
-    id: `live-smoke-${startedAt}`,
-    title: "Pluto MVP-alpha hello team",
-    prompt:
-      "Produce a markdown file that says hello from the team lead, planner, generator, and evaluator (one line each).",
-    workspacePath: WORKSPACE,
-    artifactPath: ARTIFACT_PATH,
-    minWorkers: 2,
-    playbookId: selectedPlaybook.id,
-    orchestrationMode: REQUESTED_ORCHESTRATION_MODE,
+  const result = await runManagerHarness({
+    rootDir: process.cwd(),
+    selection: {
+      scenario: REQUESTED_SCENARIO,
+      runProfile: REQUESTED_RUN_PROFILE,
+      ...(REQUESTED_PLAYBOOK ? { playbook: REQUESTED_PLAYBOOK } : {}),
+      runtimeTask: "Produce a markdown file that says hello from the lead, planner, generator, and evaluator (one line each).",
+    },
+    workspaceOverride: WORKSPACE,
+    dataDir: DATA_DIR,
+    createAdapter: ({ team, workspaceCwd }) => ADAPTER_KIND === "fake"
+      ? new FakeAdapter({ team })
+      : new PaseoOpenCodeAdapter({ workspaceCwd }),
   });
-  const runCompletedEvent = [...result.events].reverse().find((event) => event.type === "run_completed");
-  const dependencyTrace = Array.isArray(runCompletedEvent?.payload["dependencyTrace"])
-    ? runCompletedEvent?.payload["dependencyTrace"]
-    : [];
-  const revisions = Array.isArray(runCompletedEvent?.payload["revisions"])
-    ? runCompletedEvent?.payload["revisions"]
-    : [];
-  const escalation = typeof runCompletedEvent?.payload["escalation"] === "object" && runCompletedEvent.payload["escalation"] !== null
-    ? runCompletedEvent.payload["escalation"]
-    : null;
-  const finalReconciliation = typeof runCompletedEvent?.payload["finalReconciliation"] === "object" && runCompletedEvent.payload["finalReconciliation"] !== null
-    ? runCompletedEvent.payload["finalReconciliation"]
-    : null;
 
   let orchestratorSources: ReturnType<typeof summarizeOrchestratorSources>;
   try {
-    orchestratorSources = summarizeOrchestratorSources(result.events);
+    orchestratorSources = summarizeOrchestratorSources(result.legacyResult.events);
   } catch (error) {
     console.error(
       JSON.stringify(
         {
           status: "assertion_failed",
           message: error instanceof Error ? error.message : String(error),
-          runId: result.runId,
+          runId: result.run.runId,
         },
         null,
         2,
@@ -358,34 +332,32 @@ async function main() {
   }
 
   let summary: Record<string, unknown> = {
-    runId: result.runId,
-    status: result.status,
+    runId: result.run.runId,
+    status: result.run.status,
     elapsedMs: Date.now() - startedAt,
     workspace: workspaceSelection,
-    orchestrationMode: REQUESTED_ORCHESTRATION_MODE,
-    dependencyTrace,
-    revisions,
-    escalation,
-    finalReconciliation,
-    requestedPlaybookId: selectedPlaybook.id,
+    scenario: REQUESTED_SCENARIO,
+    runProfile: REQUESTED_RUN_PROFILE,
+    requestedPlaybook: REQUESTED_PLAYBOOK ?? null,
     expectedWorkerRoles,
-    contributions: result.artifact?.contributions.map((c) => ({
+    contributions: result.legacyResult.artifact?.contributions.map((c) => ({
       roleId: c.roleId,
       chars: c.output.length,
     })),
-    artifactPath: `${store.runDir(result.runId)}/artifact.md`,
-    eventsPath: `${store.runDir(result.runId)}/events.jsonl`,
+    artifactPath: result.artifactPath,
+    eventsPath: `${result.runDir}/events.jsonl`,
     orchestratorSources,
   };
 
   // --- MVP-beta evidence assertions ---
-  const evidenceMdPath = `${store.runDir(result.runId)}/evidence.md`;
-  const evidenceJsonPath = `${store.runDir(result.runId)}/evidence.json`;
+  const evidenceMdPath = `${result.runDir}/evidence.md`;
+  const evidenceJsonPath = `${result.runDir}/evidence.json`;
+  const evidencePacketPath = result.canonicalEvidencePath;
 
-  if (!existsSync(evidenceMdPath) || !existsSync(evidenceJsonPath)) {
+  if (!existsSync(evidenceMdPath) || !existsSync(evidenceJsonPath) || !existsSync(evidencePacketPath)) {
     console.error(
       JSON.stringify(
-        { status: "assertion_failed", message: "evidence.md or evidence.json missing", summary },
+        { status: "assertion_failed", message: "evidence.md, evidence.json, or evidence-packet.json missing", summary },
         null,
         2,
       ),
@@ -427,40 +399,24 @@ async function main() {
     );
     process.exit(1);
   }
-  if (evidencePacket.orchestration.playbookId !== selectedPlaybook.id) {
-    console.error(
-      JSON.stringify(
-        {
-          status: "assertion_failed",
-          message: "evidence playbookId does not match selected playbook",
-          summary,
-          orchestration: evidencePacket.orchestration,
-        },
-        null,
-        2,
-      ),
-    );
-    process.exit(1);
-  }
+  const canonicalEvidenceRaw = await readFile(evidencePacketPath, "utf8");
+  const canonicalEvidence = JSON.parse(canonicalEvidenceRaw) as EvidencePacket;
   summary = {
     ...summary,
     playbookId: evidencePacket.orchestration.playbookId,
     transcript: evidencePacket.orchestration.transcript,
-    revisions: evidencePacket.orchestration.revisions ?? revisions,
-    escalation: evidencePacket.orchestration.escalation ?? escalation,
-    finalReconciliation: evidencePacket.orchestration.finalReconciliation ?? finalReconciliation,
+    canonicalStatus: canonicalEvidence.status,
+    transitions: canonicalEvidence.transitions ?? [],
+    roleCitations: canonicalEvidence.roleCitations ?? [],
   };
-  if (
-    REQUESTED_ORCHESTRATION_MODE === "teamlead_direct"
-    && (!finalReconciliation || !Array.isArray((finalReconciliation as Record<string, unknown>)["citations"]) || (finalReconciliation as Record<string, unknown>)["valid"] !== true)
-  ) {
+  if ((canonicalEvidence.transitions?.length ?? 0) < 4) {
     console.error(
       JSON.stringify(
         {
           status: "assertion_failed",
-          message: "teamlead_direct citation check did not report all required stage citations",
+          message: "canonical evidence packet recorded too few transitions",
           summary,
-          finalReconciliation,
+          evidencePacket: canonicalEvidence,
         },
         null,
         2,
@@ -468,12 +424,14 @@ async function main() {
     );
     process.exit(1);
   }
-  if (REQUIRE_CITATIONS && (summary["finalReconciliation"] as { valid?: boolean } | undefined)?.valid !== true) {
+  if (!canonicalEvidence.roleCitations?.some((citation) => citation.role === "planner")
+    || !canonicalEvidence.roleCitations?.some((citation) => citation.role === "generator")
+    || !canonicalEvidence.roleCitations?.some((citation) => citation.role === "evaluator")) {
     console.error(
       JSON.stringify(
         {
           status: "assertion_failed",
-          message: "PASEO_REQUIRE_CITATIONS=1 but final reconciliation citations were invalid",
+          message: "canonical evidence packet missing required role citations",
           summary,
         },
         null,
@@ -482,16 +440,12 @@ async function main() {
     );
     process.exit(1);
   }
-  if (
-    REQUESTED_ORCHESTRATION_MODE === "teamlead_direct"
-    && dependencyTrace.map((entry) => (entry as { stageId?: string }).stageId).join(",")
-      !== selectedPlaybook.stages.map((stage) => stage.id).join(",")
-  ) {
+  if (!canonicalEvidence.lineage?.transcriptPath || !existsSync(canonicalEvidence.lineage.transcriptPath)) {
     console.error(
       JSON.stringify(
         {
           status: "assertion_failed",
-          message: "teamlead_direct dependencyTrace is not in playbook topological order",
+          message: "canonical evidence packet transcript path missing or unreadable",
           summary,
         },
         null,
@@ -564,7 +518,7 @@ async function main() {
           status: "failed",
           message: evidenceClassification.message,
           blockerReason: evidenceClassification.blockerReason,
-          failure: result.failure?.message,
+          failure: result.legacyResult.failure?.message,
           summary,
           evidence: { md: evidenceMdPath, json: evidenceJsonPath, orchestration: evidencePacket.orchestration },
         },
@@ -591,13 +545,13 @@ async function main() {
     process.exit(1);
   }
 
-  if ((result.status === "failed") || !result.artifact) {
+  if ((result.legacyResult.status === "failed") || !result.legacyResult.artifact) {
     console.error(
       JSON.stringify(
         {
           status: "failed",
           message: "live smoke evidence reported done but run result is incomplete",
-          failure: result.failure?.message,
+          failure: result.legacyResult.failure?.message,
           summary,
           evidence: { md: evidenceMdPath, json: evidenceJsonPath, orchestration: evidencePacket.orchestration },
         },
@@ -607,10 +561,10 @@ async function main() {
     );
     process.exit(1);
   }
-  const finalArtifact = result.artifact;
+  const finalArtifact = result.legacyResult.artifact;
 
   // Assertions on the artifact content.
-  const artifactMd = await readFile(`${store.runDir(result.runId)}/artifact.md`, "utf8");
+  const artifactMd = await readFile(result.artifactPath ?? `${result.runDir}/artifact.md`, "utf8");
   const requiredRoles = ["lead", ...expectedWorkerRoles];
   const missing = requiredRoles.filter((r) => !artifactMd.toLowerCase().includes(r));
   if (missing.length > 0) {
@@ -642,15 +596,12 @@ async function main() {
     process.exit(1);
   }
 
-  if (
-    REQUESTED_ORCHESTRATION_MODE === "teamlead_direct"
-    && Object.values(orchestratorSources.byRole).some((value) => value !== "teamlead_direct")
-  ) {
+  if (Object.values(orchestratorSources.byRole).some((value) => value !== "teamlead_direct")) {
     console.error(
       JSON.stringify(
         {
           status: "assertion_failed",
-          message: "teamlead_direct run emitted non-teamlead_direct worker_requested source",
+          message: "manager-run harness emitted non-teamlead_direct worker_requested source",
           summary,
         },
         null,

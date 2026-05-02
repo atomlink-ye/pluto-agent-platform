@@ -31,6 +31,7 @@
     "ops": "tsx src/cli/ops.ts",
     "portability": "tsx src/cli/portability.ts",
     "publish": "tsx src/cli/publish.ts",
+    "pluto:run": "tsx src/cli/run.ts",
     "release": "tsx src/cli/release.ts",
     "review": "tsx src/cli/review.ts",
     "runs": "tsx src/cli/runs.ts",

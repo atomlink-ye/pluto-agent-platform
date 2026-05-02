@@ -31,7 +31,11 @@ follow-up recorded.
 - Deterministic with fake adapter
 - Example: `tests/team-run-service.test.ts`
 
-MVP-beta test lanes:
+Mainline four-layer test lanes:
+- `tests/manager-run-harness.test.ts` — checked-in scenario/run-profile exercised end-to-end with the fake adapter
+- `tests/cli/run.test.ts` — `src/cli/run.ts` invocation path for scenario/run-profile execution
+
+Compatibility / MVP-beta test lanes:
 - `tests/blocker-classifier.test.ts` — all 11 canonical `BlockerReasonV0` values plus legacy aliases exercised
 - `tests/team-run-service-recovery.test.ts` — retry semantics, hard cap, no-mutation
 - `tests/evidence.test.ts` — done/blocked/failed packets, schema validation, file writing
@@ -45,14 +49,14 @@ MVP-beta test lanes:
 
 ### Integration/Smoke Tests
 
-- Can use fake adapter: `pnpm smoke:fake`
+- Mainline path uses the four-layer manager-run harness: `pnpm smoke:fake`
 - Runs in CI with Docker when needed: `pnpm smoke:docker`
 - Example: `docker/live-smoke.ts`
 - Live smoke classifies evidence outcomes as:
   - `ok` when evidence status is `done`
   - `partial` only when evidence status is `blocked` for `provider_unavailable` or `quota_exceeded`
   - failure for every other blocked/failed evidence outcome
-  - default mode `teamlead_direct`; use `PASEO_ORCHESTRATION_MODE=lead_marker` only for the quarantined legacy fallback lane
+  - default scenario/run-profile `hello-team` + `fake-smoke`
 
 ### Live E2E
 
@@ -101,6 +105,9 @@ pnpm build
 # Fake adapter E2E
 pnpm smoke:fake
 
+# Direct four-layer CLI invocation
+pnpm pluto:run --scenario hello-team --run-profile fake-smoke --workspace .tmp/pluto-cli
+
 # Deterministic workflow-quality eval (fake adapter, no live calls)
 pnpm eval:workflow
 
@@ -120,10 +127,10 @@ pnpm smoke:local
 PASEO_HOST=localhost:6767 pnpm smoke:live
 OPENCODE_BASE_URL=http://localhost:4096 pnpm smoke:live
 
-# Legacy marker fallback lane, playbook selection, and citation enforcement knobs
-PASEO_ORCHESTRATION_MODE=lead_marker pnpm smoke:live
-PASEO_TEAM_PLAYBOOK=teamlead-direct-research-review-v0 pnpm smoke:live
-PASEO_REQUIRE_CITATIONS=1 pnpm exec tsx docker/live-smoke.ts
+# Four-layer selection knobs
+PLUTO_SCENARIO=hello-team pnpm smoke:live
+PLUTO_RUN_PROFILE=fake-smoke pnpm smoke:live
+PLUTO_PLAYBOOK=research-review pnpm exec tsx docker/live-smoke.ts
 ```
 
 ## Future DB Testing Lane

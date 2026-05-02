@@ -15,6 +15,7 @@ The repo harness is Pluto MVP-alpha's operating environment. It makes work **obs
 | **docs/harness.md** | This file — repo as control surface |
 | **docs/testing-and-evals.md** | Tests vs evals split, placement rules |
 | **scripts/verify.mjs** | Fast local gates (typecheck→test→build→smoke:fake→blocker) |
+| **src/orchestrator/manager-run-harness.ts** | Mainline four-layer harness runtime |
 
 ## Repo Memory (Authoritative Sources)
 
@@ -42,23 +43,25 @@ evals/        # cases, rubrics, goldens, reports, datasets
 
 - **.pluto/runs/<runId>/events.jsonl** — Event log
 - **.pluto/runs/<runId>/artifact.md** — Final artifact
-- **.pluto/runs/<runId>/evidence.md** — Evidence packet (human-readable, MVP-beta)
-- **.pluto/runs/<runId>/evidence.json** — Evidence packet (machine-readable, `EvidencePacketV0`, MVP-beta)
+- **.pluto/runs/<runId>/evidence-packet.md** — Canonical four-layer evidence packet (human-readable)
+- **.pluto/runs/<runId>/evidence-packet.json** — Canonical four-layer evidence packet (machine-readable)
+- **.pluto/runs/<runId>/evidence.md** — Compatibility evidence packet (human-readable, `EvidencePacketV0`)
+- **.pluto/runs/<runId>/evidence.json** — Compatibility evidence packet (machine-readable, `EvidencePacketV0`)
 - **evals/reports/** — Evaluation reports
 
-The evidence packet is a new control-surface artifact introduced in MVP-beta. Successful evidence generation writes `evidence.md` and `evidence.json` for completed, blocked, and failed runs and contains: run metadata, canonical `BlockerReasonV0` (when blocked), per-worker contribution summaries, validation outcome, cited inputs (redacted), risks, and open questions. Its orchestration section records `orchestration.playbookId`, `orchestrationSource`, optional `orchestrationMode`, `transcript`, `dependencyTrace`, `revisions`, `escalation`, and `finalReconciliation`. It validates against `EvidencePacketV0` schema and is redacted by `src/orchestrator/evidence.ts` before being written to disk. If evidence generation itself fails, the run is surfaced as `runtime_error` / `run_failed` and partial evidence files are cleaned up instead of being guaranteed to persist.
+The canonical evidence packet is now a first-class control-surface artifact. Successful four-layer runs write `evidence-packet.md` and `evidence-packet.json` for completed and failed runs, capturing command outputs, transitions, artifact refs, role citations, and lineage back to stdout/transcript/final-report artifacts. Compatibility `evidence.md` and `evidence.json` are still written for legacy readers and run-inspection tooling. If evidence generation itself fails, the run is surfaced as `runtime_error` / `run_failed` and partial evidence files are cleaned up instead of being guaranteed to persist.
 
 Persisted events are part of the same control surface. `RunStore.appendEvent()` strips `transient.rawPayload` and rewrites payloads through the same redactor, while live adapters may still keep raw payload fragments in memory long enough for orchestration and artifact synthesis.
 
 ## Orchestrator Source Instrumentation (S1)
 
-`worker_requested` events now carry `payload.orchestratorSource` so the harness can distinguish which control-plane lane dispatched each worker:
+`worker_requested` events now carry `payload.orchestratorSource` so the harness can distinguish which control-plane lane produced the lead intent that preceded each worker launch:
 
 - `lead_marker` — the live lead emitted a legacy marker line.
 - `pluto_fallback` — Pluto synthesized the dispatch in `maybeDispatchUnderdispatchFallback()`.
-- `teamlead_direct` — default direct path for dispatches that intentionally bypass both marker parsing and Pluto fallback.
+- `teamlead_direct` — the manager-run harness mainline lead-intent bridge path.
 
-`docker/live-smoke.ts` records the per-worker `orchestratorSource` distribution and fails when more than 50% of completed workers were dispatched via `pluto_fallback`, which guards against a misleadingly green smoke that is still relying on Pluto-owned dispatch.
+`docker/live-smoke.ts` records the per-worker `orchestratorSource` distribution and fails when more than 50% of completed workers were dispatched via `pluto_fallback`, which guards against a misleadingly green smoke that is still relying on Pluto-owned dispatch instead of observed lead intent.
 
 ## Control Knobs
 
@@ -69,15 +72,16 @@ Persisted events are part of the same control surface. `RunStore.appendEvent()` 
 | Model | `PASEO_MODEL` | opencode/minimax-m2.5-free | Model for the provider |
 | Paseo daemon host | `PASEO_HOST` | local socket | Optional explicit Paseo daemon/API URL; adapter passes `--host` when set |
 | Workspace | `PLUTO_LIVE_WORKSPACE` | `/Volumes/AgentsWorkspace/tmp/pluto-regression-fix/live-quickstart/` | Preferred run directory; falls back to `<repo>/.tmp/live-quickstart/` when `/Volumes/AgentsWorkspace/` is unavailable |
-| Orchestration mode | `PASEO_ORCHESTRATION_MODE` | teamlead_direct | Default TeamLead-direct path; set `lead_marker` to exercise the quarantined legacy fallback lane |
-| Team playbook | `PASEO_TEAM_PLAYBOOK` | teamlead-direct-default-v0 | Selects `teamlead-direct-default-v0` or `teamlead-direct-research-review-v0` for TeamLead-direct smoke coverage |
-| Citation requirement | `PASEO_REQUIRE_CITATIONS` | off | Fail smoke when final reconciliation omits any required playbook stage citation |
+| Scenario | `PLUTO_SCENARIO` | hello-team | Selects the authored scenario used by the manager-run harness |
+| Run profile | `PLUTO_RUN_PROFILE` | fake-smoke | Selects the authored run profile |
+| Playbook override | `PLUTO_PLAYBOOK` | - | Overrides the scenario's playbook binding |
 | Endpoint (optional) | `OPENCODE_BASE_URL` | - | OpenCode HTTP debug endpoint (Docker only) |
 | Binary | `PASEO_BIN` | paseo | Path to paseo CLI |
 | Fake-live alias | `PLUTO_FAKE_LIVE` | off | Test/CI convenience alias for `PLUTO_LIVE_ADAPTER=fake` |
 
 ## CLI Surfaces
 
+- `pnpm pluto:run --scenario <name> --run-profile <name> [--workspace <path>]` is the mainline runtime entrypoint for the four-layer lead-intent bridge.
 - `pnpm runs list/show/events/artifact/evidence` all read from `.pluto/runs/`.
 - `pnpm runs events --follow` is a real file-backed follow mode over `events.jsonl`, with role/kind/since filters applied to each poll.
 - `pnpm runs evidence` degrades gracefully for pre-evidence runs instead of failing.

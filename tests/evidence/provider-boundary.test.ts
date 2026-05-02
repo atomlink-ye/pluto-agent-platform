@@ -33,6 +33,15 @@ function makePacket(): EvidencePacketV0 {
     openQuestions: [],
     classifierVersion: 0,
     generatedAt: "2026-04-30T00:00:02.000Z",
+    orchestration: {
+      playbookId: "playbook-neutral-1",
+      orchestrationSource: "teamlead_direct",
+      transcript: {
+        kind: "shared_channel",
+        path: ".pluto/runs/run-provider-boundary-1/coordination-transcript.jsonl",
+        roomRef: "coordination-room-1",
+      },
+    },
   };
 }
 
@@ -120,6 +129,7 @@ describe("evidence graph provider boundary", () => {
     expect(combined).not.toContain("secret-key");
     expect(combined).not.toContain("session=secret");
     expect(combined).not.toContain('"credentials"');
+    expect(combined).not.toContain("paseo_chat");
 
     expect(JSON.parse(sealedRaw)).toEqual({
       schemaVersion: 0,

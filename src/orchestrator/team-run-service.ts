@@ -799,7 +799,7 @@ export class TeamRunService {
     startedAt: Date,
     finishedAt: Date,
     blockerReason: BlockerReasonV0 | null,
-    transcriptRef?: { kind: "file" | "paseo_chat"; path: string; roomRef: string },
+    transcriptRef?: { kind: "file" | "shared_channel"; path: string; roomRef: string },
   ): Promise<{
     reason: BlockerReasonV0;
     classifierVersion: 0;
@@ -848,7 +848,7 @@ export class TeamRunService {
     leadSessionId: string;
     adapter: PaseoTeamAdapter;
     playbook: TeamPlaybookV0;
-    transcript: { ref: { kind: "file" | "paseo_chat"; path: string; roomRef: string }; append: (record: {
+    transcript: { ref: { kind: "file" | "shared_channel"; path: string; roomRef: string }; append: (record: {
       runId: string;
       ts: string;
       source: "pluto" | "teamlead" | "worker" | "adapter";

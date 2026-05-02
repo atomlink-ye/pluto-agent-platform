@@ -169,10 +169,11 @@ redacted summaries and EvidencePacket refs, not raw provider state. PM Space:
 
 ### Coordination Channel (paseo chat)
 
-The coordination channel is the shared Paseo chat room handle passed to the
-team lead at launch. Team lead owns orchestration and spawns members directly
-through the Paseo CLI. The channel gives Pluto an observable surface for
-`STAGE` and `DEVIATION` events.
+The coordination channel is the transcript / room handle passed to the team
+lead at launch. In the shipped v1 manager-run harness, team lead still owns the
+orchestration decisions, but adapters surface delegation intent and Pluto
+performs the mechanical worker launch/spawn fallback. Room-backed
+`STAGE`/`DEVIATION` observation remains the v1.5+ target model.
 
 The chat room is not a foreground object. Pluto records relevant events into
 the EvidencePacket after validation and redaction.
@@ -181,8 +182,8 @@ the EvidencePacket after validation and redaction.
 
 Audit Middleware is the fail-closed validation layer driven by RunProfile and
 Playbook audit fields. It observes file checkpoints, stdout matches,
-`STAGE`/`DEVIATION` events, acceptance commands, required role citations, and
-revision cap behavior.
+synthesized workflow/deviation traces, acceptance commands, required role
+citations, and revision cap behavior.
 
 It does not decide the workflow. It verifies that the team lead's claimed work
 is supported by contracted files, stdout, events, citations, and command

@@ -1,6 +1,6 @@
 # MVP-alpha QA Checklist
 
-Run after every meaningful change. Mark `[x]` only when the actual command succeeds. Default orchestration mode is `teamlead_direct`; `lead_marker` remains a legacy/fallback lane that should still be spot-checked when its tests or docs move.
+Run after every meaningful change. Mark `[x]` only when the actual command succeeds. The four-layer manager-run harness is the mainline runtime; `TeamRunService` and `pnpm submit` are compatibility-only surfaces.
 
 ## 1. Static gates
 
@@ -13,9 +13,10 @@ Run after every meaningful change. Mark `[x]` only when the actual command succe
 
 ## 2. Fake adapter E2E (offline)
 
-- [ ] `pnpm submit --title "smoke" --prompt "produce a hello artifact" --workspace .tmp/pluto-cli`
+- [ ] `pnpm pluto:run --scenario hello-team --run-profile fake-smoke --workspace .tmp/pluto-cli`
 - [ ] Verify `.pluto/runs/<runId>/events.jsonl` contains `lead_started` and >=2 `worker_completed` events.
 - [ ] Verify `.pluto/runs/<runId>/artifact.md` references planner, generator, evaluator.
+- [ ] Verify `.pluto/runs/<runId>/evidence-packet.json` exists and records transitions, artifact refs, and role citations.
 
 ## 3. Docker stack
 
@@ -40,11 +41,10 @@ Live uses the local Paseo daemon/socket by default. Set `PASEO_HOST` to run agai
 - [ ] `paseo provider ls --json` lists `opencode` as `available` with default mode `build`.
 - [ ] `pnpm smoke:local` returns `{"status":"ok",...}` or `{"status":"partial","reason":"provider_unavailable"|"quota_exceeded",...}` (allow ~40–80s for the model).
 - [ ] For Docker/remote Paseo daemon mode, `PASEO_HOST=<host> pnpm smoke:live` uses the same provider/model and returns the same acceptable status shape.
-- [ ] `PASEO_ORCHESTRATION_MODE=lead_marker pnpm smoke:live` still passes for the quarantined legacy fallback lane.
-- [ ] `PASEO_TEAM_PLAYBOOK=teamlead-direct-research-review-v0 pnpm smoke:live` passes or returns an allowed provider/quota partial, proving the non-default playbook path.
-- [ ] `events.jsonl` is playbook-aware: it contains `run_started`, `lead_started`, one `coordination_transcript_created`, one `worker_requested` / `worker_started` / `worker_completed` triplet per selected playbook stage, one `lead_message` (kind=`summary`), one `artifact_created`, and one terminal `run_completed`; revision/escalation cases may also include `revision_started`, `revision_completed`, `escalation`, `final_reconciliation_validated`, and `final_reconciliation_invalid`.
+- [ ] `PLUTO_SCENARIO=hello-team PLUTO_RUN_PROFILE=fake-smoke pnpm smoke:live` passes or returns an allowed provider/quota partial.
+- [ ] `events.jsonl` contains `run_started`, `lead_started`, one `coordination_transcript_created`, one `worker_requested` / `worker_started` / `worker_completed` triplet per requested worker, one `lead_message` (kind=`summary`), one `artifact_created`, and one terminal `run_completed` or `run_failed`.
 - [ ] `artifact.md` contains the strings `lead`, `planner`, `generator`, `evaluator` (assertion the smoke script enforces).
-- [ ] `summary.orchestrationMode === "teamlead_direct"` by default and `summary.finalReconciliation.valid === true` when `PASEO_REQUIRE_CITATIONS=1`.
+- [ ] `evidence-packet.json` contains canonical transitions and role citations for planner, generator, and evaluator.
 - [ ] Only preflight blockers print `{"status":"blocker","reason":...}` and exit with code 2.
 - [ ] If the run starts and evidence ends `blocked` for any reason other than `provider_unavailable` or `quota_exceeded`, the script prints `{"status":"failed",...}` and exits with code 1.
 
@@ -56,10 +56,11 @@ Live uses the local Paseo daemon/socket by default. Set `PASEO_HOST` to run agai
 
 ## 6. Evidence packet (MVP-beta)
 
-- [ ] `pnpm submit --title "evidence test" --prompt "produce a test artifact" --workspace .tmp/pluto-cli` produces `evidence.md` and `evidence.json` in `.pluto/runs/<runId>/`.
+- [ ] `pnpm pluto:run --scenario hello-team --run-profile fake-smoke --workspace .tmp/pluto-cli` produces `evidence-packet.md`, `evidence-packet.json`, `evidence.md`, and `evidence.json` in `.pluto/runs/<runId>/`.
 - [ ] `pnpm runs evidence <runId> --json` validates against `EvidencePacketV0` schema.
 - [ ] Evidence files contain no token-shaped substrings, no env KEY=VALUE secrets, no raw provider stderr.
 - [ ] `pnpm smoke:fake` asserts evidence files present, schema valid, no redacted-secret patterns.
+- [ ] Canonical `evidence-packet.json` includes command outputs, transitions, artifact refs, role citations, and lineage paths.
 - [ ] `evidence.orchestration.transcript` is the only transcript reference shape; no tests or readers depend on removed flat transcript fields.
 
 ## 7. BlockerReason taxonomy (MVP-beta)
@@ -104,6 +105,7 @@ Live uses the local Paseo daemon/socket by default. Set `PASEO_HOST` to run agai
 
 - [ ] README quickstart reproducible by a fresh clone.
 - [ ] `docs/mvp-alpha.md` contracts match `src/contracts/`.
+- [ ] README/docs position `src/orchestrator/manager-run-harness.ts` and `pnpm pluto:run` as the main runtime path; `TeamRunService` is explicitly legacy/quarantined.
 - [ ] Lifecycle vocabulary note stays explicit: v0 still writes `done` / `run_completed`; readers tolerate future `succeeded` / `completion`.
 - [ ] `final-report.md` lists branch, commits, command outputs, blockers, PM status mapping.
 - [ ] Repository-documentation consistency check passes: code, contracts, CLI behavior, docs/plans, design docs, and reference docs do not contradict each other.

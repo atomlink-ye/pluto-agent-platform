@@ -1,0 +1,23 @@
+name: code-review-fake
+description: Fake-adapter run profile for the code-review-cycle playbook.
+workspace:
+  cwd: ${repo_root}/.tmp/code-review/${run_id}
+required_reads:
+  - { kind: repo, path: AGENTS.md }
+acceptance_commands:
+  - test -f artifact.md
+artifact_contract:
+  required_files:
+    - artifact.md
+    - status.md
+    - task-tree.md
+    - { path: final-report.md, required_sections: [implementation_summary, workflow_steps_executed, required_role_citations, deviations] }
+stdout_contract:
+  required_lines:
+    - SUMMARY:
+    - "WROTE: artifact.md"
+approval_gates:
+  pre_launch:
+    enabled: false
+secrets:
+  redact: true

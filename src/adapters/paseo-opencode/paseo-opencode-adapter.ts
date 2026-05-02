@@ -104,6 +104,7 @@ interface RunState {
 
 /** @legacy Marker parser for the lead_marker fallback lane only. */
 const WORKER_REQUEST_RE = /^WORKER_REQUEST:\s*([a-zA-Z0-9_-]+)\s*::\s*(.*)$/;
+const CANONICAL_DELEGATION_RE = /^(?:DELEGATE|SPAWN):\s*([a-zA-Z0-9_-]+)\s*::\s*(.*)$/;
 
 export class PaseoOpenCodeAdapter implements PaseoTeamAdapter {
   private readonly bin: string;
@@ -220,17 +221,14 @@ export class PaseoOpenCodeAdapter implements PaseoTeamAdapter {
       }),
     });
 
-    if ((input.task.orchestrationMode ?? "teamlead_direct") === "lead_marker") {
-      // Subscribe to the lead's text stream and translate WORKER_REQUEST markers.
-      const follower = this.runner.follow(
-        this.bin,
-        this.hostArgs(["logs", agentId, "--follow", "--filter", "text"]),
-        {
-          onLine: (line) => this.onLeadLogLine(input.runId, agentId, line),
-        },
-      );
-      run.followers.push(follower);
-    }
+    const follower = this.runner.follow(
+      this.bin,
+      this.hostArgs(["logs", agentId, "--follow", "--filter", "text"]),
+      {
+        onLine: (line) => this.onLeadLogLine(input.runId, agentId, line),
+      },
+    );
+    run.followers.push(follower);
 
     return { sessionId: agentId, role: input.role, external: { paseoAgentId: agentId } };
   }
@@ -591,6 +589,34 @@ export class PaseoOpenCodeAdapter implements PaseoTeamAdapter {
       /* keep raw */
     }
     for (const line of text.split(/\r?\n/)) {
+      const canonical = line.match(CANONICAL_DELEGATION_RE);
+      if (canonical) {
+        const targetRole = canonical[1]!;
+        const instructions = (canonical[2] ?? "").trim();
+        const run = this.expectRun(runId);
+        const batchId = this.nextBatchId(run, `worker-request-${targetRole}`);
+        const payload: WorkerRequestedPayload = {
+          targetRole: targetRole as WorkerRequestedPayload["targetRole"],
+          instructions,
+          orchestratorSource: "teamlead_direct",
+          source: "teamlead_direct",
+        };
+        this.appendEvent(runId, {
+          type: "worker_requested",
+          roleId: targetRole,
+          sessionId: leadId,
+          payload,
+          rawPayloadKeys: ["instructions"],
+          callback: this.callbackIdentity({
+            source: "paseo_opencode",
+            batchId,
+            lineageKey: `worker_request:${leadId}:${targetRole}`,
+            status: "in_progress",
+            dedupeParts: ["worker_requested", leadId, targetRole, instructions],
+          }),
+        });
+        continue;
+      }
       const m = line.match(WORKER_REQUEST_RE);
       if (!m) continue;
       const targetRole = m[1]!;

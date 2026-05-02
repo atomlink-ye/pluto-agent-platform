@@ -1,0 +1,17 @@
+name: hello-team
+description: Deterministic fake-smoke scenario for the four-layer mainline runtime.
+playbook: research-review
+task: |-
+  Produce a markdown summary that says hello from the lead, planner, generator, and evaluator.
+task_mode: fixed
+allow_task_override: true
+overlays:
+  planner:
+    prompt: |-
+      Start with a short task plan.
+  generator:
+    prompt: |-
+      Produce a concise artifact-ready contribution.
+  evaluator:
+    prompt: |-
+      Respond with PASS: when the artifact is acceptable.

@@ -191,6 +191,36 @@ export class FakeAdapter implements PaseoTeamAdapter {
           }),
         });
       }
+    } else if (!this.shouldDeferTeamLeadDirectRequestsToService(input.playbook ?? run.playbook)) {
+      // Simulate TeamLead-direct intent surfaced by the runtime before Pluto
+      // performs the mechanical worker launch.
+      const playbook = input.playbook ?? run.playbook;
+      const workerStages = playbook?.stages ?? this.team.roles.filter((r) => r.kind === "worker").map((role) => ({ id: role.id, roleId: role.id, instructions: this.workerInstructionsFor(input.task, role), dependsOn: [] }));
+      for (const stage of workerStages) {
+        const worker = this.team.roles.find((role) => role.id === stage.roleId);
+        if (!worker || worker.kind !== "worker") continue;
+        const instructions = playbook ? this.stageInstructionsFor(input.task, stage, playbook) : this.workerInstructionsFor(input.task, worker);
+        const payload: WorkerRequestedPayload = {
+          targetRole: worker.id,
+          instructions,
+          orchestratorSource: "teamlead_direct",
+          playbookId: playbook?.id ?? null,
+        };
+        this.appendEvent(input.runId, {
+          type: "worker_requested",
+          roleId: worker.id,
+          sessionId,
+          payload,
+          rawPayloadKeys: ["instructions"],
+          callback: this.callbackIdentity({
+            source: "fake_adapter",
+            batchId: leadBatchId,
+            lineageKey: `worker_request:${sessionId}:${worker.id}`,
+            status: "in_progress",
+            dedupeParts: ["worker_requested", sessionId, worker.id, instructions],
+          }),
+        });
+      }
     }
 
     return { sessionId, role: input.role };
@@ -413,6 +443,10 @@ export class FakeAdapter implements PaseoTeamAdapter {
       default:
         return `Contribute to: ${task.prompt}`;
     }
+  }
+
+  private shouldDeferTeamLeadDirectRequestsToService(playbook: TeamPlaybookV0 | undefined): boolean {
+    return Boolean(playbook?.id.startsWith("teamlead-direct-"));
   }
 
   private stageInstructionsFor(

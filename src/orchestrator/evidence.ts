@@ -42,7 +42,7 @@ export function redactEvidencePacketV0(packet: EvidencePacketV0): EvidencePacket
   const redacted = redactObject(packet) as EvidencePacketV0;
   if (packet.orchestration?.transcript && redacted.orchestration?.transcript) {
     redacted.orchestration.transcript = {
-      kind: redactString(packet.orchestration.transcript.kind) as "file" | "paseo_chat",
+      kind: redactString(packet.orchestration.transcript.kind) as "file" | "shared_channel",
       path: redactString(packet.orchestration.transcript.path),
       roomRef: redactString(packet.orchestration.transcript.roomRef),
     };
@@ -99,8 +99,8 @@ function validateCoordinationTranscriptRef(
     return;
   }
   const ref = value as Record<string, unknown>;
-  if (ref["kind"] !== "file" && ref["kind"] !== "paseo_chat") {
-    errors.push(`${path}.kind must be file or paseo_chat`);
+  if (ref["kind"] !== "file" && ref["kind"] !== "shared_channel") {
+    errors.push(`${path}.kind must be file or shared_channel`);
   }
   if (typeof ref["path"] !== "string") {
     errors.push(`${path}.path must be a string`);
@@ -613,7 +613,7 @@ function extractOrchestrationEvidence(
     ...(escalation ? { escalation: redactObject(escalation) as NonNullable<EvidencePacketV0["orchestration"]>["escalation"] } : {}),
     ...(finalReconciliation ? { finalReconciliation: redactObject(finalReconciliation) as NonNullable<EvidencePacketV0["orchestration"]>["finalReconciliation"] } : {}),
     transcript: {
-      kind: redactString(transcriptRefKind) as "file" | "paseo_chat",
+      kind: redactString(transcriptRefKind) as "file" | "shared_channel",
       path: redactString(transcriptRefPath),
       roomRef: redactString(transcriptRefRoom),
     },

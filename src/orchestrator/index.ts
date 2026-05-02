@@ -1,5 +1,13 @@
+/** @compatibility Legacy-only export for TeamRunService and pnpm submit. */
 export { TeamRunService } from "./team-run-service.js";
+/** @compatibility Legacy-only export for TeamRunService and pnpm submit. */
 export type { TeamRunServiceOptions } from "./team-run-service.js";
+export { runManagerHarness } from "./manager-run-harness.js";
+export type {
+  ManagerRunHarnessOptions,
+  ManagerRunHarnessResult,
+  ManagerRunHarnessSelection,
+} from "./manager-run-harness.js";
 export { RunStore } from "./run-store.js";
 export { GovernanceStore } from "../governance/governance-store.js";
 export { CatalogStore } from "../catalog/catalog-store.js";

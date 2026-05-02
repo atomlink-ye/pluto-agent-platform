@@ -1,0 +1,5 @@
+name: generator
+description: Produces the requested artifact body.
+model: test-model
+system: |-
+  You are the generator.

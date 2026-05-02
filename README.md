@@ -1,10 +1,10 @@
 # Pluto Agent Platform — MVP-alpha
 
-Pluto is a **minimal agent team control plane**. MVP-alpha proves a single closed loop:
+Pluto is a **playbook-first agent harness**. MVP-alpha proves a single closed loop:
 
-> Submit a task → Pluto starts a Team Lead via Paseo → the Team Lead orchestrates authored playbook stages via the TeamLead-direct lane (legacy marker fallback still available) → Pluto persists events, transcript evidence, and a final artifact.
+> Select authored `Agent` + `Playbook` + `Scenario` + `RunProfile` → Pluto's manager-run harness loads and renders the four layers → Pluto launches the run against a fake or live adapter → Pluto persists events, transcript evidence, and final artifacts.
 
-For iteration `pluto-regression-fix-20260501`, that default `teamlead_direct` lane is a Pluto-mediated bridge: Pluto enforces the TeamLead-authored playbook deterministically, and adapters can graduate to true host-side teammate spawning through `spawnTeammate()` when the runtime supports it.
+The four-layer manager-run harness is the repo mainline. `TeamRunService` and `pnpm submit` remain in-tree only as a quarantined compatibility path for legacy tests and historical runs.
 
 Everything else (UI, multi-tenant control plane, governance, marketplace) is intentionally out of scope. See `docs/mvp-alpha.md`.
 
@@ -18,20 +18,21 @@ pnpm typecheck
 pnpm test
 ```
 
-Run the orchestrator end-to-end against the in-process fake adapter:
+Run the four-layer harness end-to-end against the in-process fake adapter:
 
 ```bash
-pnpm submit \
-  --title "Hello team" \
-  --prompt "Produce a hello-team markdown artifact." \
+pnpm pluto:run \
+  --scenario hello-team \
+  --run-profile fake-smoke \
   --workspace .tmp/pluto-cli
 ```
 
 Outputs:
 - `./.pluto/runs/<runId>/events.jsonl` — append-only event log
-- `./.pluto/runs/<runId>/artifact.md` — Team Lead's final markdown
-- `./.pluto/runs/<runId>/evidence.md` — Evidence packet (human-readable)
-- `./.pluto/runs/<runId>/evidence.json` — Evidence packet (machine-readable, `EvidencePacketV0`)
+- `./.pluto/runs/<runId>/artifact.md` — final markdown artifact
+- `./.pluto/runs/<runId>/evidence-packet.md` — canonical four-layer evidence packet (human-readable)
+- `./.pluto/runs/<runId>/evidence-packet.json` — canonical four-layer evidence packet (machine-readable)
+- `./.pluto/runs/<runId>/evidence.md` / `evidence.json` — compatibility evidence for existing run-inspection tooling
 
 ## Run inspection
 
@@ -68,7 +69,7 @@ If evidence generation cannot be validated or written, the run is converted to a
 
 ## Evidence
 
-Every completed, blocked, or failed run attempts to produce `evidence.md` and `evidence.json` in `.pluto/runs/<runId>/`. The evidence packet (`EvidencePacketV0`) includes: run metadata, per-worker summaries, validation outcome, cited inputs, risks, and open questions. Redaction happens at the write boundary for persisted events and evidence, while adapters may keep raw payload fragments transiently in memory so the live orchestrator can still build the artifact from unredacted worker output. See `SECURITY.md` for the exact redaction policy.
+Every completed, blocked, or failed run attempts to produce canonical `evidence-packet.md` and `evidence-packet.json` files in `.pluto/runs/<runId>/`, plus compatibility `evidence.md` and `evidence.json` for existing readers. The canonical packet records command outputs, transitions, artifact refs, role citations, and lineage back to stdout/transcript/final-report artifacts. Redaction happens at the write boundary for persisted events and evidence, while adapters may keep raw payload fragments transiently in memory so the live harness can still build the artifact from unredacted worker output. See `SECURITY.md` for the exact redaction policy.
 
 ## Live smoke (host Paseo + OpenCode free model)
 
@@ -89,9 +90,6 @@ pnpm smoke:local
 #     OPENCODE_BASE_URL is optional and only exposes an OpenCode debug endpoint:
 PASEO_HOST=localhost:6767 pnpm smoke:live
 
-# (2b) Force the quarantined legacy marker fallback lane when needed:
-PASEO_ORCHESTRATION_MODE=lead_marker pnpm smoke:live
-
 # (3) Or have Pluto build & start the optional pluto-runtime container first.
 #     This script auto-sets OPENCODE_BASE_URL as an optional debug endpoint and
 #     passes through PASEO_HOST when you provide one:
@@ -101,9 +99,10 @@ pnpm smoke:docker
 Both paths use `opencode/minimax-m2.5-free` by default. Do **not** switch to a paid model without explicit authorization (see `docs/qa-checklist.md`). A live smoke result of `{"status":"partial"}` is acceptable only for evidence packets classified as blocked by `provider_unavailable` or `quota_exceeded`; other blocked/failed evidence outcomes are treated as smoke failures.
 
 Additional live-smoke knobs:
-- `PASEO_ORCHESTRATION_MODE=teamlead_direct|lead_marker` — TeamLead-direct is the default; `lead_marker` is the quarantined legacy lane.
-- `PASEO_TEAM_PLAYBOOK=teamlead-direct-default-v0|teamlead-direct-research-review-v0` — select the authored TeamLead-direct playbook without code changes.
-- `PASEO_REQUIRE_CITATIONS=1` — fail smoke when the final reconciliation omits any required stage citation.
+- `PLUTO_SCENARIO=<scenario-name>` — select the authored scenario.
+- `PLUTO_RUN_PROFILE=<run-profile-name>` — select the authored run profile.
+- `PLUTO_PLAYBOOK=<playbook-name>` — optionally override the scenario's playbook binding.
+- `PLUTO_LIVE_WORKSPACE=<path>` — override the workspace path used by live-smoke.
 
 ### Verification
 
@@ -131,12 +130,11 @@ docker compose \
 ### Smoke success criteria (asserted by `docker/live-smoke.ts`)
 
 - Pluto creates a Team Lead session via Paseo and records `lead_started`.
-- TeamLead-direct default: the selected playbook stages complete in dependency order and `dependencyTrace` records the topological stage sequence.
-- Legacy `lead_marker` mode: the lead emits `WORKER_REQUEST: <role> :: <instructions>` markers and Pluto dispatches them as a fallback lane.
+- The checked-in four-layer scenario and run profile resolve successfully and execute in planner → generator → evaluator order.
+- Canonical `evidence-packet.json` records transitions, artifact refs, role citations, and lineage back to stdout/transcript/final-report artifacts.
 - Each requested worker is spawned via Paseo, runs to idle, and reports back.
 - The final markdown artifact references all four roles (lead, planner, generator, evaluator).
-- The final reconciliation cites every required playbook stage; `PASEO_REQUIRE_CITATIONS=1` makes missing citations a hard smoke failure.
-- `events.jsonl` contains the relevant playbook-aware lifecycle: `run_started`, `lead_started`, one `coordination_transcript_created`, one `worker_requested`/`worker_started`/`worker_completed` triplet per selected playbook stage, `lead_message`, `artifact_created`, and terminal `run_completed`. Revision/escalation paths may also emit `revision_started`, `revision_completed`, `escalation`, `final_reconciliation_validated`, and `final_reconciliation_invalid`.
+- `events.jsonl` contains the relevant lifecycle: `run_started`, `lead_started`, one `coordination_transcript_created`, one `worker_requested`/`worker_started`/`worker_completed` triplet per requested worker, `lead_message`, `artifact_created`, and terminal `run_completed` or `run_failed`.
 - `evidence.json` validates against `EvidencePacketV0`, and `evidence.md`/`evidence.json` contain no secret-shaped substrings.
 
 ### Vocabulary note
@@ -155,35 +153,36 @@ PASEO_BIN=/nonexistent/paseo PLUTO_LIVE_ADAPTER=paseo-opencode pnpm exec tsx doc
 ## Architecture
 
 ```
-+--------------+        PaseoTeamAdapter         +----------------------+
-|  TeamRun     | -----------------------------> | FakeAdapter          |
-|  Service     |                                | (tests / offline CLI)|
-|              |                                +----------------------+
-|              |
-|              | -----------------------------> +----------------------+
-|              |                                | PaseoOpenCodeAdapter |
-|              |        Paseo CLI (run/         | (live smoke)         |
-|              |        send/logs/wait/inspect) |   uses paseo + the   |
-|              |                                |   OpenCode runtime   |
-+--------------+                                +----------------------+
-       |
-       v
-.pluto/runs/<runId>/{events.jsonl, artifact.md, evidence.md, evidence.json}
++-------------------+     PaseoTeamAdapter      +----------------------+
+| ManagerRunHarness | -----------------------> | FakeAdapter          |
+| (four-layer)      |                          | (tests / offline CLI)|
+|                   |                          +----------------------+
+|                   |
+|                   | -----------------------> +----------------------+
+|                   |                          | PaseoOpenCodeAdapter |
+|                   |    Paseo CLI (run/      | (live smoke)         |
+|                   |    send/logs/wait)      | uses paseo +         |
+|                   |                          | OpenCode runtime     |
++-------------------+                          +----------------------+
+        |
+        v
+.pluto/runs/<runId>/{events.jsonl, artifact.md, evidence-packet.md, evidence-packet.json, evidence.md, evidence.json}
 ```
 
-The orchestrator never imports OpenCode. The contract (`src/contracts/adapter.ts`) is the only seam between business logic and runtime concerns.
+The harness never imports OpenCode directly. The contract (`src/contracts/adapter.ts`) is the only seam between business logic and runtime concerns.
 
 ## Project layout
 
 ```
 src/
   contracts/      types + PaseoTeamAdapter interface
-  orchestrator/   TeamRunService, RunStore, team-config, blocker-classifier, evidence
+  orchestrator/   manager-run harness, RunStore, legacy TeamRunService, blocker-classifier, evidence
   adapters/
     fake/                  in-process deterministic adapter
     paseo-opencode/        live adapter scaffold (paseo CLI)
   cli/
-    submit.ts     `pnpm submit ...` CLI
+    run.ts        `pnpm pluto:run ...` CLI
+    submit.ts     legacy compatibility CLI
     runs.ts       `pnpm runs ...` CLI (list/show/events/artifact/evidence)
 
 tests/            vitest specs (unit + fake-adapter E2E + recovery + evidence + CLI)

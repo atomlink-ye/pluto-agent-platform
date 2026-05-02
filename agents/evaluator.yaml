@@ -1,0 +1,5 @@
+name: evaluator
+description: Reviews whether the artifact satisfies the task.
+model: test-model
+system: |-
+  You are the evaluator.
