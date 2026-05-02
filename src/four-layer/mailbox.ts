@@ -1,7 +1,12 @@
 import { appendFile, mkdir, open, readFile, rm, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 
-import type { MailboxMessage, MailboxMessageBody, MailboxMessageKind } from "../contracts/four-layer.js";
+import type {
+  MailboxMessage,
+  MailboxMessageBody,
+  MailboxMessageKind,
+  MailboxTransportStatus,
+} from "../contracts/four-layer.js";
 
 const LOCK_RETRY_MS = 25;
 const LOCK_TIMEOUT_MS = 5_000;
@@ -21,6 +26,9 @@ export interface SendMailboxMessageInput {
   body: MailboxMessageBody;
   summary?: string;
   replyTo?: string;
+  transportMessageId?: string;
+  transportTimestamp?: string;
+  transportStatus?: MailboxTransportStatus;
 }
 
 export class FileBackedMailbox {
@@ -66,8 +74,14 @@ export class FileBackedMailbox {
 
   async send(input: SendMailboxMessageInput): Promise<MailboxMessage> {
     await this.ensure();
-    const teammateId = input.to;
-    const message: MailboxMessage = {
+    const message = this.createMessage(input);
+    await this.appendToInbox(message);
+    await this.appendToMirror(message);
+    return message;
+  }
+
+  createMessage(input: SendMailboxMessageInput): MailboxMessage {
+    return {
       id: this.idGen(),
       to: input.to,
       from: input.from,
@@ -76,16 +90,37 @@ export class FileBackedMailbox {
       body: input.body,
       ...(input.summary ? { summary: input.summary } : {}),
       ...(input.replyTo ? { replyTo: input.replyTo } : {}),
+      ...(input.transportMessageId ? { transportMessageId: input.transportMessageId } : {}),
+      ...(input.transportTimestamp ? { transportTimestamp: input.transportTimestamp } : {}),
+      ...(input.transportStatus ? { transportStatus: input.transportStatus } : {}),
     };
+  }
+
+  async appendToInbox(message: MailboxMessage): Promise<void> {
+    await this.ensure();
+    const teammateId = message.to;
     await withFileLock(`${this.inboxPath(teammateId)}.lock`, async () => {
       const inbox = await this.readInbox(teammateId);
       inbox.push(message);
       await writeFile(this.inboxPath(teammateId), JSON.stringify(inbox, null, 2) + "\n", "utf8");
     });
+  }
+
+  async appendToMirror(message: MailboxMessage): Promise<void> {
+    await this.ensure();
     await withFileLock(`${this.mirrorPath()}.lock`, async () => {
       await appendFile(this.mirrorPath(), JSON.stringify(message) + "\n", "utf8");
     });
-    return message;
+  }
+
+  async readMirror(): Promise<MailboxMessage[]> {
+    await this.ensure();
+    const raw = await readFile(this.mirrorPath(), "utf8");
+    return raw
+      .split("\n")
+      .map((line) => line.trim())
+      .filter((line) => line.length > 0)
+      .map((line) => JSON.parse(line) as MailboxMessage);
   }
 
   async read(teammateId: string, options: { unreadOnly?: boolean } = {}): Promise<MailboxMessage[]> {

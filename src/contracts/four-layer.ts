@@ -45,6 +45,8 @@ export const MAILBOX_MESSAGE_KINDS = [
   "plan_approval_response",
 ] as const;
 
+export const MAILBOX_TRANSPORT_STATUSES = ["ok", "post_failed"] as const;
+
 export const TASK_LIST_STATUSES = ["pending", "in_progress", "completed"] as const;
 
 export const REQUIRED_READ_KINDS = ["repo", "external_document"] as const;
@@ -57,6 +59,7 @@ export type FourLayerObjectKind = typeof FOUR_LAYER_OBJECT_KINDS[number];
 export type ScenarioTaskMode = typeof SCENARIO_TASK_MODES[number];
 export type RunStatus = typeof RUN_STATUSES[number];
 export type MailboxMessageKind = typeof MAILBOX_MESSAGE_KINDS[number];
+export type MailboxTransportStatus = typeof MAILBOX_TRANSPORT_STATUSES[number];
 export type TaskListStatus = typeof TASK_LIST_STATUSES[number];
 export type RequiredReadKind = typeof REQUIRED_READ_KINDS[number];
 export type CoordinationChannelKind = typeof COORDINATION_CHANNEL_KINDS[number];
@@ -214,6 +217,42 @@ export interface MailboxMessage {
   summary?: string;
   replyTo?: string;
   readAt?: string;
+  transportMessageId?: string;
+  transportTimestamp?: string;
+  transportStatus?: MailboxTransportStatus;
+}
+
+export type RoomRef = string;
+
+export type TransportSince =
+  | { kind: "duration"; value: string }
+  | { kind: "timestamp"; value: string };
+
+export interface TransportMessageRef {
+  transportMessageId: string;
+  transportTimestamp: string;
+  roomRef: RoomRef;
+}
+
+export interface ReceivedTransportMessage {
+  transportMessageId: string;
+  transportTimestamp: string;
+  envelope: MailboxEnvelope;
+  replyTo?: string;
+}
+
+export interface TransportReadResult {
+  messages: ReceivedTransportMessage[];
+  latestTimestamp: string | null;
+}
+
+export interface MailboxEnvelope {
+  schemaVersion: "v1";
+  fromRole: string;
+  toRole: string | "broadcast";
+  runId: string;
+  taskId?: string;
+  body: MailboxMessage;
 }
 
 export interface TaskRecord {

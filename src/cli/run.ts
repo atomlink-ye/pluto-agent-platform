@@ -106,7 +106,7 @@ async function main() {
   }, null, 2));
 
   if (result.run.status !== "succeeded") {
-    process.exitCode = 1;
+    process.exitCode = result.legacyResult.blockerReason === "chat_transport_unavailable" ? 2 : 1;
   }
 }
 

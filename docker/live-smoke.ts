@@ -197,6 +197,28 @@ function summarizeOrchestratorSources(events: AgentEvent[]) {
   };
 }
 
+function extractTransportMessageId(value: unknown): string | null {
+  if (typeof value !== "object" || value === null) return null;
+  const record = value as Record<string, unknown>;
+  for (const key of ["id", "messageId", "transportMessageId"]) {
+    if (typeof record[key] === "string" && record[key]) {
+      return record[key] as string;
+    }
+  }
+  return null;
+}
+
+function extractTransportMessages(payload: unknown): Array<Record<string, unknown>> {
+  if (Array.isArray(payload)) {
+    return payload.filter((entry): entry is Record<string, unknown> => typeof entry === "object" && entry !== null);
+  }
+  if (typeof payload === "object" && payload !== null && Array.isArray((payload as Record<string, unknown>)["messages"])) {
+    return ((payload as Record<string, unknown>)["messages"] as unknown[])
+      .filter((entry): entry is Record<string, unknown> => typeof entry === "object" && entry !== null);
+  }
+  return [];
+}
+
 async function preflight(): Promise<BlockerReport | null> {
   if (ADAPTER_KIND === "fake") return null;
 
@@ -467,6 +489,153 @@ async function main() {
     );
     process.exit(1);
   }
+  if (!result.run.coordinationChannel?.locator || result.run.coordinationChannel.locator.startsWith("mailbox:")) {
+    console.error(
+      JSON.stringify(
+        {
+          status: "assertion_failed",
+          message: "run coordination channel locator was not replaced with a real room id",
+          summary,
+          coordinationChannel: result.run.coordinationChannel ?? null,
+        },
+        null,
+        2,
+      ),
+    );
+    process.exit(1);
+  }
+  if (canonicalEvidence.coordinationChannel?.locator !== result.run.coordinationChannel.locator) {
+    console.error(
+      JSON.stringify(
+        {
+          status: "assertion_failed",
+          message: "canonical evidence coordination channel locator does not match the run coordination channel",
+          summary,
+          coordinationChannel: canonicalEvidence.coordinationChannel ?? null,
+          runCoordinationChannel: result.run.coordinationChannel,
+        },
+        null,
+        2,
+      ),
+    );
+    process.exit(1);
+  }
+  if (evidencePacket.orchestration.transcript.roomRef !== result.run.coordinationChannel.locator) {
+    console.error(
+      JSON.stringify(
+        {
+          status: "assertion_failed",
+          message: "legacy evidence transcript roomRef does not match the run coordination channel locator",
+          summary,
+          transcript: evidencePacket.orchestration.transcript,
+          runCoordinationChannel: result.run.coordinationChannel,
+        },
+        null,
+        2,
+      ),
+    );
+    process.exit(1);
+  }
+  const mailboxJsonlPath = result.run.coordinationChannel.path ?? `${result.runDir}/mailbox.jsonl`;
+  const mailboxEntries = (await readFile(mailboxJsonlPath, "utf8"))
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0)
+    .map((line) => JSON.parse(line) as Record<string, unknown>);
+  if (mailboxEntries.length === 0) {
+    console.error(
+      JSON.stringify(
+        {
+          status: "assertion_failed",
+          message: "mailbox.jsonl is empty",
+          summary,
+          mailboxJsonlPath,
+        },
+        null,
+        2,
+      ),
+    );
+    process.exit(1);
+  }
+  const mirroredTransportIds = mailboxEntries
+    .filter((entry) => entry["transportStatus"] === "ok" && typeof entry["transportMessageId"] === "string")
+    .map((entry) => String(entry["transportMessageId"]));
+  if (mirroredTransportIds.length !== mailboxEntries.length) {
+    console.error(
+      JSON.stringify(
+        {
+          status: "assertion_failed",
+          message: "mailbox.jsonl entries are missing transport metadata",
+          summary,
+          mailboxJsonlPath,
+        },
+        null,
+        2,
+      ),
+    );
+    process.exit(1);
+  }
+  let liveChatParity: { checked: boolean; messageCount: number; roomRef: string } = {
+    checked: false,
+    messageCount: mirroredTransportIds.length,
+    roomRef: result.run.coordinationChannel.locator,
+  };
+  if (ADAPTER_KIND === "paseo-opencode") {
+    const paseoBin = process.env["PASEO_BIN"] ?? "paseo";
+    const paseoHost = normalizePaseoHostForCli(process.env["PASEO_HOST"]);
+    const chatRead = await DEFAULT_RUNNER.exec(
+      paseoBin,
+      [
+        "chat",
+        "read",
+        "--since",
+        result.run.startedAt ?? new Date(startedAt).toISOString(),
+        "--json",
+        ...(paseoHost ? ["--host", paseoHost] : []),
+        result.run.coordinationChannel.locator,
+      ],
+    );
+    if (chatRead.exitCode !== 0) {
+      console.error(
+        JSON.stringify(
+          {
+            status: "assertion_failed",
+            message: "paseo chat read failed during live parity verification",
+            summary,
+            stderr: chatRead.stderr,
+          },
+          null,
+          2,
+        ),
+      );
+      process.exit(1);
+    }
+    const liveMessages = extractTransportMessages(JSON.parse(chatRead.stdout));
+    const liveTransportIds = liveMessages
+      .map((message) => extractTransportMessageId(message))
+      .filter((messageId): messageId is string => Boolean(messageId));
+    if (JSON.stringify(liveTransportIds) !== JSON.stringify(mirroredTransportIds)) {
+      console.error(
+        JSON.stringify(
+          {
+            status: "assertion_failed",
+            message: "live paseo chat transcript does not match mailbox mirror transport order",
+            summary,
+            mirroredTransportIds,
+            liveTransportIds,
+          },
+          null,
+          2,
+        ),
+      );
+      process.exit(1);
+    }
+    liveChatParity = {
+      checked: true,
+      messageCount: liveTransportIds.length,
+      roomRef: result.run.coordinationChannel.locator,
+    };
+  }
   const evidenceClassification = classifyLiveSmokeEvidence(evidencePacket);
 
   const secretPatterns = [
@@ -560,6 +729,13 @@ async function main() {
     process.exit(1);
   }
   const finalArtifact = result.legacyResult.artifact;
+  summary = {
+    ...summary,
+    coordinationChannel: result.run.coordinationChannel,
+    mailboxJsonlPath,
+    mailboxMessageCount: mailboxEntries.length,
+    liveChatParity,
+  };
 
   // Assertions on the artifact content.
   const artifactMd = await readFile(result.artifactPath ?? `${result.runDir}/artifact.md`, "utf8");

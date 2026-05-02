@@ -70,7 +70,8 @@ describe("manager run harness", () => {
     expect(result.run.status).toBe("succeeded");
     expect(capturedStartRun?.playbook?.id).toBe("research-review");
     expect(capturedStartRun?.transcript?.path).toContain(`${result.run.runId}/mailbox.jsonl`);
-    expect(capturedStartRun?.transcript?.roomRef).toBe(`mailbox:${result.run.runId}`);
+    expect(capturedStartRun?.transcript?.roomRef).toBe(result.run.coordinationChannel?.locator);
+    expect(capturedStartRun?.transcript?.roomRef.startsWith("fake-room:")).toBe(true);
     expect(capturedCreateLeadSession?.transcript).toEqual(capturedStartRun?.transcript);
   });
 

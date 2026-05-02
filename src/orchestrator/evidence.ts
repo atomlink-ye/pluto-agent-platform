@@ -443,6 +443,32 @@ function extractRisksAndQuestions(
         risks.push(output.replace(/^FAIL:\s*/, "").trim());
       }
     }
+
+    if (ev.type === "mailbox_transport_post_failed") {
+      const message = typeof ev.payload["message"] === "string"
+        ? ev.payload["message"]
+        : "Mailbox transport post failed.";
+      risks.push(message);
+    }
+
+    if (ev.type === "mailbox_transport_envelope_rejected") {
+      const reason = typeof ev.payload["reason"] === "string"
+        ? ev.payload["reason"]
+        : "unknown";
+      const detail = typeof ev.payload["detail"] === "string"
+        ? ev.payload["detail"]
+        : null;
+      risks.push(detail ? `Mailbox envelope rejected (${reason}): ${detail}` : `Mailbox envelope rejected (${reason}).`);
+    }
+
+    if (ev.type === "mailbox_transport_parity_drift") {
+      risks.push("Mailbox transport parity drift detected.");
+      const missing = Array.isArray(ev.payload["missing"]) ? ev.payload["missing"] as unknown[] : [];
+      const extra = Array.isArray(ev.payload["extra"]) ? ev.payload["extra"] as unknown[] : [];
+      if (missing.length || extra.length) {
+        openQuestions.push(`Parity drift missing=${missing.length} extra=${extra.length}`);
+      }
+    }
   }
 
   return { risks, openQuestions };

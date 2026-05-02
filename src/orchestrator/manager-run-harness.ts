@@ -5,6 +5,9 @@ import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { promisify } from "node:util";
 
 import type { PaseoTeamAdapter } from "../contracts/adapter.js";
+import { FakeMailboxTransport } from "../adapters/fake/fake-mailbox-transport.js";
+import { PaseoChatTransport, PaseoChatUnavailableError } from "../adapters/paseo-opencode/paseo-chat-transport.js";
+import { PaseoOpenCodeAdapter } from "../adapters/paseo-opencode/paseo-opencode-adapter.js";
 import type {
   AgentEvent,
   AgentEventType,
@@ -21,9 +24,12 @@ import type {
 } from "../contracts/types.js";
 import type {
   EvidenceCommandResult,
+  MailboxEnvelope,
   EvidenceRoleCitation,
   EvidenceTransition,
   MailboxMessage,
+  MailboxMessageBody,
+  MailboxMessageKind,
   Run,
   RunArtifactRef,
   RunProfile,
@@ -31,6 +37,7 @@ import type {
   RunStatus,
   TaskRecord,
 } from "../contracts/four-layer.js";
+import type { MailboxTransport } from "../four-layer/mailbox-transport.js";
 import { classifyBlocker } from "./blocker-classifier.js";
 import { generateEvidencePacket, writeEvidence } from "./evidence.js";
 import { RunStore, sanitizeEventForPersistence } from "./run-store.js";
@@ -70,6 +77,7 @@ export interface ManagerRunHarnessOptions {
   workspaceOverride?: string;
   dataDir?: string;
   adapter?: PaseoTeamAdapter;
+  createMailboxTransport?: (input: { adapter: PaseoTeamAdapter; runId: string }) => MailboxTransport;
   createAdapter?: (input: {
     team: TeamConfig;
     workspaceCwd: string;
@@ -123,10 +131,10 @@ export async function runManagerHarness(options: ManagerRunHarnessOptions): Prom
     teamLeadId: team.leadRoleId,
   });
   const taskList = new FileBackedTaskList({ runDir, clock });
-  const mailboxRef: CoordinationTranscriptRefV0 = {
+  let mailboxRef: CoordinationTranscriptRefV0 = {
     kind: "shared_channel",
     path: mailbox.mirrorPath(),
-    roomRef: `mailbox:${runId}`,
+    roomRef: "",
   };
   const run: Run = {
     schemaVersion: 0,
@@ -157,6 +165,7 @@ export async function runManagerHarness(options: ManagerRunHarnessOptions): Prom
   let audit: AuditMiddlewareResult = { ok: true, status: "succeeded", issues: [] };
   let blockerReason: BlockerReasonV0 | null = null;
   let adapter: PaseoTeamAdapter | undefined;
+  let mailboxTransport: MailboxTransport | undefined;
   const playbookMetadata = buildPlaybookMetadata(resolved.playbook.value);
   const adapterPlaybook = buildAdapterPlaybook(resolved);
   const task: TeamTask = {
@@ -192,6 +201,107 @@ export async function runManagerHarness(options: ManagerRunHarnessOptions): Prom
       await store.appendEvent(persisted);
     }
     return events;
+  };
+
+  const sendMailboxMessage = async (input: {
+    to: string;
+    from: string;
+    kind?: MailboxMessageKind;
+    body: MailboxMessageBody;
+    summary?: string;
+    replyTo?: string;
+    transportReplyTo?: string;
+    taskId?: string;
+  }): Promise<MailboxMessage> => {
+    if (!mailboxTransport || !mailboxRef.roomRef) {
+      throw new Error("mailbox_transport_not_ready");
+    }
+
+    const baseMessage = mailbox.createMessage(input);
+    const envelope: MailboxEnvelope = {
+      schemaVersion: "v1",
+      fromRole: baseMessage.from,
+      toRole: baseMessage.to,
+      runId,
+      ...(input.taskId ? { taskId: input.taskId } : {}),
+      body: baseMessage,
+    };
+
+    let mirroredMessage = baseMessage;
+    try {
+      const transportRef = await mailboxTransport.post({
+        room: mailboxRef.roomRef,
+        envelope,
+        ...(input.transportReplyTo ? { replyTo: input.transportReplyTo } : {}),
+      });
+      mirroredMessage = {
+        ...baseMessage,
+        transportMessageId: transportRef.transportMessageId,
+        transportTimestamp: transportRef.transportTimestamp,
+        transportStatus: "ok",
+      };
+    } catch (error) {
+      mirroredMessage = {
+        ...baseMessage,
+        transportStatus: "post_failed",
+      };
+      await emit("mailbox_transport_post_failed", {
+        messageId: baseMessage.id,
+        to: baseMessage.to,
+        from: baseMessage.from,
+        message: error instanceof Error ? error.message : String(error),
+      });
+    }
+
+    await mailbox.appendToInbox(mirroredMessage);
+    try {
+      await mailbox.appendToMirror(mirroredMessage);
+    } catch (error) {
+      throw new MailboxMirrorWriteError(error instanceof Error ? error.message : String(error));
+    }
+    return mirroredMessage;
+  };
+
+  const auditMailboxTransportParity = async () => {
+    if (!mailboxTransport || !mailboxRef.roomRef || !run.startedAt) {
+      return;
+    }
+
+    const mirrorMessages = await mailbox.readMirror();
+    const mirrorTransportIds = mirrorMessages
+      .filter((message) => message.transportStatus === "ok" && typeof message.transportMessageId === "string")
+      .map((message) => message.transportMessageId!);
+
+    try {
+      const transportRead = await mailboxTransport.read({
+        room: mailboxRef.roomRef,
+        since: { kind: "timestamp", value: run.startedAt },
+      });
+      for (const rejection of drainEnvelopeRejections(mailboxTransport)) {
+        await emit("mailbox_transport_envelope_rejected", rejection);
+      }
+      const transportIds = transportRead.messages.map((message) => message.transportMessageId);
+      const mirrorSet = new Set(mirrorTransportIds);
+      const transportSet = new Set(transportIds);
+      const missing = mirrorTransportIds.filter((id) => !transportSet.has(id));
+      const extra = transportIds.filter((id) => !mirrorSet.has(id));
+      const reorderedAt: number[] = [];
+      for (let index = 0; index < Math.min(mirrorTransportIds.length, transportIds.length); index += 1) {
+        if (mirrorTransportIds[index] !== transportIds[index]) {
+          reorderedAt.push(index);
+        }
+      }
+      if (missing.length || extra.length || reorderedAt.length) {
+        await emit("mailbox_transport_parity_drift", { missing, extra, reorderedAt });
+      }
+    } catch (error) {
+      await emit("mailbox_transport_parity_drift", {
+        missing: mirrorTransportIds,
+        extra: [],
+        reorderedAt: [],
+        detail: error instanceof Error ? error.message : String(error),
+      });
+    }
   };
 
   try {
@@ -249,6 +359,52 @@ export async function runManagerHarness(options: ManagerRunHarnessOptions): Prom
 
     run.status = "running";
     run.startedAt = clock().toISOString();
+    mailboxTransport = options.createMailboxTransport?.({ adapter, runId }) ?? createMailboxTransport(adapter);
+    try {
+      await probeMailboxTransport(mailboxTransport);
+      const roomRef = await mailboxTransport.createRoom({
+        runId,
+        name: `pluto-mailbox-${runId}`,
+        purpose: `Pluto mailbox for run ${runId}`,
+      });
+      mailboxRef = { ...mailboxRef, roomRef };
+      run.coordinationChannel = {
+        kind: "shared_channel",
+        locator: roomRef,
+        path: mailboxRef.path,
+      };
+      await emit("coordination_transcript_created", {
+        roomRef,
+        runId,
+        transportTimestamp: clock().toISOString(),
+      });
+    } catch (error) {
+      if (error instanceof PaseoChatUnavailableError) {
+        blockerReason = error.blockerReason;
+        issues.push(error.message);
+        await emit("blocker", error.toBlockerPayload());
+        await emit("run_failed", { message: error.message });
+        return finishFailure({
+          run,
+          runDir,
+          workspaceDir,
+          artifactPath,
+          collected,
+          task,
+          issues,
+          blockerReason,
+          clock,
+          store,
+          mailboxRef,
+          commandResults,
+          transitions,
+          roleCitations,
+          acceptance,
+          audit,
+        });
+      }
+      throw error;
+    }
     await emit("run_started", {
       taskId: task.id,
       title: task.title,
@@ -287,7 +443,7 @@ export async function runManagerHarness(options: ManagerRunHarnessOptions): Prom
     let previousTaskId: string | undefined;
     let lastTask: TaskRecord | null = null;
 
-    await mailbox.send({
+    await sendMailboxMessage({
       to: leadRole.id,
       from: "pluto",
       summary: "RUN_START",
@@ -303,14 +459,21 @@ export async function runManagerHarness(options: ManagerRunHarnessOptions): Prom
       lastTask = createdTask;
       await emit("task_created", { taskId: createdTask.id, summary: createdTask.summary, dependsOn: createdTask.dependsOn }, role.id);
 
-      const assignmentMessage = await mailbox.send({
+      const assignmentMessage = await sendMailboxMessage({
         to: role.id,
         from: leadRole.id,
         summary: `TASK ${createdTask.id}`,
         body: `Task ${createdTask.id}\nRole: ${role.id}\nGoal: ${taskText}\nMailbox: ${mailbox.mirrorPath()}\nTasks: ${taskList.path()}`,
         replyTo: createdTask.id,
+        taskId: createdTask.id,
       });
-      await emit("mailbox_message", { messageId: assignmentMessage.id, to: role.id, from: leadRole.id, kind: assignmentMessage.kind }, role.id, leadSession.sessionId);
+      await emit("mailbox_message", {
+        messageId: assignmentMessage.id,
+        to: role.id,
+        from: leadRole.id,
+        kind: assignmentMessage.kind,
+        transportMessageId: assignmentMessage.transportMessageId,
+      }, role.id, leadSession.sessionId);
 
       if (role.id === "planner") {
         const requestBody = createPlanApprovalRequest({
@@ -318,22 +481,25 @@ export async function runManagerHarness(options: ManagerRunHarnessOptions): Prom
           requestedMode: "workspace_write",
           taskId: createdTask.id,
         });
-        const requestMessage = await mailbox.send({
+        const requestMessage = await sendMailboxMessage({
           to: leadRole.id,
           from: role.id,
           kind: "plan_approval_request",
           summary: `PLAN ${createdTask.id}`,
           body: requestBody,
           replyTo: createdTask.id,
+          taskId: createdTask.id,
         });
         await emit("plan_approval_requested", { messageId: requestMessage.id, taskId: createdTask.id }, role.id);
-        const responseMessage = await mailbox.send({
+        const responseMessage = await sendMailboxMessage({
           to: role.id,
           from: leadRole.id,
           kind: "plan_approval_response",
           summary: `PLAN_APPROVED ${createdTask.id}`,
           body: createPlanApprovalResponse({ approved: true, mode: "workspace_write", taskId: createdTask.id }),
           replyTo: requestMessage.id,
+          transportReplyTo: requestMessage.transportMessageId,
+          taskId: createdTask.id,
         });
         if (!isTrustedPlanApprovalResponse(responseMessage, leadRole.id)) {
           throw new Error(`untrusted_plan_approval_response:${createdTask.id}`);
@@ -362,15 +528,22 @@ export async function runManagerHarness(options: ManagerRunHarnessOptions): Prom
       roleCitations.push({ role: role.id, summary: firstNonEmptyLine(output), quote: firstNonEmptyLine(output) });
       previousRole = role.id;
 
-      const completionMessage = await mailbox.send({
+      const completionMessage = await sendMailboxMessage({
         to: leadRole.id,
         from: role.id,
         summary: `COMPLETE ${createdTask.id}`,
         body: `Task ${createdTask.id} complete. Output:\n${output}`,
         replyTo: createdTask.id,
+        taskId: createdTask.id,
       });
       completionMessages.push(completionMessage);
-      await emit("mailbox_message", { messageId: completionMessage.id, to: leadRole.id, from: role.id, kind: completionMessage.kind }, role.id, completedEvent?.sessionId);
+      await emit("mailbox_message", {
+        messageId: completionMessage.id,
+        to: leadRole.id,
+        from: role.id,
+        kind: completionMessage.kind,
+        transportMessageId: completionMessage.transportMessageId,
+      }, role.id, completedEvent?.sessionId);
 
       await taskList.complete(createdTask.id, []);
       await emit("task_completed", { taskId: createdTask.id, messageId: completionMessage.id }, role.id, completedEvent?.sessionId);
@@ -388,7 +561,7 @@ export async function runManagerHarness(options: ManagerRunHarnessOptions): Prom
     const markdown = leadSummaryEvent
       ? String(leadSummaryEvent.transient?.rawPayload?.markdown ?? leadSummaryEvent.payload.markdown ?? "")
       : buildFallbackSummary(taskText, contributions);
-    const finalSummaryMessage = await mailbox.send({
+    const finalSummaryMessage = await sendMailboxMessage({
       to: "pluto",
       from: leadRole.id,
       summary: "FINAL",
@@ -397,7 +570,14 @@ export async function runManagerHarness(options: ManagerRunHarnessOptions): Prom
         ...completionMessages.map((message) => `${message.from}:${message.id}`),
       ].join("\n"),
     });
-    await emit("mailbox_message", { messageId: finalSummaryMessage.id, to: "pluto", from: leadRole.id, kind: finalSummaryMessage.kind }, leadRole.id, leadSession.sessionId);
+    await emit("mailbox_message", {
+      messageId: finalSummaryMessage.id,
+      to: "pluto",
+      from: leadRole.id,
+      kind: finalSummaryMessage.kind,
+      transportMessageId: finalSummaryMessage.transportMessageId,
+    }, leadRole.id, leadSession.sessionId);
+    await auditMailboxTransportParity();
 
     const artifact: FinalArtifact = {
       runId,
@@ -527,6 +707,32 @@ export async function runManagerHarness(options: ManagerRunHarnessOptions): Prom
       finalReportPath,
     };
   } catch (error) {
+    if (error instanceof MailboxMirrorWriteError) {
+      blockerReason = "mailbox_mirror_failed";
+      issues.push(error.message);
+      if (adapter) {
+        await emit("blocker", error.toBlockerPayload());
+        await emit("run_failed", { message: error.message });
+      }
+      return finishFailure({
+        run,
+        runDir,
+        workspaceDir,
+        artifactPath,
+        collected,
+        task,
+        issues,
+        blockerReason,
+        clock,
+        store,
+        mailboxRef,
+        commandResults,
+        transitions,
+        roleCitations,
+        acceptance,
+        audit,
+      });
+    }
     const message = error instanceof Error ? error.message : String(error);
     blockerReason = classifyBlocker({ errorMessage: message, source: "orchestrator" }).reason;
     issues.push(message);
@@ -797,6 +1003,55 @@ function resolveRunStatus(issues: string[], auditOk: boolean): RunStatus {
   if (!auditOk) return "failed_audit";
   if (issues.length > 0) return "failed";
   return "succeeded";
+}
+
+class MailboxMirrorWriteError extends Error {
+  constructor(message: string) {
+    super(`mailbox_mirror_failed: ${message}`);
+    this.name = "MailboxMirrorWriteError";
+  }
+
+  toBlockerPayload() {
+    return {
+      reason: "mailbox_mirror_failed",
+      message: this.message,
+      detail: {
+        operation: "append_mailbox_mirror",
+      },
+    };
+  }
+}
+
+function createMailboxTransport(adapter: PaseoTeamAdapter): MailboxTransport {
+  if (adapter instanceof PaseoOpenCodeAdapter) {
+    return new PaseoChatTransport();
+  }
+  return new FakeMailboxTransport();
+}
+
+async function probeMailboxTransport(transport: MailboxTransport): Promise<void> {
+  if (hasProbeCapabilities(transport)) {
+    await transport.probeCapabilities();
+  }
+}
+
+function drainEnvelopeRejections(transport: MailboxTransport): Array<Record<string, unknown>> {
+  if (!hasEnvelopeRejectionDrain(transport)) {
+    return [];
+  }
+  return transport.drainEnvelopeRejections().map((rejection) => ({ ...rejection }));
+}
+
+function hasProbeCapabilities(
+  transport: MailboxTransport,
+): transport is MailboxTransport & { probeCapabilities: () => Promise<void> } {
+  return typeof (transport as { probeCapabilities?: unknown }).probeCapabilities === "function";
+}
+
+function hasEnvelopeRejectionDrain(
+  transport: MailboxTransport,
+): transport is MailboxTransport & { drainEnvelopeRejections: () => Array<Record<string, unknown>> } {
+  return typeof (transport as { drainEnvelopeRejections?: unknown }).drainEnvelopeRejections === "function";
 }
 
 function buildSummaryRequest(taskText: string, contributions: ReadonlyArray<WorkerContribution>, completionMessages: ReadonlyArray<MailboxMessage>, mailboxPath: string): string {

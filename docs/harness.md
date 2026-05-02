@@ -14,6 +14,8 @@
 ## Generated evidence surfaces
 
 - `.pluto/runs/<runId>/mailbox.jsonl`
+- `Run.coordinationChannel.locator` / `EvidencePacket.coordinationChannel.locator` record the real shared-channel room id for the run
+- Each `mailbox.jsonl` line bakes transport metadata at append time: `transportMessageId`, `transportTimestamp`, `transportStatus`
 - `.pluto/runs/<runId>/tasks.json`
 - `.pluto/runs/<runId>/artifact.md`
 - `.pluto/runs/<runId>/evidence-packet.md`

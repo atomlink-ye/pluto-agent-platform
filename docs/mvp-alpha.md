@@ -21,7 +21,7 @@ audit-grade evidence.
 | `Playbook` | `playbooks/*.yaml` | team composition + workflow + audit policy |
 | `Scenario` | `scenarios/*.yaml` | task specialization and overlays |
 | `RunProfile` | `run-profiles/*.yaml` | workspace + acceptance + artifact/stdout policy |
-| `MailboxMessage` | `mailbox.jsonl` / `src/contracts/four-layer.ts` | typed coordination message |
+| `MailboxMessage` | `mailbox.jsonl` / `src/contracts/four-layer.ts` | typed coordination message with baked transport metadata |
 | `Task` | `tasks.json` / `src/contracts/four-layer.ts` | shared task-list record |
 | `Run` | `.pluto/runs/<runId>/` | materialized runtime record |
 | `EvidencePacket` | `.pluto/runs/<runId>/evidence-packet.{md,json}` | canonical evidence |
@@ -37,6 +37,7 @@ messages, drains events, waits for completion, and tears down runtime state.
 Required runtime artifacts:
 
 - `mailbox.jsonl`
+- `Run.coordinationChannel.locator` points at the real shared channel room id; `mailbox.jsonl` remains the canonical mirrored transcript
 - `tasks.json`
 - `artifact.md`
 - `evidence-packet.json`
