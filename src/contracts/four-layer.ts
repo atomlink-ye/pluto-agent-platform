@@ -37,6 +37,16 @@ export const RUN_STATUSES = [
   "cancelled",
 ] as const;
 
+export const MAILBOX_MESSAGE_KINDS = [
+  "text",
+  "shutdown_request",
+  "shutdown_response",
+  "plan_approval_request",
+  "plan_approval_response",
+] as const;
+
+export const TASK_LIST_STATUSES = ["pending", "in_progress", "completed"] as const;
+
 export const REQUIRED_READ_KINDS = ["repo", "external_document"] as const;
 
 export const COORDINATION_CHANNEL_KINDS = ["shared_channel", "transcript"] as const;
@@ -46,6 +56,8 @@ export type FourLayerRuntimeObjectKind = typeof FOUR_LAYER_RUNTIME_OBJECT_KINDS[
 export type FourLayerObjectKind = typeof FOUR_LAYER_OBJECT_KINDS[number];
 export type ScenarioTaskMode = typeof SCENARIO_TASK_MODES[number];
 export type RunStatus = typeof RUN_STATUSES[number];
+export type MailboxMessageKind = typeof MAILBOX_MESSAGE_KINDS[number];
+export type TaskListStatus = typeof TASK_LIST_STATUSES[number];
 export type RequiredReadKind = typeof REQUIRED_READ_KINDS[number];
 export type CoordinationChannelKind = typeof COORDINATION_CHANNEL_KINDS[number];
 
@@ -172,6 +184,50 @@ export interface RunProfile extends AuthoredNamedObject<"run_profile"> {
   runtime?: RunProfileRuntime;
 }
 
+export interface PlanApprovalRequestBody {
+  plan: string;
+  requestedMode: string;
+  taskId?: string;
+}
+
+export interface PlanApprovalResponseBody {
+  approved: boolean;
+  mode: string;
+  feedback?: string;
+  taskId?: string;
+}
+
+export type MailboxMessageBody =
+  | string
+  | PlanApprovalRequestBody
+  | PlanApprovalResponseBody
+  | { reason?: string; taskId?: string }
+  | { acknowledged?: boolean; reason?: string; taskId?: string };
+
+export interface MailboxMessage {
+  id: string;
+  to: string;
+  from: string;
+  createdAt: string;
+  kind: MailboxMessageKind;
+  body: MailboxMessageBody;
+  summary?: string;
+  replyTo?: string;
+  readAt?: string;
+}
+
+export interface TaskRecord {
+  id: string;
+  status: TaskListStatus;
+  assigneeId?: string;
+  dependsOn: string[];
+  createdAt: string;
+  updatedAt: string;
+  claimedBy?: string;
+  summary: string;
+  artifacts: string[];
+}
+
 export interface CoordinationChannelRef {
   kind: CoordinationChannelKind;
   locator: string;
@@ -229,6 +285,8 @@ export interface EvidenceLineage {
   stdoutPath?: string;
   transcriptPath?: string;
   finalReportPath?: string;
+  mailboxLogPath?: string;
+  taskListPath?: string;
   acceptanceOk?: boolean;
   auditOk?: boolean;
 }

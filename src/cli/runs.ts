@@ -16,7 +16,7 @@ const VALID_ROLES = ["lead", "planner", "generator", "evaluator"] as const;
 const VALID_KINDS = [
   "dispatch", "message", "artifact", "summary", "blocker", "retry",
   "run_started", "lead_started", "worker_requested", "worker_started",
-  "worker_completed", "lead_message", "orchestrator_underdispatch_fallback",
+  "worker_completed", "lead_message",
   "artifact_created", "run_completed", "run_failed",
 ] as const;
 const FOLLOW_POLL_INTERVAL_MS = 250;

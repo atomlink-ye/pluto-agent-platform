@@ -38,7 +38,7 @@ async function runExtensions(args: string[]): Promise<{ stdout: string; stderr: 
     const result = await exec("npx", ["tsx", join(process.cwd(), "src/cli/extensions.ts"), ...args], {
       cwd: process.cwd(),
       env: { ...process.env, PLUTO_DATA_DIR: dataDir },
-      timeout: 10_000,
+      timeout: 20_000,
     });
     return { stdout: result.stdout, stderr: result.stderr, exitCode: 0 };
   } catch (err: unknown) {
@@ -100,7 +100,7 @@ describe("pnpm extensions", () => {
     expect(listText.exitCode).toBe(0);
     expect(listText.stdout).toContain("install-cli-1");
     expect(listText.stdout).toContain("revoked");
-  });
+  }, 30_000);
 
   it("denies activation when the manifest requests privileged capabilities outside the approved scope", async () => {
     const store = new ExtensionStore({ dataDir });

@@ -90,7 +90,6 @@ async function main() {
     createAdapter: ({ team, workspaceCwd }) => flags.adapter === "fake"
       ? new FakeAdapter({ team })
       : new PaseoOpenCodeAdapter({ workspaceCwd, deleteAgentsOnEnd: false }),
-    observeLeadWorkers: flags.adapter === "paseo-opencode",
   });
 
   console.log(JSON.stringify({

@@ -6,9 +6,8 @@ import { promisify } from "node:util";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { FakeAdapter } from "@/adapters/fake/index.js";
-import { DEFAULT_TEAM } from "@/orchestrator/team-config.js";
+import { runManagerHarness } from "@/orchestrator/manager-run-harness.js";
 import { RunStore } from "@/orchestrator/run-store.js";
-import { TeamRunService } from "@/orchestrator/team-run-service.js";
 import type {
   RunsListOutputV0,
   RunsShowOutputV0,
@@ -29,7 +28,7 @@ async function runCli(args: string[], env?: Record<string, string>): Promise<{ s
       {
         cwd: process.cwd(),
         env: { ...process.env, PLUTO_DATA_DIR: dataDir, ...env },
-        timeout: 10_000,
+        timeout: 20_000,
       },
     );
     return { stdout: result.stdout, stderr: result.stderr, exitCode: 0 };
@@ -51,27 +50,21 @@ beforeEach(async () => {
   const nextId = () => `cli-test-id-${String(idSeq++).padStart(4, "0")}`;
   const fixedClock = () => new Date("2026-04-29T12:00:00.000Z");
 
-  const adapter = new FakeAdapter({ team: DEFAULT_TEAM, idGen: nextId, clock: fixedClock });
-  const store = new RunStore({ dataDir });
-  const service = new TeamRunService({
-    adapter,
-    team: DEFAULT_TEAM,
-    store,
+  const result = await runManagerHarness({
+    rootDir: process.cwd(),
+    selection: {
+      scenario: "hello-team",
+      runProfile: "fake-smoke",
+      runtimeTask: "Produce a test artifact for CLI testing",
+    },
+    workspaceOverride: workDir,
+    dataDir,
     idGen: nextId,
     clock: fixedClock,
-    pumpIntervalMs: 1,
-    timeoutMs: 5_000,
+    createAdapter: ({ team }) => new FakeAdapter({ team, idGen: nextId, clock: fixedClock }),
   });
 
-  const result = await service.run({
-    id: "cli-test-task",
-    title: "CLI test task",
-    prompt: "Produce a test artifact for CLI testing",
-    workspacePath: workDir,
-    minWorkers: 2,
-  });
-
-  runId = result.runId;
+  runId = result.run.runId;
 });
 
 afterEach(async () => {
@@ -119,7 +112,7 @@ describe("pnpm runs show", () => {
     const output: RunsShowOutputV0 = JSON.parse(stdout);
     expect(output.schemaVersion).toBe(0);
     expect(output.runId).toBe(runId);
-    expect(output.taskTitle).toBe("CLI test task");
+    expect(output.taskTitle).toBe("hello-team");
     expect(output.workspace).toBe("[REDACTED:workspace-path]");
     expect(output.artifactPath).toBe(join(".pluto", "runs", runId, "artifact.md"));
     expect(output.evidencePath).toBe(join(".pluto", "runs", runId, "evidence.json"));

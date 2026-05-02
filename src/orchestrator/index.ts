@@ -1,7 +1,3 @@
-/** @compatibility Legacy-only export for TeamRunService and pnpm submit. */
-export { TeamRunService } from "./team-run-service.js";
-/** @compatibility Legacy-only export for TeamRunService and pnpm submit. */
-export type { TeamRunServiceOptions } from "./team-run-service.js";
 export { runManagerHarness } from "./manager-run-harness.js";
 export type {
   ManagerRunHarnessOptions,
@@ -34,7 +30,6 @@ export {
   selectTeamPlaybook,
   validateTeamPlaybookV0,
 } from "./team-playbook.js";
-export { FileBackedCoordinationTranscript } from "./coordination-transcript.js";
 export { classifyBlocker, isRetryable, RETRYABLE_REASONS, CANONICAL_BLOCKER_REASONS, normalizeBlockerReason } from "./blocker-classifier.js";
 export type { ClassifierInput, ClassifierResult } from "./blocker-classifier.js";
 export {

@@ -1,8 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { exec as execCallback } from "node:child_process";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
-import { resolve, join, dirname, relative, isAbsolute } from "node:path";
-import { setTimeout as delay } from "node:timers/promises";
+import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { promisify } from "node:util";
 
 import type { PaseoTeamAdapter } from "../contracts/adapter.js";
@@ -10,7 +9,6 @@ import type {
   AgentEvent,
   AgentEventType,
   AgentRoleConfig,
-  AgentRoleId,
   BlockerReasonV0,
   CoordinationTranscriptRefV0,
   FinalArtifact,
@@ -22,17 +20,17 @@ import type {
   WorkerContribution,
 } from "../contracts/types.js";
 import type {
-  CoordinationChannelRef,
   EvidenceCommandResult,
   EvidenceRoleCitation,
   EvidenceTransition,
+  MailboxMessage,
   Run,
   RunArtifactRef,
-  RunProfileAcceptanceCommand,
   RunProfile,
+  RunProfileAcceptanceCommand,
   RunStatus,
+  TaskRecord,
 } from "../contracts/four-layer.js";
-import { createDefaultCoordinationTranscript } from "./coordination-transcript.js";
 import { classifyBlocker } from "./blocker-classifier.js";
 import { generateEvidencePacket, writeEvidence } from "./evidence.js";
 import { RunStore, sanitizeEventForPersistence } from "./run-store.js";
@@ -40,15 +38,24 @@ import type { AcceptanceCheckResult } from "../four-layer/acceptance-runner.js";
 import type { AuditMiddlewareResult } from "../four-layer/audit-middleware.js";
 import {
   aggregateEvidencePacket,
+  createAcceptanceHook,
+  createIdleNudgeHook,
+  createPlanApprovalRequest,
+  createPlanApprovalResponse,
+  FileBackedMailbox,
+  FileBackedTaskList,
+  isTrustedPlanApprovalResponse,
+  loadFourLayerWorkspace,
+  renderAllRolePrompts,
+  resolveFourLayerSelection,
   runAcceptanceChecks,
   runAuditMiddleware,
+  runHooks,
   writeEvidencePacket,
-  loadFourLayerWorkspace,
-  resolveFourLayerSelection,
-  renderAllRolePrompts,
 } from "../four-layer/index.js";
 
 const exec = promisify(execCallback);
+const DEFAULT_LEAD_TIMEOUT_SECONDS = 600;
 
 export interface ManagerRunHarnessSelection {
   scenario: string;
@@ -56,8 +63,6 @@ export interface ManagerRunHarnessSelection {
   playbook?: string;
   runtimeTask?: string;
 }
-
-const DEFAULT_LEAD_TIMEOUT_SECONDS = 600;
 
 export interface ManagerRunHarnessOptions {
   rootDir: string;
@@ -76,13 +81,6 @@ export interface ManagerRunHarnessOptions {
   idGen?: () => string;
   clock?: () => Date;
   onPhase?: (phase: string, details: Record<string, unknown>) => Promise<void> | void;
-  /**
-   * When true, the harness observes adapter events to discover lead-spawned
-   * workers instead of driving a harness-owned dispatch loop. Falls back to
-   * underdispatch-driven spawning if the lead does not produce all required
-   * worker completions within the timeout. Default false (fake/legacy compat).
-   */
-  observeLeadWorkers?: boolean;
 }
 
 export interface ManagerRunHarnessResult {
@@ -110,29 +108,25 @@ export async function runManagerHarness(options: ManagerRunHarnessOptions): Prom
   const resolved = await resolveFourLayerSelection(workspace, options.selection);
   const runId = idGen();
   const runProfile = resolved.runProfile?.value;
+  const taskText = resolveRuntimeTask(resolved.scenario.value.task, options.selection.runtimeTask, resolved.scenario.value.allowTaskOverride);
+  const prompts = renderAllRolePrompts(resolved, { runtimeTask: taskText, runId });
+  const team = buildTeamConfig(resolved, prompts);
   const initialWorkspaceDir = resolveWorkspaceDir(rootDir, runProfile?.workspace.cwd, runId, options.workspaceOverride);
   const workspaceDir = resolveWorktreeDir(rootDir, runProfile?.workspace.worktree?.path, initialWorkspaceDir, runId);
   const store = new RunStore({ dataDir: options.dataDir ?? ".pluto" });
   const runDir = store.runDir(runId);
-  const transcript = createDefaultCoordinationTranscript({ runId, runDir });
-  const taskText = resolveRuntimeTask(resolved.scenario.value.task, options.selection.runtimeTask, resolved.scenario.value.allowTaskOverride);
-  const prompts = renderAllRolePrompts(resolved, { runtimeTask: taskText, runId });
-  const team = buildTeamConfig(resolved, prompts);
-  const adapterPlaybook = buildAdapterPlaybook(resolved);
-  const playbookMetadata = buildPlaybookMetadata(resolved.playbook.value);
-  const task: TeamTask = {
-    id: `manager-run-${runId}`,
-    title: resolved.scenario.value.name,
-    prompt: taskText,
-    workspacePath: workspaceDir,
-    artifactPath: join(runDir, "artifact.md"),
-    minWorkers: Math.max(2, resolved.members.length),
-  };
-
-  const coordinationChannel: CoordinationChannelRef = {
-    kind: "transcript",
-    locator: transcript.ref.roomRef,
-    path: transcript.ref.path,
+  const mailbox = new FileBackedMailbox({
+    runDir,
+    teammateIds: [team.leadRoleId, ...resolved.members.map((member) => member.value.name), "pluto"],
+    clock,
+    idGen,
+    teamLeadId: team.leadRoleId,
+  });
+  const taskList = new FileBackedTaskList({ runDir, clock });
+  const mailboxRef: CoordinationTranscriptRefV0 = {
+    kind: "shared_channel",
+    path: mailbox.mirrorPath(),
+    roomRef: `mailbox:${runId}`,
   };
   const run: Run = {
     schemaVersion: 0,
@@ -144,7 +138,11 @@ export async function runManagerHarness(options: ManagerRunHarnessOptions): Prom
     status: "pending",
     task: taskText,
     workspace: runProfile ? materializedWorkspace(runProfile.workspace, rootDir, workspaceDir, runId) : { cwd: workspaceDir },
-    coordinationChannel,
+    coordinationChannel: {
+      kind: "shared_channel",
+      locator: mailboxRef.roomRef,
+      path: mailboxRef.path,
+    },
     artifacts: [],
   };
 
@@ -152,17 +150,26 @@ export async function runManagerHarness(options: ManagerRunHarnessOptions): Prom
   const transitions: EvidenceTransition[] = [];
   const roleCitations: EvidenceRoleCitation[] = [];
   const commandResults: CommandExecutionResult[] = [];
-  let artifactPath: string | null = null;
   const stdoutLines: string[] = [];
   const issues: string[] = [];
+  let artifactPath: string | null = null;
   let acceptance: AcceptanceCheckResult = { ok: true, issues: [] };
   let audit: AuditMiddlewareResult = { ok: true, status: "succeeded", issues: [] };
-  let legacyResult: TeamRunResult;
   let blockerReason: BlockerReasonV0 | null = null;
   let adapter: PaseoTeamAdapter | undefined;
+  const playbookMetadata = buildPlaybookMetadata(resolved.playbook.value);
+  const adapterPlaybook = buildAdapterPlaybook(resolved);
+  const task: TeamTask = {
+    id: `manager-run-${runId}`,
+    title: resolved.scenario.value.name,
+    prompt: taskText,
+    workspacePath: workspaceDir,
+    artifactPath: join(workspaceDir, "artifact.md"),
+    minWorkers: Math.max(2, resolved.members.length),
+  };
 
-  const emit = async (type: AgentEventType, payload: Record<string, unknown> = {}, roleId?: string, sessionId?: string) => {
-    const event: AgentEvent = sanitizeEventForPersistence({
+  const emit = async (type: AgentEventType, payload: Record<string, unknown> = {}, roleId?: string, sessionId?: string): Promise<AgentEvent> => {
+    const event = sanitizeEventForPersistence({
       id: idGen(),
       runId,
       ts: clock().toISOString(),
@@ -177,7 +184,7 @@ export async function runManagerHarness(options: ManagerRunHarnessOptions): Prom
   };
 
   const persistAdapterEvents = async () => {
-    if (!adapter) return [];
+    if (!adapter) return [] as AgentEvent[];
     const events = await adapter.readEvents({ runId });
     for (const event of events) {
       const persisted = sanitizeEventForPersistence(event);
@@ -192,28 +199,25 @@ export async function runManagerHarness(options: ManagerRunHarnessOptions): Prom
     await verifyRequiredReads(rootDir, runProfile?.requiredReads ?? []);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    const classified = classifyBlocker({ errorMessage: message, source: "orchestrator" });
-    blockerReason = classified.reason;
-    run.status = "failed";
-    run.finishedAt = clock().toISOString();
-    legacyResult = {
-      runId,
-      status: "failed",
-      events: collected,
-      blockerReason,
-      failure: { message, cause: error },
-    };
-    return {
+    blockerReason = classifyBlocker({ errorMessage: message, source: "orchestrator" }).reason;
+    return finishFailure({
       run,
-      legacyResult,
       runDir,
       workspaceDir,
       artifactPath,
-      canonicalEvidencePath: join(runDir, "evidence-packet.json"),
-      legacyEvidencePath: join(runDir, "evidence.json"),
-      stdoutPath: join(runDir, "stdout.log"),
-      finalReportPath: join(runDir, "final-report.md"),
-    };
+      collected,
+      task,
+      issues: [message],
+      blockerReason,
+      clock,
+      store,
+      mailboxRef,
+      commandResults,
+      transitions,
+      roleCitations,
+      acceptance,
+      audit,
+    });
   }
 
   try {
@@ -228,18 +232,23 @@ export async function runManagerHarness(options: ManagerRunHarnessOptions): Prom
     if (!adapter) {
       throw new Error("manager_run_harness_adapter_required");
     }
+
     await options.onPhase?.("pre_launch", { runId, scenario: resolved.scenario.value.name });
-    run.status = "running";
-    run.startedAt = clock().toISOString();
     await mkdir(workspaceDir, { recursive: true });
     await mkdir(runDir, { recursive: true });
+    await mailbox.ensure();
+    await taskList.ensure();
     await writeFile(join(runDir, "workspace-materialization.json"), JSON.stringify({
       runId,
       repoRoot: rootDir,
       workspaceDir,
-      worktreeDir: workspaceDir,
       runProfile: resolved.runProfile?.value.name ?? null,
+      mailboxPath: mailbox.mirrorPath(),
+      taskListPath: taskList.path(),
     }, null, 2) + "\n", "utf8");
+
+    run.status = "running";
+    run.startedAt = clock().toISOString();
     await emit("run_started", {
       taskId: task.id,
       title: task.title,
@@ -248,153 +257,147 @@ export async function runManagerHarness(options: ManagerRunHarnessOptions): Prom
       playbookId: resolved.playbook.value.name,
       orchestrationMode: "teamlead_direct",
       orchestrationSource: "teamlead_direct",
-      transcript: transcript.ref,
+      transcript: mailboxRef,
+      mailboxLogPath: mailbox.mirrorPath(),
+      taskListPath: taskList.path(),
       scenario: resolved.scenario.value.name,
       runProfile: resolved.runProfile?.value.name ?? null,
     });
-    await emit("coordination_transcript_created", {
-      transcript: transcript.ref,
-      playbookId: resolved.playbook.value.name,
-      scenario: resolved.scenario.value.name,
-    });
-    await adapter.startRun({ runId, task, team, playbook: adapterPlaybook, transcript: transcript.ref });
+
+    await adapter.startRun({ runId, task, team, playbook: adapterPlaybook, transcript: mailboxRef });
     const leadRole = team.roles.find((role) => role.id === team.leadRoleId)!;
-    const leadSession = await adapter.createLeadSession({ runId, task, role: leadRole, playbook: adapterPlaybook, transcript: transcript.ref });
-    await transcript.append({
+    const leadSession = await adapter.createLeadSession({
       runId,
-      ts: clock().toISOString(),
-      source: "pluto",
-      type: "lead_started",
-      message: `Lead session started for ${resolved.playbook.value.name}.`,
-      payload: { sessionId: leadSession.sessionId },
+      task,
+      role: leadRole,
+      playbook: adapterPlaybook,
+      transcript: mailboxRef,
     });
     await persistAdapterEvents();
 
-    const workerRoles = team.roles.filter((role) => role.kind === "worker");
-    const deviations = extractDeviations(collected);
-    const requiredRoles = new Set(workerRoles.map((r) => r.id));
-    const completedRoles = new Set<string>();
+    const memberRoles = team.roles.filter((role) => role.kind === "worker");
+    const acceptanceHook = createAcceptanceHook({
+      workspaceDir,
+      acceptanceCommands: runProfile?.acceptanceCommands ?? [],
+      taskList,
+    });
+    const completionMessages: MailboxMessage[] = [];
     const contributions: WorkerContribution[] = [];
     let previousRole = leadRole.id;
+    let previousTaskId: string | undefined;
+    let lastTask: TaskRecord | null = null;
 
-    if (options.observeLeadWorkers) {
-      const leadTimeoutMs = extractLeadTimeoutSeconds(runProfile) * 1000;
-      const observationStartedAt = Date.now();
-      const underdispatchMs = Math.min(leadTimeoutMs - 1_000, 15_000);
-      let underdispatchTriggered = false;
-
-      while (completedRoles.size < requiredRoles.size) {
-        if (Date.now() - observationStartedAt > leadTimeoutMs) {
-          throw new Error(`lead_timeout:exceeded ${leadTimeoutMs}ms`);
-        }
-        const adapterEvents = await persistAdapterEvents();
-        for (const event of adapterEvents) {
-          if (event.type === "worker_completed" && event.roleId && requiredRoles.has(event.roleId) && !completedRoles.has(event.roleId)) {
-            completedRoles.add(event.roleId);
-            const c = collectContribution(event, previousRole);
-            contributions.push(c.contribution);
-            transitions.push(c.transition);
-            roleCitations.push(c.citation);
-            previousRole = c.nextRole;
-            await transcript.append({
-              runId, ts: clock().toISOString(), source: "worker",
-              type: "stage_output", message: `${event.roleId} completed.`,
-              payload: { output: c.contribution.output },
-            });
-          }
-        }
-        if (!underdispatchTriggered && completedRoles.size < requiredRoles.size && Date.now() - observationStartedAt > underdispatchMs) {
-          underdispatchTriggered = true;
-          await emit("orchestrator_underdispatch_fallback", {
-            missingRoles: workerRoles.filter((r) => !completedRoles.has(r.id)).map((r) => r.id),
-            reason: "lead_underdispatched_required_workers",
-          });
-          for (const role of workerRoles.filter((r) => !completedRoles.has(r.id))) {
-            const instructions = buildWorkerInstructions({ roleId: role.id, task: taskText, previousContributions: contributions });
-            await transcript.append({
-              runId, ts: clock().toISOString(), source: "teamlead",
-              type: "stage_request", message: `Requested ${role.id}.`,
-              payload: { targetRole: role.id },
-            });
-            await dispatchViaAdapter(adapter, runId, role, instructions, contributions, transcript.ref);
-            await persistAdapterEvents();
-            const completed = [...collected].reverse().find((e) => e.type === "worker_completed" && e.roleId === role.id);
-            if (completed) {
-              completedRoles.add(role.id);
-              const c = collectContribution(completed, previousRole);
-              contributions.push(c.contribution);
-              transitions.push(c.transition);
-              roleCitations.push(c.citation);
-              previousRole = c.nextRole;
-              await transcript.append({
-                runId, ts: clock().toISOString(), source: "worker",
-                type: "stage_output", message: `${role.id} completed.`,
-                payload: { output: c.contribution.output },
-              });
-            }
-          }
-        }
-        await delay(50);
-      }
-    } else {
-      for (const role of workerRoles) {
-        const instructions = buildWorkerInstructions({
-          roleId: role.id,
-          task: taskText,
-          previousContributions: contributions,
-        });
-        await transcript.append({
-          runId,
-          ts: clock().toISOString(),
-          source: "teamlead",
-          type: "stage_request",
-          message: `Requested ${role.id}.`,
-          payload: { targetRole: role.id },
-        });
-        await dispatchViaAdapter(adapter, runId, role, instructions, contributions, transcript.ref);
-        const events = await persistAdapterEvents();
-        const completed = [...events].reverse().find((event) => event.type === "worker_completed" && event.roleId === role.id);
-        if (completed) {
-          completedRoles.add(role.id);
-          const c = collectContribution(completed, previousRole);
-          contributions.push(c.contribution);
-          transitions.push(c.transition);
-          roleCitations.push(c.citation);
-          previousRole = c.nextRole;
-          await transcript.append({
-            runId,
-            ts: clock().toISOString(),
-            source: "worker",
-            type: "stage_output",
-            message: `${role.id} completed.`,
-            payload: { output: c.contribution.output },
-          });
-        }
-      }
-    }
-
-    transitions.push({
-      from: previousRole,
+    await mailbox.send({
       to: leadRole.id,
-      observedAt: clock().toISOString(),
-      source: "manager_run_harness",
+      from: "pluto",
+      summary: "RUN_START",
+      body: `Run ${runId} started. Mailbox: ${mailbox.mirrorPath()} Task list: ${taskList.path()}`,
     });
 
+    for (const role of memberRoles) {
+      const createdTask = await taskList.create({
+        assigneeId: role.id,
+        dependsOn: previousTaskId ? [previousTaskId] : [],
+        summary: `${role.id}: ${taskText}`,
+      });
+      lastTask = createdTask;
+      await emit("task_created", { taskId: createdTask.id, summary: createdTask.summary, dependsOn: createdTask.dependsOn }, role.id);
+
+      const assignmentMessage = await mailbox.send({
+        to: role.id,
+        from: leadRole.id,
+        summary: `TASK ${createdTask.id}`,
+        body: `Task ${createdTask.id}\nRole: ${role.id}\nGoal: ${taskText}\nMailbox: ${mailbox.mirrorPath()}\nTasks: ${taskList.path()}`,
+        replyTo: createdTask.id,
+      });
+      await emit("mailbox_message", { messageId: assignmentMessage.id, to: role.id, from: leadRole.id, kind: assignmentMessage.kind }, role.id, leadSession.sessionId);
+
+      if (role.id === "planner") {
+        const requestBody = createPlanApprovalRequest({
+          plan: `Plan for ${createdTask.id}: ${taskText}`,
+          requestedMode: "workspace_write",
+          taskId: createdTask.id,
+        });
+        const requestMessage = await mailbox.send({
+          to: leadRole.id,
+          from: role.id,
+          kind: "plan_approval_request",
+          summary: `PLAN ${createdTask.id}`,
+          body: requestBody,
+          replyTo: createdTask.id,
+        });
+        await emit("plan_approval_requested", { messageId: requestMessage.id, taskId: createdTask.id }, role.id);
+        const responseMessage = await mailbox.send({
+          to: role.id,
+          from: leadRole.id,
+          kind: "plan_approval_response",
+          summary: `PLAN_APPROVED ${createdTask.id}`,
+          body: createPlanApprovalResponse({ approved: true, mode: "workspace_write", taskId: createdTask.id }),
+          replyTo: requestMessage.id,
+        });
+        if (!isTrustedPlanApprovalResponse(responseMessage, leadRole.id)) {
+          throw new Error(`untrusted_plan_approval_response:${createdTask.id}`);
+        }
+        await emit("plan_approval_responded", { messageId: responseMessage.id, taskId: createdTask.id }, role.id);
+      }
+
+      const claimedTask = await taskList.claim(createdTask.id, role.id);
+      await emit("task_claimed", { taskId: claimedTask.id, claimedBy: role.id }, role.id);
+
+      const idleHook = createIdleNudgeHook({ roleId: role.id, taskList });
+      await runHooks([idleHook], { roleId: role.id });
+
+      await adapter.createWorkerSession({
+        runId,
+        role,
+        instructions: `Task ${createdTask.id}\n${taskText}`,
+      });
+      const workerEvents = await persistAdapterEvents();
+      const completedEvent = [...workerEvents].reverse().find((event) => event.type === "worker_completed" && event.roleId === role.id);
+      const output = completedEvent
+        ? String(completedEvent.transient?.rawPayload?.output ?? completedEvent.payload.output ?? "")
+        : `Contribution from ${role.id}.`;
+      contributions.push({ roleId: role.id as WorkerContribution["roleId"], sessionId: completedEvent?.sessionId ?? `${role.id}-session`, output });
+      transitions.push({ from: previousRole, to: role.id, observedAt: clock().toISOString(), source: "task_list" });
+      roleCitations.push({ role: role.id, summary: firstNonEmptyLine(output), quote: firstNonEmptyLine(output) });
+      previousRole = role.id;
+
+      const completionMessage = await mailbox.send({
+        to: leadRole.id,
+        from: role.id,
+        summary: `COMPLETE ${createdTask.id}`,
+        body: `Task ${createdTask.id} complete. Output:\n${output}`,
+        replyTo: createdTask.id,
+      });
+      completionMessages.push(completionMessage);
+      await emit("mailbox_message", { messageId: completionMessage.id, to: leadRole.id, from: role.id, kind: completionMessage.kind }, role.id, completedEvent?.sessionId);
+
+      await taskList.complete(createdTask.id, []);
+      await emit("task_completed", { taskId: createdTask.id, messageId: completionMessage.id }, role.id, completedEvent?.sessionId);
+      previousTaskId = createdTask.id;
+    }
+
+    transitions.push({ from: previousRole, to: leadRole.id, observedAt: clock().toISOString(), source: "mailbox_summary" });
     await adapter.sendMessage({
       runId,
       sessionId: leadSession.sessionId,
-      message: buildSummaryRequest(taskText, contributions, transcript.ref.path),
+      message: buildSummaryRequest(taskText, contributions, completionMessages, mailbox.mirrorPath()),
     });
-    await persistAdapterEvents();
-
-    let markdown: string;
-    const leadSummaryEvent = [...collected].reverse().find((event) => event.type === "lead_message");
-    if (leadSummaryEvent) {
-      markdown = String(leadSummaryEvent.transient?.rawPayload?.markdown ?? leadSummaryEvent.payload.markdown ?? "");
-    } else {
-      const leadText = extractLeadTextOutput(collected);
-      markdown = leadText || buildFallbackSummary(taskText, contributions);
-    }
+    const summaryEvents = await persistAdapterEvents();
+    const leadSummaryEvent = [...summaryEvents].reverse().find((event) => event.type === "lead_message");
+    const markdown = leadSummaryEvent
+      ? String(leadSummaryEvent.transient?.rawPayload?.markdown ?? leadSummaryEvent.payload.markdown ?? "")
+      : buildFallbackSummary(taskText, contributions);
+    const finalSummaryMessage = await mailbox.send({
+      to: "pluto",
+      from: leadRole.id,
+      summary: "FINAL",
+      body: [
+        firstNonEmptyLine(markdown),
+        ...completionMessages.map((message) => `${message.from}:${message.id}`),
+      ].join("\n"),
+    });
+    await emit("mailbox_message", { messageId: finalSummaryMessage.id, to: "pluto", from: leadRole.id, kind: finalSummaryMessage.kind }, leadRole.id, leadSession.sessionId);
 
     const artifact: FinalArtifact = {
       runId,
@@ -404,39 +407,27 @@ export async function runManagerHarness(options: ManagerRunHarnessOptions): Prom
     };
     artifactPath = await store.writeArtifact(artifact);
     await writeFile(join(workspaceDir, "artifact.md"), markdown, "utf8");
+
+    if (lastTask) {
+      const hookResult = await runHooks([acceptanceHook], { task: lastTask });
+      issues.push(...hookResult.messages);
+    }
+
     const taskTreePath = join(runDir, "task-tree.md");
     const statusPath = join(runDir, "status.md");
     const finalReportPath = join(runDir, "final-report.md");
-    await writeFile(taskTreePath, renderTaskTree(resolved.playbook.value.name, [leadRole.id, ...resolved.members.map((member) => member.value.name)]), "utf8");
-    await writeFile(statusPath, renderStatusDoc(runId, resolved, workspaceDir, artifactPath), "utf8");
-    await writeFile(finalReportPath, renderFinalReport({ resolved, transitions, roleCitations, deviations, summary: markdown, workspaceDir }), "utf8");
-    for (const transition of transitions) {
-      stdoutLines.push(`STAGE: ${transition.from} -> ${transition.to}`);
-    }
+    await writeFile(taskTreePath, renderTaskTree(resolved.playbook.value.name, [leadRole.id, ...memberRoles.map((role) => role.id)]), "utf8");
+    await writeFile(statusPath, renderStatusDoc(runId, resolved.scenario.value.name, resolved.playbook.value.name, resolved.runProfile?.value.name ?? "(none)", workspaceDir, artifactPath), "utf8");
+    await writeFile(finalReportPath, renderFinalReport(markdown, transitions, completionMessages, workspaceDir), "utf8");
+
     stdoutLines.push(
-      `WROTE: ${relative(runDir, artifactPath) || "artifact.md"}`,
+      `WROTE: artifact.md`,
       `WROTE: ${relative(runDir, taskTreePath)}`,
       `WROTE: ${relative(runDir, statusPath)}`,
       `WROTE: ${relative(runDir, finalReportPath)}`,
       `SUMMARY: ${firstNonEmptyLine(markdown)}`,
     );
 
-    const artifactRefs: RunArtifactRef[] = [
-      { path: artifactPath, label: "artifact" },
-      { path: taskTreePath, label: "task_tree" },
-      { path: statusPath, label: "status" },
-      { path: finalReportPath, label: "final_report" },
-    ];
-    run.artifacts = artifactRefs;
-
-    for (const command of runProfile?.acceptanceCommands ?? []) {
-      const result = await executeAcceptanceCommand(command, workspaceDir, runDir, commandResults.length + 1, clock);
-      commandResults.push(result);
-      stdoutLines.push(`CMD: ${result.cmd} -> ${result.exitCode}`);
-      if (result.exitCode !== 0 && !result.blockerOk) {
-        issues.push(`acceptance command failed: ${result.cmd}`);
-      }
-    }
     const stdout = stdoutLines.join("\n") + "\n";
     const stdoutPath = join(runDir, "stdout.log");
     await writeFile(stdoutPath, stdout, "utf8");
@@ -458,23 +449,30 @@ export async function runManagerHarness(options: ManagerRunHarnessOptions): Prom
         artifactContract: runProfile?.artifactContract,
         stdoutContract: runProfile?.stdoutContract,
       },
-      stageTransitions: transitions.map((transition) => ({ from: transition.from, to: transition.to, observedAt: transition.observedAt })),
-      stageTransitionSource: "observed_lead_output",
-      revisionCount: countObservedRevisionCycles(collected),
-      finalReportPath: "final-report.md",
+      mailboxLogPath: mailbox.mirrorPath(),
+      taskListPath: taskList.path(),
+      teamLeadId: leadRole.id,
     });
     issues.push(...audit.issues.map((issue) => issue.message));
 
+    const artifactRefs: RunArtifactRef[] = [
+      { path: artifactPath, label: "artifact" },
+      { path: taskTreePath, label: "task_tree" },
+      { path: statusPath, label: "status" },
+      { path: finalReportPath, label: "final_report" },
+    ];
+    run.artifacts = artifactRefs;
     run.status = resolveRunStatus(issues, audit.ok);
     run.finishedAt = clock().toISOString();
     const resultStatus: TeamRunResult["status"] = run.status === "succeeded" ? "completed" : "failed";
-    legacyResult = {
+    const legacyResult: TeamRunResult = {
       runId,
       status: resultStatus,
       artifact,
       events: collected,
       ...(run.status === "succeeded" ? { blockerReason: null } : { blockerReason: "validation_failed" as const, failure: { message: issues.join("; ") || "manager run failed" } }),
     };
+
     if (run.status !== "succeeded") {
       blockerReason = "validation_failed";
       await emit("blocker", { reason: blockerReason, message: issues.join("; ") || "manager run failed" });
@@ -483,11 +481,8 @@ export async function runManagerHarness(options: ManagerRunHarnessOptions): Prom
       await emit("artifact_created", {
         path: artifactPath,
         playbookId: resolved.playbook.value.name,
-        dependencyTrace: transitions.map((transition, index) => ({
-          stageId: `${index}-${transition.to}`,
-          role: transition.to,
-          completedAt: transition.observedAt,
-        })),
+        mailboxLogPath: mailbox.mirrorPath(),
+        taskListPath: taskList.path(),
       });
       await emit("run_completed", { workerCount: contributions.length, playbookId: resolved.playbook.value.name });
     }
@@ -499,11 +494,10 @@ export async function runManagerHarness(options: ManagerRunHarnessOptions): Prom
       startedAt: new Date(run.startedAt),
       finishedAt: new Date(run.finishedAt),
       blockerReason,
-      transcriptRef: transcript.ref,
+      transcriptRef: mailboxRef,
     });
     await writeEvidence(runDir, legacyEvidence);
-
-    const canonicalPacket = aggregateEvidencePacket({
+    const canonicalEvidence = await writeEvidencePacket(runDir, aggregateEvidencePacket({
       run,
       summary: firstNonEmptyLine(markdown),
       failureReason: issues.length > 0 ? issues.join("; ") : null,
@@ -511,14 +505,16 @@ export async function runManagerHarness(options: ManagerRunHarnessOptions): Prom
       artifactRefs,
       commandResults,
       transitions,
-      roleCitations: roleCitations.map((citation) => ({ ...citation, artifactPath: citation.artifactPath ?? artifactPath ?? undefined })),
+      roleCitations: roleCitations.map((citation) => ({ ...citation, artifactPath: artifactPath ?? undefined })),
       acceptance,
       audit,
       stdoutPath,
-      transcriptPath: transcript.ref.path,
+      transcriptPath: mailbox.mirrorPath(),
       finalReportPath,
-    });
-    const canonicalEvidence = await writeEvidencePacket(runDir, canonicalPacket);
+      mailboxLogPath: mailbox.mirrorPath(),
+      taskListPath: taskList.path(),
+    }));
+
     return {
       run,
       legacyResult,
@@ -532,57 +528,102 @@ export async function runManagerHarness(options: ManagerRunHarnessOptions): Prom
     };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    const classified = classifyBlocker({ errorMessage: message, source: "orchestrator" });
-    blockerReason = classified.reason;
-    run.status = "failed";
-    run.finishedAt = clock().toISOString();
+    blockerReason = classifyBlocker({ errorMessage: message, source: "orchestrator" }).reason;
     issues.push(message);
-    await emit("blocker", { reason: blockerReason, message });
-    await emit("run_failed", { message });
-    legacyResult = {
-      runId,
-      status: "failed",
-      events: collected,
-      blockerReason,
-      failure: { message, cause: error },
-    };
-    const stdoutPath = join(runDir, "stdout.log");
-    await writeFile(stdoutPath, issues.join("\n") + "\n", "utf8");
-    const legacyEvidence = generateEvidencePacket({
-      task,
-      result: legacyResult,
-      events: collected,
-      startedAt: new Date(run.startedAt ?? clock().toISOString()),
-      finishedAt: new Date(run.finishedAt),
-      blockerReason,
-      transcriptRef: transcript.ref,
-    });
-    await writeEvidence(runDir, legacyEvidence);
-    const canonicalPacket = aggregateEvidencePacket({
+    if (adapter) {
+      await emit("blocker", { reason: blockerReason, message });
+      await emit("run_failed", { message });
+    }
+    return finishFailure({
       run,
-      failureReason: message,
-      issues,
-      commandResults,
-      transitions,
-      roleCitations,
-      stdoutPath,
-      transcriptPath: transcript.ref.path,
-    });
-    const canonicalEvidence = await writeEvidencePacket(runDir, canonicalPacket);
-    return {
-      run,
-      legacyResult,
       runDir,
       workspaceDir,
       artifactPath,
-      canonicalEvidencePath: canonicalEvidence.jsonPath,
-      legacyEvidencePath: join(runDir, "evidence.json"),
-      stdoutPath,
-      finalReportPath: join(runDir, "final-report.md"),
-    };
+      collected,
+      task,
+      issues,
+      blockerReason,
+      clock,
+      store,
+      mailboxRef,
+      commandResults,
+      transitions,
+      roleCitations,
+      acceptance,
+      audit,
+    });
   } finally {
     await adapter?.endRun({ runId }).catch(() => undefined);
   }
+}
+
+function finishFailure(input: {
+  run: Run;
+  runDir: string;
+  workspaceDir: string;
+  artifactPath: string | null;
+  collected: AgentEvent[];
+  task: TeamTask;
+  issues: string[];
+  blockerReason: BlockerReasonV0 | null;
+  clock: () => Date;
+  store: RunStore;
+  mailboxRef: CoordinationTranscriptRefV0;
+  commandResults: CommandExecutionResult[];
+  transitions: EvidenceTransition[];
+  roleCitations: EvidenceRoleCitation[];
+  acceptance: AcceptanceCheckResult;
+  audit: AuditMiddlewareResult;
+}): Promise<ManagerRunHarnessResult> {
+  return (async () => {
+    input.run.status = "failed";
+    input.run.finishedAt = input.clock().toISOString();
+    const legacyResult: TeamRunResult = {
+      runId: input.run.runId,
+      status: "failed",
+      events: input.collected,
+      blockerReason: input.blockerReason,
+      failure: { message: input.issues.join("; ") || "manager run failed" },
+    };
+    const stdoutPath = join(input.runDir, "stdout.log");
+    await mkdir(dirname(stdoutPath), { recursive: true });
+    await writeFile(stdoutPath, input.issues.join("\n") + "\n", "utf8");
+    const legacyEvidence = generateEvidencePacket({
+      task: input.task,
+      result: legacyResult,
+      events: input.collected,
+      startedAt: new Date(input.run.startedAt ?? input.clock().toISOString()),
+      finishedAt: new Date(input.run.finishedAt),
+      blockerReason: input.blockerReason,
+      transcriptRef: input.mailboxRef,
+    });
+    await writeEvidence(input.runDir, legacyEvidence);
+    const canonicalEvidence = await writeEvidencePacket(input.runDir, aggregateEvidencePacket({
+      run: input.run,
+      failureReason: input.issues.join("; "),
+      issues: input.issues,
+      commandResults: input.commandResults,
+      transitions: input.transitions,
+      roleCitations: input.roleCitations,
+      stdoutPath,
+      transcriptPath: input.mailboxRef.path,
+      mailboxLogPath: input.mailboxRef.path,
+      taskListPath: join(input.runDir, "tasks.json"),
+      acceptance: input.acceptance,
+      audit: input.audit,
+    }));
+    return {
+      run: input.run,
+      legacyResult,
+      runDir: input.runDir,
+      workspaceDir: input.workspaceDir,
+      artifactPath: input.artifactPath,
+      canonicalEvidencePath: canonicalEvidence.jsonPath,
+      legacyEvidencePath: join(input.runDir, "evidence.json"),
+      stdoutPath,
+      finalReportPath: join(input.runDir, "final-report.md"),
+    };
+  })();
 }
 
 function resolveRuntimeTask(scenarioTask: string | undefined, runtimeTask: string | undefined, allowTaskOverride: boolean | undefined): string {
@@ -600,8 +641,7 @@ function resolveRuntimeTask(scenarioTask: string | undefined, runtimeTask: strin
 
 function resolveWorkspaceDir(rootDir: string, configuredCwd: string | undefined, runId: string, override?: string): string {
   if (override) return resolve(override);
-  const cwd = interpolatePath(configuredCwd ?? join(rootDir, ".tmp", "manager-runs", runId), rootDir, runId, rootDir);
-  return resolve(cwd);
+  return resolve(interpolatePath(configuredCwd ?? join(rootDir, ".tmp", "manager-runs", runId), rootDir, runId, rootDir));
 }
 
 function resolveWorktreeDir(rootDir: string, worktreePath: string | undefined, workspaceDir: string, runId: string): string {
@@ -610,10 +650,7 @@ function resolveWorktreeDir(rootDir: string, worktreePath: string | undefined, w
 }
 
 function interpolatePath(value: string, rootDir: string, runId: string, cwd: string): string {
-  return value
-    .replaceAll("${repo_root}", rootDir)
-    .replaceAll("${run_id}", runId)
-    .replaceAll("${cwd}", cwd);
+  return value.replaceAll("${repo_root}", rootDir).replaceAll("${run_id}", runId).replaceAll("${cwd}", cwd);
 }
 
 function materializedWorkspace(workspace: NonNullable<Run["workspace"]>, rootDir: string, workspaceDir: string, runId: string): NonNullable<Run["workspace"]> {
@@ -661,18 +698,10 @@ function buildAdapterPlaybook(resolved: Awaited<ReturnType<typeof resolveFourLay
     kind: inferStageKind(member.value.name),
     roleId: member.value.name as AgentRoleConfig["id"],
     title: member.value.description ?? member.value.name,
-    instructions: `Follow the selected playbook workflow as ${member.value.name} for scenario ${resolved.scenario.value.name}.`,
+    instructions: `Handle the ${member.value.name} task for scenario ${resolved.scenario.value.name}.`,
     dependsOn: index === 0 ? [] : [`${resolved.members[index - 1]!.value.name}-stage`],
-    evidenceCitation: {
-      required: true,
-      label: member.value.name,
-    },
+    evidenceCitation: { required: true, label: member.value.name },
   })) satisfies TeamPlaybookV0["stages"];
-
-  const generatorStage = stages.find((stage) => stage.roleId === "generator");
-  const evaluatorStage = stages.find((stage) => stage.roleId === "evaluator");
-  const maxRevisionCycles = resolved.playbook.value.audit?.maxRevisionCycles ?? 0;
-
   return {
     schemaVersion: 0,
     id: resolved.playbook.value.name,
@@ -680,14 +709,7 @@ function buildAdapterPlaybook(resolved: Awaited<ReturnType<typeof resolveFourLay
     description: resolved.playbook.value.workflow,
     orchestrationSource: "teamlead_direct",
     stages,
-    revisionRules: generatorStage && evaluatorStage && maxRevisionCycles > 0
-      ? [{
-          fromStageId: evaluatorStage.id,
-          targetStageId: generatorStage.id,
-          maxRevisionCycles,
-          failureSignal: "FAIL:",
-        }]
-      : [],
+    revisionRules: [],
     finalCitationMetadata: {
       requiredStageIds: stages.map((stage) => stage.id),
       requireFinalReconciliation: true,
@@ -708,96 +730,6 @@ function inferStageKind(roleId: string): TeamPlaybookV0["stages"][number]["kind"
   }
 }
 
-interface ContributionRecord {
-  contribution: WorkerContribution;
-  transition: EvidenceTransition;
-  citation: EvidenceRoleCitation;
-  nextRole: AgentRoleId;
-}
-
-function collectContribution(event: AgentEvent, previousRole: AgentRoleId): ContributionRecord {
-  const output = String(event.transient?.rawPayload?.output ?? event.payload.output ?? "");
-  return {
-    contribution: {
-      roleId: event.roleId as WorkerContribution["roleId"],
-      sessionId: event.sessionId ?? `${event.roleId}-session`,
-      output,
-    },
-    transition: {
-      from: previousRole,
-      to: event.roleId!,
-      observedAt: event.ts ?? new Date().toISOString(),
-      source: "worker_completed_event",
-    },
-    citation: {
-      role: event.roleId!,
-      summary: firstNonEmptyLine(output),
-      quote: firstNonEmptyLine(output),
-    },
-    nextRole: event.roleId!,
-  };
-}
-
-async function dispatchViaAdapter(
-  adapter: PaseoTeamAdapter,
-  runId: string,
-  role: AgentRoleConfig,
-  instructions: string,
-  contributions: ReadonlyArray<WorkerContribution>,
-  transcriptRef: CoordinationTranscriptRefV0,
-): Promise<void> {
-  if (adapter.spawnTeammate) {
-    try {
-      await adapter.spawnTeammate({
-        runId,
-        stageId: `${role.id}-stage`,
-        role,
-        instructions,
-        dependencies: contributions.map((c) => c.roleId),
-        transcript: transcriptRef,
-      });
-      return;
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      if (!message.includes("spawnTeammate not supported in this runtime")) throw error;
-    }
-  }
-  await adapter.createWorkerSession({ runId, role, instructions });
-}
-
-function buildWorkerInstructions(input: { roleId: string; task: string; previousContributions: ReadonlyArray<WorkerContribution> }): string {
-  return [
-    `Role: ${input.roleId}`,
-    `Task: ${input.task}`,
-    ...(input.previousContributions.length > 0
-      ? [
-          "Previous role outputs:",
-          ...input.previousContributions.map((contribution) => `- ${contribution.roleId}: ${firstNonEmptyLine(contribution.output)}`),
-        ]
-      : []),
-    "Return a concise contribution for the final artifact.",
-  ].join("\n");
-}
-
-function buildSummaryRequest(taskText: string, contributions: ReadonlyArray<WorkerContribution>, transcriptPath: string): string {
-  return [
-    "SUMMARIZE",
-    `Task: ${taskText}`,
-    `Transcript: ${transcriptPath}`,
-    "Contributions:",
-    ...contributions.map((contribution) => `- ${contribution.roleId}: ${firstNonEmptyLine(contribution.output)}`),
-  ].join("\n");
-}
-
-function buildFallbackSummary(taskText: string, contributions: ReadonlyArray<WorkerContribution>): string {
-  return [
-    `# ${taskText}`,
-    "",
-    "## Worker contributions",
-    ...contributions.flatMap((contribution) => [`### ${contribution.roleId}`, contribution.output, ""]),
-  ].join("\n");
-}
-
 async function verifyRequiredReads(rootDir: string, requiredReads: ReadonlyArray<{ kind: string; path?: string; documentId?: string; optional?: boolean }>) {
   for (const entry of requiredReads) {
     if (entry.kind === "repo" && entry.path) {
@@ -809,9 +741,7 @@ async function verifyRequiredReads(rootDir: string, requiredReads: ReadonlyArray
       await readFile(filePath, "utf8");
       continue;
     }
-    if (entry.optional) {
-      continue;
-    }
+    if (entry.optional) continue;
     throw new Error(`unsupported_required_read:${entry.kind}:${entry.documentId ?? entry.path ?? "unknown"}`);
   }
 }
@@ -835,59 +765,6 @@ function validateRunProfileRuntimeSupport(runProfile: RunProfile | undefined) {
   }
 }
 
-// v1.5 lead observation helpers — ready for live adapter path where the lead
-// drives worker spawning itself. Currently the fake-adapter path drives
-// workers through the harness loop above.
-function extractLeadTimeoutSeconds(runProfile: RunProfile | undefined): number {
-  const raw = (runProfile as Record<string, unknown> | undefined)?.runtime as Record<string, unknown> | undefined;
-  if (typeof raw?.lead_timeout_seconds === "number" && raw.lead_timeout_seconds > 0) {
-    return raw.lead_timeout_seconds;
-  }
-  return DEFAULT_LEAD_TIMEOUT_SECONDS;
-}
-
-function extractDeviations(events: ReadonlyArray<AgentEvent>): string[] {
-  const deviations = new Set<string>();
-  for (const event of events) {
-    if (event.type !== "lead_message") continue;
-    for (const value of extractEventTextValues(event)) {
-      for (const line of value.split(/\r?\n/)) {
-        const match = /^DEVIATION:\s*(.+)$/i.exec(line.trim());
-        if (match) {
-          deviations.add(match[1]!);
-        }
-      }
-    }
-  }
-  return [...deviations];
-}
-
-function extractLeadTextOutput(events: ReadonlyArray<AgentEvent>): string {
-  for (const event of [...events].reverse()) {
-    if (event.type === "lead_message" && event.transient?.rawPayload?.markdown) {
-      return String(event.transient.rawPayload.markdown);
-    }
-    if (event.type === "lead_message" && event.payload.markdown) {
-      return String(event.payload.markdown);
-    }
-  }
-  return "";
-}
-
-function countObservedRevisionCycles(events: ReadonlyArray<AgentEvent>): number {
-  const started = events.filter((event) => event.type === "revision_started").length;
-  const completed = events.filter((event) => event.type === "revision_completed").length;
-  const requestCounts = new Map<string, number>();
-  for (const event of events) {
-    if (event.type !== "worker_requested") continue;
-    const roleId = typeof event.payload.targetRole === "string" ? event.payload.targetRole : event.roleId;
-    if (!roleId) continue;
-    requestCounts.set(roleId, (requestCounts.get(roleId) ?? 0) + 1);
-  }
-  const inferred = [...requestCounts.values()].reduce((sum, count) => sum + Math.max(0, count - 1), 0);
-  return Math.max(started, completed, inferred);
-}
-
 async function executeAcceptanceCommand(
   command: RunProfileAcceptanceCommand,
   commandCwd: string,
@@ -901,21 +778,9 @@ async function executeAcceptanceCommand(
     const { stdout, stderr } = await exec(spec.cmd, { cwd: commandCwd, env: process.env, maxBuffer: 1024 * 1024 });
     const stdoutPath = join(runDir, `command-${index}.stdout.log`);
     const stderrPath = join(runDir, `command-${index}.stderr.log`);
-    await mkdir(dirname(stdoutPath), { recursive: true });
     await writeFile(stdoutPath, stdout, "utf8");
     await writeFile(stderrPath, stderr, "utf8");
-    return {
-      cmd: spec.cmd,
-      exitCode: 0,
-      summary: "ok",
-      stdout,
-      stderr,
-      stdoutPath,
-      stderrPath,
-      blockerOk: spec.blockerOk,
-      startedAt,
-      finishedAt: clock().toISOString(),
-    };
+    return { cmd: spec.cmd, exitCode: 0, summary: "ok", stdout, stderr, stdoutPath, stderrPath, blockerOk: spec.blockerOk, startedAt, finishedAt: clock().toISOString() };
   } catch (error) {
     const stdout = typeof error === "object" && error !== null && "stdout" in error ? String((error as { stdout?: string }).stdout ?? "") : "";
     const stderr = typeof error === "object" && error !== null && "stderr" in error ? String((error as { stderr?: string }).stderr ?? "") : "";
@@ -924,18 +789,7 @@ async function executeAcceptanceCommand(
     const stderrPath = join(runDir, `command-${index}.stderr.log`);
     await writeFile(stdoutPath, stdout, "utf8");
     await writeFile(stderrPath, stderr, "utf8");
-    return {
-      cmd: spec.cmd,
-      exitCode,
-      summary: spec.blockerOk ? "blocker_ok" : "failed",
-      stdout,
-      stderr,
-      stdoutPath,
-      stderrPath,
-      blockerOk: spec.blockerOk,
-      startedAt,
-      finishedAt: clock().toISOString(),
-    };
+    return { cmd: spec.cmd, exitCode, summary: spec.blockerOk ? "blocker_ok" : "failed", stdout, stderr, stdoutPath, stderrPath, blockerOk: spec.blockerOk, startedAt, finishedAt: clock().toISOString() };
   }
 }
 
@@ -945,78 +799,68 @@ function resolveRunStatus(issues: string[], auditOk: boolean): RunStatus {
   return "succeeded";
 }
 
-function renderTaskTree(playbookName: string, roles: string[]): string {
+function buildSummaryRequest(taskText: string, contributions: ReadonlyArray<WorkerContribution>, completionMessages: ReadonlyArray<MailboxMessage>, mailboxPath: string): string {
   return [
-    `# Task Tree — ${playbookName}`,
-    "",
-    ...roles.map((role, index) => `${index + 1}. ${role}`),
-    "",
+    "SUMMARIZE",
+    `Task: ${taskText}`,
+    `Mailbox: ${mailboxPath}`,
+    "Completion messages:",
+    ...completionMessages.map((message) => `- ${message.from}: ${message.id}`),
+    "Contributions:",
+    ...contributions.map((contribution) => `- ${contribution.roleId}: ${firstNonEmptyLine(contribution.output)}`),
   ].join("\n");
 }
 
-function renderStatusDoc(
-  runId: string,
-  resolved: Awaited<ReturnType<typeof resolveFourLayerSelection>>,
-  workspaceDir: string,
-  artifactPath: string,
-): string {
+function buildFallbackSummary(taskText: string, contributions: ReadonlyArray<WorkerContribution>): string {
+  return [
+    `# ${taskText}`,
+    "",
+    ...contributions.flatMap((contribution) => [`## ${contribution.roleId}`, contribution.output, ""]),
+  ].join("\n");
+}
+
+function renderTaskTree(playbookName: string, roles: string[]): string {
+  return [`# Task Tree — ${playbookName}`, "", ...roles.map((role, index) => `${index + 1}. ${role}`), ""].join("\n");
+}
+
+function renderStatusDoc(runId: string, scenarioName: string, playbookName: string, runProfileName: string, workspaceDir: string, artifactPath: string): string {
   return [
     `# Status — ${runId}`,
     "",
-    `- Scenario: ${resolved.scenario.value.name}`,
-    `- Playbook: ${resolved.playbook.value.name}`,
-    `- Run profile: ${resolved.runProfile?.value.name ?? "(none)"}`,
+    `- Scenario: ${scenarioName}`,
+    `- Playbook: ${playbookName}`,
+    `- Run profile: ${runProfileName}`,
     `- Workspace: ${workspaceDir}`,
     `- Artifact: ${artifactPath}`,
     "",
   ].join("\n");
 }
 
-function renderFinalReport(input: {
-  resolved: Awaited<ReturnType<typeof resolveFourLayerSelection>>;
-  transitions: EvidenceTransition[];
-  roleCitations: EvidenceRoleCitation[];
-  deviations: ReadonlyArray<string>;
-  summary: string;
-  workspaceDir: string;
-}): string {
+function renderFinalReport(
+  summary: string,
+  transitions: ReadonlyArray<EvidenceTransition>,
+  completionMessages: ReadonlyArray<MailboxMessage>,
+  workspaceDir: string,
+): string {
   return [
     "# Final Report",
     "",
     "## Implementation Summary",
-    firstNonEmptyLine(input.summary) || "Completed.",
+    firstNonEmptyLine(summary) || "Completed.",
     "",
     "## Workflow Steps Executed",
-    ...(input.transitions.length > 0
-      ? input.transitions.map((transition) => `- ${transition.from} -> ${transition.to}`)
-      : ["- no stage transitions observed"]),
+    ...transitions.map((transition) => `- ${transition.from} -> ${transition.to}`),
     "",
     "## Required Role Citations",
-    ...input.roleCitations.map((citation) => `- ${citation.role}: ${citation.summary ?? "(none)"}`),
+    ...completionMessages.map((message) => `- ${message.from}: ${message.id}`),
     "",
     "## Deviations",
-    ...(input.deviations.length > 0 ? input.deviations.map((deviation) => `- ${deviation}`) : ["- none observed"]),
+    "- none observed",
     "",
     "## Workspace",
-    `- ${input.workspaceDir}`,
+    `- ${workspaceDir}`,
     "",
   ].join("\n");
-}
-
-function extractEventTextValues(event: AgentEvent): string[] {
-  const values: string[] = [];
-  const pushStrings = (candidate: unknown) => {
-    if (!candidate || typeof candidate !== "object") return;
-    for (const value of Object.values(candidate)) {
-      if (typeof value === "string") {
-        values.push(value);
-      }
-    }
-  };
-
-  pushStrings(event.payload);
-  pushStrings(event.transient?.rawPayload);
-  return values;
 }
 
 function firstNonEmptyLine(value: string): string {

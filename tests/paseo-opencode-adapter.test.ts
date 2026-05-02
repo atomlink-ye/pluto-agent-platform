@@ -247,7 +247,7 @@ describe("PaseoOpenCodeAdapter — protocol with mocked runner", () => {
     const leadStarted = events.find((e) => e.type === "lead_started");
     expect(leadStarted).toBeDefined();
     expect(typeof leadStarted!.payload["systemPrompt"]).toBe("string");
-    expect(leadStarted!.payload["systemPrompt"]).toContain("TEAMLEAD-DIRECT ORCHESTRATION");
+    expect(leadStarted!.payload["systemPrompt"]).toContain("AGENT TEAMS V1.6");
   });
 
   it("uses orchestrator mode in paseo run args by default", async () => {
@@ -326,20 +326,15 @@ describe("PaseoOpenCodeAdapter — protocol with mocked runner", () => {
       transcript: { kind: "file", path: "/tmp/pluto-live/.pluto/runs/r1/coordination-transcript.jsonl", roomRef: "file-transcript:r1" },
     });
 
-    expect(prompts[0]).toContain("TEAMLEAD-DIRECT ORCHESTRATION");
+    expect(prompts[0]).toContain("AGENT TEAMS V1.6");
     expect(prompts[0]).toContain("teamlead-direct-default-v0");
     expect(prompts[0]).toContain("Selected playbook id: teamlead-direct-default-v0");
     expect(prompts[0]).toContain("Selected playbook title: Default planner → generator → evaluator");
     expect(prompts[0]).toContain("- planner-contract | Planner contract | role=planner | dependsOn=none");
     expect(prompts[0]).toContain("- generator-output | Generator output | role=generator | dependsOn=planner-contract");
-    expect(prompts[0]).toContain("paseo run");
-    expect(prompts[0]).toContain("paseo chat");
-    expect(prompts[0]).toContain("Coordination transcript path: /tmp/pluto-live/.pluto/runs/r1/coordination-transcript.jsonl");
-    expect(prompts[0]).toContain("Coordination room reference: file-transcript:r1");
-    expect(prompts[0]).toContain("Orchestration mode: teamlead_direct");
-    expect(prompts[0]).toContain("do not use the legacy marker fallback unless Pluto explicitly downgrades the run");
-    expect(prompts[0]).not.toContain("WORKER_REQUEST:");
-    expect(prompts[0]).toContain("explicitly cite each required stage by stage id/name and mention the transcript path/room reference");
+    expect(prompts[0]).toContain("Mailbox path: /tmp/pluto-live/.pluto/runs/r1/coordination-transcript.jsonl");
+    expect(prompts[0]).toContain("Mailbox reference: file-transcript:r1");
+    expect(prompts[0]).toContain("Do not emit legacy marker prefixes or delegation markers");
   });
 
   it("exposes spawnTeammate when PASEO_BIN is configured", () => {
@@ -357,31 +352,21 @@ describe("PaseoOpenCodeAdapter — protocol with mocked runner", () => {
     }
   });
 
-  it("stamps lead_marker on worker_requested events parsed from lead logs", async () => {
+  it("does not parse followed lead logs into worker-request bridge events", async () => {
     const adapter = new PaseoOpenCodeAdapter({
       workspaceCwd: "/tmp/pluto-live",
-      runner: makeRunner({
-        follow: (_cmd, _args, opts) => {
-          opts.onLine("WORKER_REQUEST: planner :: Plan the hello artifact.");
-        },
-      }),
+      runner: makeRunner({}),
     });
 
-    await adapter.startRun({ runId: "r1-marker", task: { ...baseTask, orchestrationMode: "lead_marker" }, team: DEFAULT_TEAM });
+    await adapter.startRun({ runId: "r1-no-bridge", task: baseTask, team: DEFAULT_TEAM });
     await adapter.createLeadSession({
-      runId: "r1-marker",
-      task: { ...baseTask, orchestrationMode: "lead_marker" },
+      runId: "r1-no-bridge",
+      task: baseTask,
       role: getRole(DEFAULT_TEAM, DEFAULT_TEAM.leadRoleId),
     });
 
-    const events = await adapter.readEvents({ runId: "r1-marker" });
-    const workerRequested = events.find((event) => event.type === "worker_requested");
-    expect(workerRequested?.payload).toMatchObject({
-      targetRole: "planner",
-      instructions: "Plan the hello artifact.",
-      orchestratorSource: "lead_marker",
-      source: "legacy_marker_fallback",
-    });
+    const events = await adapter.readEvents({ runId: "r1-no-bridge" });
+    expect(events.some((event) => event.type === "worker_requested")).toBe(false);
   });
 
   it("passes --host to all paseo daemon commands when configured", async () => {

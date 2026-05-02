@@ -31,6 +31,8 @@ export interface AggregateEvidencePacketInput {
   stdoutPath?: string;
   transcriptPath?: string;
   finalReportPath?: string;
+  mailboxLogPath?: string;
+  taskListPath?: string;
   generatedAt?: string;
 }
 
@@ -48,12 +50,14 @@ export function aggregateEvidencePacket(input: AggregateEvidencePacketInput): Ev
     ...(input.commandResults?.length ? { commandResults: redactObject(input.commandResults) as EvidenceCommandResult[] } : {}),
     ...(input.transitions?.length ? { transitions: redactObject(input.transitions) as EvidenceTransition[] } : {}),
     ...(input.roleCitations?.length ? { roleCitations: redactObject(input.roleCitations) as EvidenceRoleCitation[] } : {}),
-    ...((input.stdoutPath || input.transcriptPath || input.finalReportPath || input.acceptance || input.audit)
+    ...((input.stdoutPath || input.transcriptPath || input.finalReportPath || input.mailboxLogPath || input.taskListPath || input.acceptance || input.audit)
       ? {
           lineage: {
             ...(input.stdoutPath ? { stdoutPath: redactString(input.stdoutPath) } : {}),
             ...(input.transcriptPath ? { transcriptPath: redactString(input.transcriptPath) } : {}),
             ...(input.finalReportPath ? { finalReportPath: redactString(input.finalReportPath) } : {}),
+            ...(input.mailboxLogPath ? { mailboxLogPath: redactString(input.mailboxLogPath) } : {}),
+            ...(input.taskListPath ? { taskListPath: redactString(input.taskListPath) } : {}),
             ...(input.acceptance ? { acceptanceOk: input.acceptance.ok } : {}),
             ...(input.audit ? { auditOk: input.audit.ok } : {}),
           },
@@ -124,6 +128,8 @@ export function renderEvidencePacketMarkdown(packet: EvidencePacket): string {
     if (packet.lineage.stdoutPath) lines.push(`- stdout: ${packet.lineage.stdoutPath}`);
     if (packet.lineage.transcriptPath) lines.push(`- transcript: ${packet.lineage.transcriptPath}`);
     if (packet.lineage.finalReportPath) lines.push(`- final report: ${packet.lineage.finalReportPath}`);
+    if (packet.lineage.mailboxLogPath) lines.push(`- mailbox: ${packet.lineage.mailboxLogPath}`);
+    if (packet.lineage.taskListPath) lines.push(`- tasks: ${packet.lineage.taskListPath}`);
     if (packet.lineage.acceptanceOk !== undefined) lines.push(`- acceptance ok: ${String(packet.lineage.acceptanceOk)}`);
     if (packet.lineage.auditOk !== undefined) lines.push(`- audit ok: ${String(packet.lineage.auditOk)}`);
     lines.push("");

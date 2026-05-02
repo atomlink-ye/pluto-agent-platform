@@ -1,32 +1,20 @@
 import { readFile } from "node:fs/promises";
 
-import type { Playbook, RunProfile } from "../contracts/four-layer.js";
-import {
-  resolveArtifactRequirementPath,
-  runAcceptanceChecks,
-  validateRequiredSections,
-} from "./acceptance-runner.js";
+import type { MailboxMessage, Playbook, RunProfile, TaskRecord } from "../contracts/four-layer.js";
+import { runAcceptanceChecks } from "./acceptance-runner.js";
 
 export type AuditIssueCode =
-  | "missing_stage_transitions"
   | "missing_required_role"
-  | "missing_stage_event"
-  | "missing_deviation_evidence"
-  | "missing_revision_count"
-  | "revision_cap_breached"
-  | "missing_final_report"
-  | "invalid_required_file"
-  | "unreadable_required_file"
-  | "missing_required_section"
+  | "missing_completion_message"
+  | "missing_final_summary"
+  | "missing_final_citation"
+  | "invalid_task_list"
+  | "invalid_mailbox_log"
   | "missing_required_file"
+  | "missing_required_section"
   | "missing_stdout_line"
-  | "invalid_stdout_pattern";
-
-export interface AuditStageTransition {
-  from: string;
-  to: string;
-  observedAt?: string;
-}
+  | "invalid_stdout_pattern"
+  | "unreadable_required_file";
 
 export interface AuditIssue {
   code: AuditIssueCode;
@@ -42,11 +30,9 @@ export interface AuditMiddlewareInput {
   stdout: string;
   playbook: Pick<Playbook, "audit">;
   runProfile: Pick<RunProfile, "artifactContract" | "stdoutContract">;
-  stageTransitions?: AuditStageTransition[];
-  stageTransitionSource?: "observed_event_stream" | "observed_lead_output" | "synthesized_routing";
-  revisionCount?: number;
-  finalReportPath?: string;
-  deviations?: string[];
+  mailboxLogPath: string;
+  taskListPath: string;
+  teamLeadId: string;
 }
 
 export interface AuditMiddlewareResult {
@@ -61,94 +47,69 @@ export async function runAuditMiddleware(input: AuditMiddlewareInput): Promise<A
     stdout: input.stdout,
     runProfile: input.runProfile,
   });
-  const issues: AuditIssue[] = [...acceptance.issues];
-  const audit = input.playbook.audit;
+  const issues: AuditIssue[] = acceptance.issues.map((issue) => ({
+    code: issue.code as AuditIssueCode,
+    message: issue.message,
+    ...(issue.path ? { path: issue.path } : {}),
+    ...(issue.section ? { section: issue.section } : {}),
+    ...(issue.requirement ? { requirement: issue.requirement } : {}),
+  }));
+  const requiredRoles = input.playbook.audit?.requiredRoles ?? [];
+  const tasks = await readTasks(input.taskListPath, issues);
+  const mailbox = await readMailbox(input.mailboxLogPath, issues);
 
-  const isSynthesizedBridge = input.stageTransitionSource === "synthesized_routing";
-
-  if (audit?.requiredRoles?.length) {
-    const transitions = input.stageTransitions;
-    if (!transitions?.length) {
-      if (isSynthesizedBridge) {
+  if (tasks && mailbox) {
+    const completionMessages = new Map<string, MailboxMessage>();
+    for (const role of requiredRoles) {
+      const completedTask = tasks.find((task) => task.assigneeId === role && task.status === "completed");
+      if (!completedTask) {
         issues.push({
-          code: "missing_stage_transitions",
-          message: "stage coverage cannot be verified: synthesized routing transitions are not accepted in the team-lead-owned mainline; provide real observed STAGE events from the lead's text stream",
+          code: "missing_required_role",
+          message: `required role missing completed task: ${role}`,
+          role,
+          path: input.taskListPath,
         });
-      } else {
-        issues.push({
-          code: "missing_stage_transitions",
-          message: "stage coverage cannot be verified without observed stage transitions",
-        });
+        continue;
       }
-    } else {
-      const observedRoles = new Set(
-        transitions.flatMap((transition) => [transition.from, transition.to]).map(normalizeRoleName),
+      const completionMessage = mailbox.find((message) =>
+        message.from === role
+        && message.to === input.teamLeadId
+        && typeof message.summary === "string"
+        && message.summary.startsWith("COMPLETE ")
+        && includesTaskId(message, completedTask.id),
       );
-      for (const role of audit.requiredRoles) {
-        if (!observedRoles.has(normalizeRoleName(role))) {
-          issues.push({
-            code: "missing_required_role",
-            message: `required role missing from stage coverage: ${role}`,
-            role,
-          });
-        }
+      if (!completionMessage) {
+        issues.push({
+          code: "missing_completion_message",
+          message: `required role missing completion mailbox message: ${role}`,
+          role,
+          path: input.mailboxLogPath,
+        });
+        continue;
       }
+      completionMessages.set(role, completionMessage);
     }
 
-    if (!isSynthesizedBridge) {
-      const stdoutStageEvents = parseStageEventsFromStdout(input.stdout);
-      for (const role of audit.requiredRoles) {
-        if (!stdoutStageEvents.has(normalizeRoleName(role))) {
-          issues.push({
-            code: "missing_stage_event",
-            message: `required role ${role} has no corresponding STAGE: event in the lead's text stream`,
-            role,
-          });
-        }
-      }
-    }
-  }
-
-  if (!isSynthesizedBridge) {
-    const stdoutDeviations = parseDeviationsFromStdout(input.stdout);
-    const reportedDeviations = input.deviations ?? [];
-    if (reportedDeviations.length > 0 && stdoutDeviations.size === 0) {
+    const finalSummary = [...mailbox].reverse().find((message) => message.from === input.teamLeadId && message.summary === "FINAL");
+    if (!finalSummary) {
       issues.push({
-        code: "missing_deviation_evidence",
-        message: "deviations were reported but no DEVIATION: lines found in the lead's text stream",
-      });
-    }
-  }
-
-  if (audit?.maxRevisionCycles !== undefined) {
-    const revisionCount = input.revisionCount;
-    if (typeof revisionCount !== "number" || !Number.isInteger(revisionCount) || revisionCount < 0) {
-      issues.push({
-        code: "missing_revision_count",
-        message: "revision-cap enforcement requires a non-negative revisionCount observation",
-      });
-    } else if (revisionCount > audit.maxRevisionCycles) {
-      issues.push({
-        code: "revision_cap_breached",
-        message: `revision cap breached: observed ${revisionCount}, allowed ${audit.maxRevisionCycles}`,
-      });
-    }
-  }
-
-  if (audit?.finalReportSections?.length) {
-    const finalReportResolution = resolveFinalReportPath(input);
-    if (!finalReportResolution.ok) {
-      if (finalReportResolution.issue) {
-        issues.push(finalReportResolution.issue);
-      }
-      issues.push({
-        code: "missing_final_report",
-        message: "final report sections cannot be verified without a final report artifact path",
+        code: "missing_final_summary",
+        message: "missing FINAL summary mailbox message from the team lead",
+        path: input.mailboxLogPath,
       });
     } else {
-      issues.push(...await validateFinalReportSections(finalReportResolution.path, audit.finalReportSections));
-      if (audit.requiredRoles?.length) {
-        issues.push(...await validateRequiredRoleCitations(finalReportResolution.path, audit.requiredRoles));
+      const finalBody = typeof finalSummary.body === "string" ? finalSummary.body : JSON.stringify(finalSummary.body);
+      for (const role of requiredRoles) {
+        const completionMessage = completionMessages.get(role);
+        if (!completionMessage) continue;
+        if (!finalBody.includes(completionMessage.id)) {
+          issues.push({
+            code: "missing_final_citation",
+            message: `FINAL summary missing completion message id for role ${role}`,
+            role,
+            path: input.mailboxLogPath,
+          });
+        }
       }
     }
   }
@@ -160,126 +121,47 @@ export async function runAuditMiddleware(input: AuditMiddlewareInput): Promise<A
   };
 }
 
-async function validateRequiredRoleCitations(finalReportPath: string, requiredRoles: string[]): Promise<AuditIssue[]> {
+async function readTasks(taskListPath: string, issues: AuditIssue[]): Promise<TaskRecord[] | null> {
   try {
-    const fileContent = await readFile(finalReportPath, "utf8");
-    const section = extractMarkdownSection(fileContent, "required_role_citations");
-    if (!section) {
-      return requiredRoles.map((role) => ({
-        code: "missing_required_role" as const,
-        message: `required role missing from final-report citations: ${role}`,
-        role,
-        section: "required_role_citations",
-        path: finalReportPath,
-      }));
+    const raw = await readFile(taskListPath, "utf8");
+    const parsed = JSON.parse(raw) as { tasks?: TaskRecord[] };
+    if (!Array.isArray(parsed.tasks)) {
+      issues.push({ code: "invalid_task_list", message: "tasks.json missing tasks array", path: taskListPath });
+      return null;
     }
-    const normalizedSection = normalizeRoleName(section);
-    return requiredRoles
-      .filter((role) => !normalizedSection.includes(normalizeRoleName(role)))
-      .map((role) => ({
-        code: "missing_required_role" as const,
-        message: `required role missing from final-report citations: ${role}`,
-        role,
-        section: "required_role_citations",
-        path: finalReportPath,
-      }));
+    return parsed.tasks;
   } catch (error) {
-    return [{
-      code: "unreadable_required_file",
-      message: `required artifact file unreadable: ${finalReportPath} (${error instanceof Error ? error.message : String(error)})`,
-      path: finalReportPath,
-    }];
+    issues.push({
+      code: "invalid_task_list",
+      message: `unable to read tasks.json: ${error instanceof Error ? error.message : String(error)}`,
+      path: taskListPath,
+    });
+    return null;
   }
 }
 
-function extractMarkdownSection(content: string, sectionName: string): string | null {
-  const lines = content.split(/\r?\n/);
-  const wanted = normalizeRoleName(sectionName).replaceAll("_", " ");
-  let start = -1;
-  let level = 0;
-  for (let i = 0; i < lines.length; i++) {
-    const match = /^(#{1,6})\s+(.+?)\s*$/.exec(lines[i] ?? "");
-    if (!match) continue;
-    const title = normalizeRoleName(match[2]!).replaceAll(/[-_]+/g, " ");
-    if (title === wanted) {
-      start = i + 1;
-      level = match[1]!.length;
-      break;
-    }
-  }
-  if (start < 0) return null;
-  let end = lines.length;
-  for (let i = start; i < lines.length; i++) {
-    const match = /^(#{1,6})\s+/.exec(lines[i] ?? "");
-    if (match && match[1]!.length <= level) {
-      end = i;
-      break;
-    }
-  }
-  return lines.slice(start, end).join("\n");
-}
-
-function resolveFinalReportPath(
-  input: AuditMiddlewareInput,
-): { ok: true; path: string } | { ok: false; issue?: AuditIssue } {
-  if (input.finalReportPath) {
-    const resolved = resolveArtifactRequirementPath(input.artifactRootDir, input.finalReportPath);
-    return resolved.ok ? resolved : { ok: false, issue: resolved.issue };
-  }
-
-  for (const requirement of input.runProfile.artifactContract?.requiredFiles ?? []) {
-    const relativePath = typeof requirement === "string" ? requirement : requirement.path;
-    if (/final-report\.(md|markdown|txt)$/i.test(relativePath) || /final-report/i.test(relativePath)) {
-      const resolved = resolveArtifactRequirementPath(input.artifactRootDir, requirement);
-      return resolved.ok ? resolved : { ok: false, issue: resolved.issue };
-    }
-  }
-
-  return { ok: false };
-}
-
-async function validateFinalReportSections(finalReportPath: string, requiredSections: string[]): Promise<AuditIssue[]> {
+async function readMailbox(mailboxLogPath: string, issues: AuditIssue[]): Promise<MailboxMessage[] | null> {
   try {
-    const fileContent = await readFile(finalReportPath, "utf8");
-    return validateRequiredSections(fileContent, requiredSections, finalReportPath);
+    const raw = await readFile(mailboxLogPath, "utf8");
+    return raw
+      .split(/\r?\n/)
+      .filter((line) => line.trim().length > 0)
+      .map((line) => JSON.parse(line) as MailboxMessage);
   } catch (error) {
-    const code = (error as NodeJS.ErrnoException).code;
-    if (code === "ENOENT" || code === "EISDIR") {
-      return [{
-        code: "missing_required_file",
-        message: `required artifact file missing: ${finalReportPath}`,
-        path: finalReportPath,
-      }];
-    }
-    return [{
-      code: "unreadable_required_file",
-      message: `required artifact file unreadable: ${finalReportPath} (${error instanceof Error ? error.message : String(error)})`,
-      path: finalReportPath,
-    }];
+    issues.push({
+      code: "invalid_mailbox_log",
+      message: `unable to read mailbox log: ${error instanceof Error ? error.message : String(error)}`,
+      path: mailboxLogPath,
+    });
+    return null;
   }
 }
 
-function parseStageEventsFromStdout(stdout: string): Set<string> {
-  const roles = new Set<string>();
-  const re = /^STAGE:\s*(\S+)\s*->\s*(\S+)/gm;
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(stdout)) !== null) {
-    roles.add(normalizeRoleName(m[1]!));
-    roles.add(normalizeRoleName(m[2]!));
+function includesTaskId(message: MailboxMessage, taskId: string): boolean {
+  if (message.replyTo === taskId) return true;
+  if (typeof message.body === "string") return message.body.includes(taskId);
+  if (typeof message.body === "object" && message.body !== null) {
+    return JSON.stringify(message.body).includes(taskId);
   }
-  return roles;
-}
-
-function parseDeviationsFromStdout(stdout: string): Set<string> {
-  const deviations = new Set<string>();
-  const re = /^DEVIATION:\s*(.+)$/gm;
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(stdout)) !== null) {
-    deviations.add(m[1]!.trim().toLowerCase());
-  }
-  return deviations;
-}
-
-function normalizeRoleName(role: string): string {
-  return role.trim().toLowerCase();
+  return false;
 }

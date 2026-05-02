@@ -6,11 +6,9 @@ import type {
   AgentRoleConfig,
   AgentSession,
   CoordinationTranscriptRefV0,
-  OrchestrationMode,
   TeamConfig,
   TeamPlaybookV0,
   TeamTask,
-  WorkerRequestedPayload,
 } from "../../contracts/types.js";
 import type { PaseoTeamAdapter } from "../../contracts/adapter.js";
 import { redactObject } from "../../orchestrator/redactor.js";
@@ -47,14 +45,10 @@ import { DEFAULT_RUNNER, type ProcessRunner } from "./process-runner.js";
  *     conversation text. Do not use it to extract output.
  *   - `paseo delete <id>` for teardown (no `--force` flag).
  *
- * Protocol contract with the lead agent:
- *   - The lead prompt instructs the lead to emit, on its own line, markers
- *     of the form:
- *         WORKER_REQUEST: <roleId> :: <one-line instructions>
- *     once for each non-lead role in dispatch order, BEFORE going idle.
- *   - The lead's final summary, after orchestrator sends a SUMMARIZE message,
- *     is delivered as the agent's last assistant text and surfaced as a
- *     `lead_message` event with payload `{ kind: "summary", markdown }`.
+ * v1.6 note:
+ *   Pluto owns the authoritative mailbox/task-list export in the run directory.
+ *   The live adapter still launches the lead and worker sessions and captures
+ *   their outputs, but it no longer parses lead stdout for bridge vocabulary.
  */
 export interface PaseoOpenCodeAdapterOptions {
   /** Path to paseo binary. Defaults to "paseo" or $PASEO_BIN env. */
@@ -105,10 +99,6 @@ interface RunState {
   /** First-text-line cursor per worker so we can attribute the assistant turn. */
   workerLogCursors: Map<string, number>;
 }
-
-/** @legacy Marker parser for the lead_marker fallback lane only. */
-const WORKER_REQUEST_RE = /^WORKER_REQUEST:\s*([a-zA-Z0-9_-]+)\s*::\s*(.*)$/;
-const CANONICAL_DELEGATION_RE = /^(?:DELEGATE|SPAWN):\s*([a-zA-Z0-9_-]+)\s*::\s*(.*)$/;
 
 const SUPPORTED_PASEO_MODES = ["orchestrator", "build"] as const;
 
@@ -201,7 +191,10 @@ export class PaseoOpenCodeAdapter implements PaseoTeamAdapter {
   }): Promise<AgentSession> {
     const run = this.expectRun(input.runId);
     const prompt = this.buildLeadPrompt(input.task, input.role, run.team, input.playbook ?? run.playbook, input.transcript ?? run.transcript);
-    const args = this.runArgs({ title: `Pluto MVP-alpha Lead [${input.runId}]` });
+    const args = this.runArgs({
+      title: `Pluto MVP-alpha Lead [${input.runId}]`,
+      labels: [`parent_run=${input.runId}`, `role=${input.role.id}`],
+    });
     const result = await this.runner.exec(this.bin, [...args, prompt], {
       cwd: this.runCwd(run),
     });
@@ -244,15 +237,6 @@ export class PaseoOpenCodeAdapter implements PaseoTeamAdapter {
       }),
     });
 
-    const follower = this.runner.follow(
-      this.bin,
-      this.hostArgs(["logs", agentId, "--follow", "--filter", "text"]),
-      {
-        onLine: (line) => this.onLeadLogLine(input.runId, agentId, line),
-      },
-    );
-    run.followers.push(follower);
-
     return { sessionId: agentId, role: input.role, external: { paseoAgentId: agentId } };
   }
 
@@ -267,6 +251,7 @@ export class PaseoOpenCodeAdapter implements PaseoTeamAdapter {
     run.workerAttempts.set(input.role.id, attempt);
     const args = this.runArgs({
       title: `Pluto MVP-alpha Worker [${input.role.id}] [${input.runId}]`,
+      labels: [`parent_run=${input.runId}`, `role=${input.role.id}`],
     });
     const result = await this.runner.exec(this.bin, [...args, prompt], {
       cwd: this.runCwd(run),
@@ -445,7 +430,7 @@ export class PaseoOpenCodeAdapter implements PaseoTeamAdapter {
     return this.workspaceCwd ?? run.task.workspacePath;
   }
 
-  private runArgs(opts: { title: string }): string[] {
+  private runArgs(opts: { title: string; labels?: string[] }): string[] {
     const args = [
       "run",
       "--detach",
@@ -459,6 +444,9 @@ export class PaseoOpenCodeAdapter implements PaseoTeamAdapter {
       "--title",
       opts.title,
     ];
+    for (const label of opts.labels ?? []) {
+      args.push("--label", label);
+    }
     if (this.thinking) args.push("--thinking", this.thinking);
     if (this.workspaceCwd) args.push("--cwd", this.workspaceCwd);
     return this.hostArgs(args);
@@ -599,76 +587,6 @@ export class PaseoOpenCodeAdapter implements PaseoTeamAdapter {
     return [...normalizedLines];
   }
 
-  private onLeadLogLine(runId: string, leadId: string, raw: string) {
-    // `paseo logs --follow --filter text` emits plain text lines, NOT JSON.
-    // We still defensively try JSON-shaped lines.
-    let text = raw;
-    try {
-      const parsed = JSON.parse(raw);
-      if (parsed && typeof parsed === "object" && typeof parsed.text === "string") {
-        text = parsed.text;
-      }
-    } catch {
-      /* keep raw */
-    }
-    for (const line of text.split(/\r?\n/)) {
-      const canonical = line.match(CANONICAL_DELEGATION_RE);
-      if (canonical) {
-        const targetRole = canonical[1]!;
-        const instructions = (canonical[2] ?? "").trim();
-        const run = this.expectRun(runId);
-        const batchId = this.nextBatchId(run, `worker-request-${targetRole}`);
-        const payload: WorkerRequestedPayload = {
-          targetRole: targetRole as WorkerRequestedPayload["targetRole"],
-          instructions,
-          orchestratorSource: "teamlead_direct",
-          source: "teamlead_direct",
-        };
-        this.appendEvent(runId, {
-          type: "worker_requested",
-          roleId: targetRole,
-          sessionId: leadId,
-          payload,
-          rawPayloadKeys: ["instructions"],
-          callback: this.callbackIdentity({
-            source: "paseo_opencode",
-            batchId,
-            lineageKey: `worker_request:${leadId}:${targetRole}`,
-            status: "in_progress",
-            dedupeParts: ["worker_requested", leadId, targetRole, instructions],
-          }),
-        });
-        continue;
-      }
-      const m = line.match(WORKER_REQUEST_RE);
-      if (!m) continue;
-      const targetRole = m[1]!;
-      const instructions = (m[2] ?? "").trim();
-      const run = this.expectRun(runId);
-      const batchId = this.nextBatchId(run, `worker-request-${targetRole}`);
-      const payload: WorkerRequestedPayload = {
-        targetRole: targetRole as WorkerRequestedPayload["targetRole"],
-        instructions,
-        orchestratorSource: "lead_marker",
-        source: "legacy_marker_fallback",
-      };
-      this.appendEvent(runId, {
-        type: "worker_requested",
-        roleId: targetRole,
-        sessionId: leadId,
-        payload,
-        rawPayloadKeys: ["instructions"],
-        callback: this.callbackIdentity({
-          source: "paseo_opencode",
-          batchId,
-          lineageKey: `worker_request:${leadId}:${targetRole}`,
-          status: "in_progress",
-          dedupeParts: ["worker_requested", leadId, targetRole, instructions],
-        }),
-      });
-    }
-  }
-
   private buildLeadPrompt(
     task: TeamTask,
     role: AgentRoleConfig,
@@ -676,7 +594,6 @@ export class PaseoOpenCodeAdapter implements PaseoTeamAdapter {
     playbook?: TeamPlaybookV0,
     transcript?: CoordinationTranscriptRefV0,
   ): string {
-    const orchestrationMode: OrchestrationMode = task.orchestrationMode ?? "teamlead_direct";
     const workerRoles = team.roles.filter((r) => r.kind === "worker");
     const playbookBlock = playbook ? JSON.stringify(playbook, null, 2) : "No playbook supplied; use legacy worker role order only.";
     const playbookStageLines = playbook?.stages.map((stage) =>
@@ -685,29 +602,16 @@ export class PaseoOpenCodeAdapter implements PaseoTeamAdapter {
     const lines = [
       role.systemPrompt,
       "",
-      "TEAMLEAD-DIRECT ORCHESTRATION — read carefully:",
-      "1. You are the TeamLead and own orchestration decisions for this run.",
-      "2. Follow the selected authored playbook below; planner → generator → evaluator is only the default playbook, not universal TypeScript control flow.",
-      "3. Use the coordination room/transcript details below to record stage decisions, dependencies, revision/final citation evidence, and final reconciliation.",
-      "4. When shell/Paseo CLI access exists, directly use `paseo run`, `paseo chat`, `paseo wait`, `paseo logs`, and `paseo inspect` to spawn and coordinate teammates.",
-      orchestrationMode === "teamlead_direct"
-        ? "5. This run is in teamlead_direct mode. Coordinate through the transcript and do not use the legacy marker fallback unless Pluto explicitly downgrades the run."
-        : "5. The legacy `WORKER_REQUEST:` marker bridge is fallback-only while Pluto transitions. If you cannot directly spawn via Paseo CLI, emit fallback marker lines that mirror the playbook stages.",
+      "AGENT TEAMS V1.6 — read carefully:",
+      "1. You are the team lead for a mailbox-and-task-list runtime.",
+      "2. The mailbox mirror and shared task list are the authoritative coordination artifacts for this run.",
+      "3. Follow the authored playbook order below when you summarize the run.",
+      "4. Pluto will deliver teammate outputs through the shared mailbox and will ask you for the final summary with a SUMMARIZE message.",
+      "5. Your final markdown must cite the teammate completion message ids Pluto provides.",
+      "6. Do not emit legacy marker prefixes or delegation markers.",
+      "After all teammate tasks complete, wait for Pluto's SUMMARIZE message.",
       "",
-      ...(orchestrationMode === "lead_marker"
-        ? [
-            "LEGACY FALLBACK MARKER FORMAT (fallback-only, no code fences, one line per stage):",
-            "       WORKER_REQUEST: <roleId> :: <one-line instructions including playbook stage/dependencies>",
-            `Fallback dispatch order if needed: ${playbook?.stages.map((stage) => `${stage.id}:${stage.roleId}`).join(", ") ?? workerRoles.map((r) => r.id).join(", ")}.`,
-          ]
-        : [
-            "Spawn teammates directly or rely on the Pluto transcript bridge; dependency order is enforced from playbook.dependsOn.",
-            "Your final reconciliation must explicitly cite each required stage by stage id/name and mention the transcript path/room reference.",
-          ]),
-      "After all stages complete, STOP. Do not produce a summary yet. Pluto will reply with a 'SUMMARIZE' message.",
-      "When SUMMARIZE arrives, reply with final markdown that cites the required playbook stages and transcript evidence.",
-      "",
-      `Orchestration mode: ${orchestrationMode}`,
+      "Runtime: agent-teams-v1_6",
       `Selected playbook id: ${playbook?.id ?? "legacy-worker-order"}`,
       `Selected playbook title: ${playbook?.title ?? "Legacy worker order only"}`,
       `Selected playbook orchestration source: ${playbook?.orchestrationSource ?? "legacy_marker_fallback"}`,
@@ -718,9 +622,9 @@ export class PaseoOpenCodeAdapter implements PaseoTeamAdapter {
       "Selected playbook JSON:",
       playbookBlock,
       "",
-      `Coordination transcript kind: ${transcript?.kind ?? "file"}`,
-      `Coordination transcript path: ${transcript?.path ?? "not-provided"}`,
-      `Coordination room reference: ${transcript?.roomRef ?? "not-provided"}`,
+      `Mailbox kind: ${transcript?.kind ?? "shared_channel"}`,
+      `Mailbox path: ${transcript?.path ?? "not-provided"}`,
+      `Mailbox reference: ${transcript?.roomRef ?? "not-provided"}`,
       "",
       `Task title: ${task.title}`,
       `Goal: ${task.prompt}`,

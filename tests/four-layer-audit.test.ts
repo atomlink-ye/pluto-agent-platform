@@ -4,7 +4,7 @@ import { join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import type { Playbook, RunProfile } from "@/contracts/four-layer.js";
+import type { MailboxMessage, Playbook, RunProfile, TaskRecord } from "@/contracts/four-layer.js";
 import { runAuditMiddleware } from "@/four-layer/audit-middleware.js";
 
 let artifactRootDir: string;
@@ -13,13 +13,12 @@ const basePlaybook: Playbook = {
   schemaVersion: 0,
   kind: "playbook",
   name: "research-review",
-  teamLead: "team_lead",
+  teamLead: "lead",
   members: ["planner", "generator", "evaluator"],
-  workflow: "As team lead, run planner then generator then evaluator.",
+  workflow: "delegate through the task list",
   audit: {
     requiredRoles: ["planner", "generator", "evaluator"],
-    maxRevisionCycles: 1,
-    finalReportSections: ["workflow_steps_executed", "deviations"],
+    finalReportSections: ["implementation_summary", "workflow_steps_executed", "required_role_citations", "deviations"],
   },
 };
 
@@ -35,10 +34,7 @@ const baseRunProfile: RunProfile = {
     ],
   },
   stdoutContract: {
-    requiredLines: [
-      "SUMMARY:",
-      { pattern: "STAGE:\\s+planner\\s+->\\s+generator" },
-    ],
+    requiredLines: ["SUMMARY:", "WROTE: artifact.md"],
   },
 };
 
@@ -52,210 +48,167 @@ afterEach(async () => {
 });
 
 describe("four-layer audit middleware", () => {
-  it("fails closed on a missing required artifact file", async () => {
-    await writeValidArtifacts({ skipArtifact: true });
+  it("fails when a required role has no completed task", async () => {
+    await writeArtifacts();
+    await writeTaskList([
+      makeTask("task-1", "planner", "completed"),
+      makeTask("task-2", "generator", "completed"),
+    ]);
+    await writeMailboxLog([
+      makeCompletion("planner", "task-1", "msg-1"),
+      makeCompletion("generator", "task-2", "msg-2"),
+      makeFinal(["msg-1", "msg-2"]),
+    ]);
 
     const result = await runAuditMiddleware(makeInput());
-
     expect(result.ok).toBe(false);
-    expect(result.status).toBe("failed_audit");
-    expect(result.issues).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ code: "missing_required_file", path: join(artifactRootDir, "artifact.md") }),
-      ]),
-    );
+    expect(result.issues).toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: "missing_required_role", role: "evaluator" }),
+    ]));
   });
 
-  it("fails closed on a missing required section", async () => {
-    await writeFile(join(artifactRootDir, "artifact.md"), "artifact body\n", "utf8");
-    await writeFile(join(artifactRootDir, "final-report.md"), "# Final Report\n\n## Deviations\n- none\n", "utf8");
+  it("fails when a required role has no completion mailbox message", async () => {
+    await writeArtifacts();
+    await writeTaskList([
+      makeTask("task-1", "planner", "completed"),
+      makeTask("task-2", "generator", "completed"),
+      makeTask("task-3", "evaluator", "completed"),
+    ]);
+    await writeMailboxLog([
+      makeCompletion("planner", "task-1", "msg-1"),
+      makeCompletion("generator", "task-2", "msg-2"),
+      makeFinal(["msg-1", "msg-2"]),
+    ]);
 
     const result = await runAuditMiddleware(makeInput());
-
     expect(result.ok).toBe(false);
-    expect(result.issues).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ code: "missing_required_section", section: "implementation_summary" }),
-      ]),
-    );
+    expect(result.issues).toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: "missing_completion_message", role: "evaluator" }),
+    ]));
   });
 
-  it("fails closed on a missing required stdout line", async () => {
-    await writeValidArtifacts();
-
-    const result = await runAuditMiddleware(makeInput({ stdout: "STAGE: planner -> generator\n" }));
-
-    expect(result.ok).toBe(false);
-    expect(result.issues).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ code: "missing_stdout_line", requirement: "SUMMARY:" }),
-      ]),
-    );
-  });
-
-  it("fails closed on missing required role stage coverage", async () => {
-    await writeValidArtifacts();
-
-    const result = await runAuditMiddleware(makeInput({
-      stageTransitions: [
-        { from: "planner", to: "generator" },
-        { from: "generator", to: "team_lead" },
-      ],
-    }));
-
-    expect(result.ok).toBe(false);
-    expect(result.issues).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ code: "missing_required_role", role: "evaluator" }),
-      ]),
-    );
-  });
-
-  it("rejects synthesized_routing transitions in the team-lead-owned mainline", async () => {
-    await writeValidArtifacts();
-
-    const result = await runAuditMiddleware(makeInput({
-      stageTransitions: [],
-      stageTransitionSource: "synthesized_routing",
-    }));
-
-    expect(result.ok).toBe(false);
-    expect(result.issues).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          code: "missing_stage_transitions",
-          message: expect.stringContaining("synthesized routing transitions are not accepted"),
-        }),
-      ]),
-    );
-  });
-
-  it("fails closed when STAGE events are missing from the lead's text stream", async () => {
-    await writeValidArtifacts();
-
-    const result = await runAuditMiddleware(makeInput({
-      stdout: "SUMMARY: finished\n",
-      stageTransitions: [
-        { from: "planner", to: "generator" },
-        { from: "generator", to: "evaluator" },
-      ],
-    }));
-
-    expect(result.ok).toBe(false);
-    expect(result.issues).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ code: "missing_stage_event", role: "planner" }),
-        expect.objectContaining({ code: "missing_stage_event", role: "generator" }),
-        expect.objectContaining({ code: "missing_stage_event", role: "evaluator" }),
-      ]),
-    );
-  });
-
-  it("passes when STAGE events are present in stdout for all required roles", async () => {
-    await writeValidArtifacts();
-
-    const result = await runAuditMiddleware(makeInput({
-      stdout: "STAGE: lead -> planner\nSTAGE: planner -> generator\nSTAGE: generator -> evaluator\nSUMMARY: finished\n",
-      stageTransitions: [
-        { from: "planner", to: "generator" },
-        { from: "generator", to: "evaluator" },
-      ],
-    }));
-
-    expect(result.issues.some((i) => i.code === "missing_stage_event")).toBe(false);
-  });
-
-  it("fails closed when deviations are reported but no DEVIATION: lines in stdout", async () => {
-    await writeValidArtifacts();
-
-    const result = await runAuditMiddleware(makeInput({
-      deviations: ["evaluator requested rework"],
-      stdout: "STAGE: lead -> planner\nSTAGE: planner -> generator\nSTAGE: generator -> evaluator\nSUMMARY: finished\n",
-    }));
-
-    expect(result.ok).toBe(false);
-    expect(result.issues).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ code: "missing_deviation_evidence" }),
-      ]),
-    );
-  });
-
-  it("passes when DEVIATION: lines in stdout match reported deviations", async () => {
-    await writeValidArtifacts();
-
-    const result = await runAuditMiddleware(makeInput({
-      deviations: ["evaluator requested rework"],
-      stdout: "STAGE: lead -> planner\nSTAGE: planner -> generator\nSTAGE: generator -> evaluator\nDEVIATION: evaluator requested rework\nSUMMARY: finished\n",
-    }));
-
-    expect(result.issues.some((i) => i.code === "missing_deviation_evidence")).toBe(false);
-  });
-
-  it("fails closed when the revision cap is breached", async () => {
-    await writeValidArtifacts();
-
-    const result = await runAuditMiddleware(makeInput({ revisionCount: 2 }));
-
-    expect(result.ok).toBe(false);
-    expect(result.issues).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ code: "revision_cap_breached" }),
-      ]),
-    );
-  });
-
-  it("fails closed when final-report role citations omit a required role", async () => {
-    await writeValidArtifacts({ citedRoles: ["planner", "generator"] });
+  it("fails when the FINAL summary is missing", async () => {
+    await writeArtifacts();
+    await writeTaskList(allTasks());
+    await writeMailboxLog([
+      makeCompletion("planner", "task-1", "msg-1"),
+      makeCompletion("generator", "task-2", "msg-2"),
+      makeCompletion("evaluator", "task-3", "msg-3"),
+    ]);
 
     const result = await runAuditMiddleware(makeInput());
-
     expect(result.ok).toBe(false);
-    expect(result.issues).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ code: "missing_required_role", role: "evaluator", section: "required_role_citations" }),
-      ]),
-    );
+    expect(result.issues).toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: "missing_final_summary" }),
+    ]));
+  });
+
+  it("fails when the FINAL summary omits a completion message id", async () => {
+    await writeArtifacts();
+    await writeTaskList(allTasks());
+    await writeMailboxLog([
+      makeCompletion("planner", "task-1", "msg-1"),
+      makeCompletion("generator", "task-2", "msg-2"),
+      makeCompletion("evaluator", "task-3", "msg-3"),
+      makeFinal(["msg-1", "msg-3"]),
+    ]);
+
+    const result = await runAuditMiddleware(makeInput());
+    expect(result.ok).toBe(false);
+    expect(result.issues).toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: "missing_final_citation", role: "generator" }),
+    ]));
+  });
+
+  it("passes when required roles, completion messages, and FINAL citations align", async () => {
+    await writeArtifacts();
+    await writeTaskList(allTasks());
+    await writeMailboxLog([
+      makeCompletion("planner", "task-1", "msg-1"),
+      makeCompletion("generator", "task-2", "msg-2"),
+      makeCompletion("evaluator", "task-3", "msg-3"),
+      makeFinal(["msg-1", "msg-2", "msg-3"]),
+    ]);
+
+    const result = await runAuditMiddleware(makeInput());
+    expect(result.ok).toBe(true);
+    expect(result.status).toBe("succeeded");
   });
 });
 
-function makeInput(overrides: Partial<Parameters<typeof runAuditMiddleware>[0]> = {}): Parameters<typeof runAuditMiddleware>[0] {
+function makeInput(): Parameters<typeof runAuditMiddleware>[0] {
   return {
     artifactRootDir,
-    stdout: "STAGE: lead -> planner\nSTAGE: planner -> generator\nSTAGE: generator -> evaluator\nSUMMARY: finished\n",
+    stdout: "WROTE: artifact.md\nSUMMARY: finished\n",
     playbook: basePlaybook,
     runProfile: baseRunProfile,
-    stageTransitions: [
-      { from: "planner", to: "generator" },
-      { from: "generator", to: "evaluator" },
-    ],
-    revisionCount: 1,
-    finalReportPath: "final-report.md",
-    ...overrides,
+    mailboxLogPath: join(artifactRootDir, "mailbox.jsonl"),
+    taskListPath: join(artifactRootDir, "tasks.json"),
+    teamLeadId: "lead",
   };
 }
 
-async function writeValidArtifacts(options: { skipArtifact?: boolean; citedRoles?: string[] } = {}) {
-  if (!options.skipArtifact) {
-    await writeFile(join(artifactRootDir, "artifact.md"), "artifact body\n", "utf8");
-  }
-  await writeFile(
-    join(artifactRootDir, "final-report.md"),
-    [
-      "# Final Report",
-      "",
-      "## Implementation Summary",
-      "Done.",
-      "",
-      "## Workflow Steps Executed",
-      "planner -> generator -> evaluator",
-      "",
-      "## Required Role Citations",
-      ...(options.citedRoles ?? ["planner", "generator", "evaluator"]).map((role) => `- ${role}: cited`),
-      "",
-      "## Deviations",
-      "none",
-    ].join("\n"),
-    "utf8",
-  );
+function makeTask(id: string, assigneeId: string, status: TaskRecord["status"]): TaskRecord {
+  return {
+    id,
+    assigneeId,
+    status,
+    dependsOn: [],
+    createdAt: "2026-05-02T00:00:00.000Z",
+    updatedAt: "2026-05-02T00:00:00.000Z",
+    claimedBy: assigneeId,
+    summary: `${assigneeId} task`,
+    artifacts: [],
+  };
+}
+
+function allTasks(): TaskRecord[] {
+  return [
+    makeTask("task-1", "planner", "completed"),
+    makeTask("task-2", "generator", "completed"),
+    makeTask("task-3", "evaluator", "completed"),
+  ];
+}
+
+function makeCompletion(from: string, taskId: string, id: string): MailboxMessage {
+  return {
+    id,
+    to: "lead",
+    from,
+    createdAt: "2026-05-02T00:00:00.000Z",
+    kind: "text",
+    summary: `COMPLETE ${taskId}`,
+    body: `Task ${taskId} complete`,
+    replyTo: taskId,
+  };
+}
+
+function makeFinal(ids: string[]): MailboxMessage {
+  return {
+    id: "final-1",
+    to: "pluto",
+    from: "lead",
+    createdAt: "2026-05-02T00:00:01.000Z",
+    kind: "text",
+    summary: "FINAL",
+    body: ids.join("\n"),
+  };
+}
+
+async function writeTaskList(tasks: TaskRecord[]) {
+  await writeFile(join(artifactRootDir, "tasks.json"), JSON.stringify({ nextId: tasks.length + 1, tasks }, null, 2) + "\n", "utf8");
+}
+
+async function writeMailboxLog(messages: MailboxMessage[]) {
+  await writeFile(join(artifactRootDir, "mailbox.jsonl"), messages.map((message) => JSON.stringify(message)).join("\n") + "\n", "utf8");
+}
+
+async function writeArtifacts() {
+  await writeFile(join(artifactRootDir, "artifact.md"), "artifact\n", "utf8");
+  await writeFile(join(artifactRootDir, "final-report.md"), [
+    "# Final Report",
+    "",
+    "## Implementation Summary",
+    "Done.",
+  ].join("\n"), "utf8");
 }

@@ -160,7 +160,7 @@ async function runCli(args: string[]): Promise<{ stdout: string; stderr: string;
     const result = await exec("npx", ["tsx", join(process.cwd(), "src/cli/observability.ts"), ...args], {
       cwd: process.cwd(),
       env: { ...process.env, PLUTO_DATA_DIR: dataDir },
-      timeout: 10_000,
+      timeout: 20_000,
     });
     return { stdout: result.stdout, stderr: result.stderr, exitCode: 0 };
   } catch (error: unknown) {

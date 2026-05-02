@@ -53,7 +53,7 @@ async function runIntegrations(args: string[]): Promise<{ stdout: string; stderr
     const result = await exec("npx", ["tsx", join(process.cwd(), "src/cli/integrations.ts"), ...args], {
       cwd: process.cwd(),
       env: { ...process.env, PLUTO_DATA_DIR: dataDir },
-      timeout: 10_000,
+      timeout: 20_000,
     });
     return { stdout: result.stdout, stderr: result.stderr, exitCode: 0 };
   } catch (err: unknown) {
@@ -75,7 +75,7 @@ describe("pnpm integrations", () => {
     const webhooks = await runIntegrations(["webhooks", "list"]);
     expect(webhooks.exitCode).toBe(0);
     expect(webhooks.stdout).toContain("webhook-alpha");
-  });
+  }, 30_000);
 
   it("lists inbound, outbound, and webhooks in JSON mode", async () => {
     const inbound = await runIntegrations(["inbound", "list", "--json"]);

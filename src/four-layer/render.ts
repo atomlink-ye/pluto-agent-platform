@@ -18,8 +18,7 @@ export function renderRolePrompt(
   if (roleName === selection.playbook.value.teamLead) {
     sections.push(renderAvailableRoles(selection, options.runId));
     sections.push(["## Workflow", selection.playbook.value.workflow.trim()].join("\n"));
-    sections.push(renderStageDeviationDiscipline());
-    sections.push(renderWorkerCoordinationGuidance());
+    sections.push(renderCoordinationGuidance());
   }
 
   if (overlay?.prompt) {
@@ -72,43 +71,22 @@ function renderAvailableRoles(selection: ResolvedFourLayerSelection, runId?: str
     lines.push(`- ${role.value.name}${description ? `: ${description}` : ""}`);
   }
 
-  const workerRoles = selection.members;
-  if (workerRoles.length > 0) {
-    lines.push("", "## Available Roles and Spawn Commands");
-    lines.push("Use `paseo run` to spawn each worker role. Fill in `<prompt>` with the stage-specific task.");
-    lines.push("Emit `STAGE: <from> -> <to>` before each `paseo run` invocation.");
-    lines.push("");
-    for (const role of workerRoles) {
-      const provider = role.value.provider ?? "<provider>";
-      const model = role.value.model ?? "<model>";
-      const mode = role.value.mode ?? "<mode>";
-      const labelRunId = runId ?? "<runId>";
-      const cmd = `paseo run --provider ${provider} --model ${model} --mode ${mode} --cwd <workspace> --title ${role.value.name}-stage --label parent_run=${labelRunId} --label role=${role.value.name} --json --detach "<prompt>"`;
-      lines.push(`- **${role.value.name}**: \`${cmd}\``);
-    }
+  if (selection.members.length > 0) {
+    lines.push("", `Run ID: ${runId ?? "<runId>"}`);
   }
 
   return lines.join("\n");
 }
 
-function renderStageDeviationDiscipline(): string {
+function renderCoordinationGuidance(): string {
   return [
-    "",
-    "## Stage and Deviation Discipline",
-    "- Emit `STAGE: <from-stage-id> -> <to-stage-id>` BEFORE each `paseo run` invocation.",
-    "- Emit `DEVIATION: <reason>` when you depart from the authored playbook workflow.",
-    "- The from-stage should be the most recently completed or active stage; use `lead` as the initial from-stage.",
-  ].join("\n");
-}
-
-function renderWorkerCoordinationGuidance(): string {
-  return [
-    "",
-    "## Worker Coordination",
-    "- After spawning a worker with `paseo run`, capture its ID from the JSON output.",
-    "- Use `paseo wait <id>` to block until the worker completes.",
-    "- Use `paseo logs <id> --filter text` to capture the worker's output before proceeding.",
-    "- Feed worker outputs into downstream stages as instructed by the workflow.",
+    "## Coordination via SendMessage and TaskTools",
+    "- Create tasks with `task.create({ role: <role>, instructions: <task>, dependsOn: [...] })`.",
+    "- Coordinate teammates with `SendMessage({ to: <name>, summary?: <short>, message: <text-or-typed-envelope> })`.",
+    "- Treat the shared task list as the source of truth for pending, in-progress, and completed work.",
+    "- Read your inbox and completion notices before moving to downstream roles.",
+    "- When a teammate needs plan approval, respond with a `plan_approval_response` message from `team-lead`.",
+    "- Final output must cite the completion message id for every required role.",
   ].join("\n");
 }
 

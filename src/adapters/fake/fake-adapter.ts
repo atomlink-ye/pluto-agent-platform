@@ -24,9 +24,8 @@ import { buildPortableRuntimeResultValueRefV0 } from "../../runtime/result-contr
  * Deterministic in-memory adapter. Used by unit tests and any environment
  * where Paseo / OpenCode is unavailable.
  *
- * The fake mirrors the protocol the live adapter is expected to honor:
+ * The fake mirrors the v1.6 runtime surface used by the harness:
  *   - lead_started after createLeadSession.
- *   - worker_requested events for every non-lead role (in team-config order).
  *   - worker_started + worker_completed when createWorkerSession is called.
  *   - lead_message(kind="summary") in response to a sendMessage that contains
  *     the keyword `SUMMARIZE`.
@@ -148,7 +147,7 @@ export class FakeAdapter implements PaseoTeamAdapter {
         systemPrompt: input.role.systemPrompt,
         playbookId: input.playbook?.id ?? run.playbook?.id ?? null,
         transcript: input.transcript ?? run.transcript ?? null,
-        orchestrationSource: input.playbook?.orchestrationSource ?? run.playbook?.orchestrationSource ?? "legacy_marker_fallback",
+        orchestrationSource: input.playbook?.orchestrationSource ?? run.playbook?.orchestrationSource ?? "teamlead_direct",
       },
       callback: this.callbackIdentity({
         source: "fake_adapter",
@@ -158,68 +157,6 @@ export class FakeAdapter implements PaseoTeamAdapter {
         dedupeParts: ["lead_started", sessionId],
       }),
     });
-
-    if (run.orchestrationMode === "lead_marker") {
-      // Simulate the legacy lead emitting marker-driven worker requests.
-      const playbook = input.playbook ?? run.playbook;
-      const workerStages = playbook?.stages ?? this.team.roles.filter((r) => r.kind === "worker").map((role) => ({ id: role.id, roleId: role.id, instructions: this.workerInstructionsFor(input.task, role), dependsOn: [] }));
-      for (const stage of workerStages) {
-        const worker = this.team.roles.find((role) => role.id === stage.roleId);
-        if (!worker || worker.kind !== "worker") continue;
-        const instructions = this.stageInstructionsFor(input.task, stage, playbook);
-        const payload: WorkerRequestedPayload = {
-          targetRole: worker.id,
-          instructions,
-          orchestratorSource: "lead_marker",
-          playbookId: playbook?.id ?? null,
-          playbookStageId: stage.id,
-          dependsOn: stage.dependsOn,
-          source: "legacy_marker_fallback",
-        };
-        this.appendEvent(input.runId, {
-          type: "worker_requested",
-          roleId: worker.id,
-          sessionId,
-          payload,
-          rawPayloadKeys: ["instructions"],
-          callback: this.callbackIdentity({
-            source: "fake_adapter",
-            batchId: leadBatchId,
-            lineageKey: `worker_request:${sessionId}:${worker.id}`,
-            status: "in_progress",
-            dedupeParts: ["worker_requested", sessionId, worker.id, instructions],
-          }),
-        });
-      }
-    } else if (!this.shouldDeferTeamLeadDirectRequestsToService(input.playbook ?? run.playbook)) {
-      const playbook = input.playbook ?? run.playbook;
-      const workerStages = playbook?.stages ?? this.team.roles.filter((r) => r.kind === "worker").map((role) => ({ id: role.id, roleId: role.id, instructions: this.workerInstructionsFor(input.task, role), dependsOn: [] }));
-      for (const stage of workerStages) {
-        const worker = this.team.roles.find((role) => role.id === stage.roleId);
-        if (!worker || worker.kind !== "worker") continue;
-        const instructions = playbook ? this.stageInstructionsFor(input.task, stage, playbook) : this.workerInstructionsFor(input.task, worker);
-        const payload: WorkerRequestedPayload = {
-          targetRole: worker.id,
-          instructions,
-          orchestratorSource: "teamlead_direct",
-          playbookId: playbook?.id ?? null,
-        };
-        this.appendEvent(input.runId, {
-          type: "worker_requested",
-          roleId: worker.id,
-          sessionId,
-          payload,
-          rawPayloadKeys: ["instructions"],
-          callback: this.callbackIdentity({
-            source: "fake_adapter",
-            batchId: leadBatchId,
-            lineageKey: `worker_request:${sessionId}:${worker.id}`,
-            status: "in_progress",
-            dedupeParts: ["worker_requested", sessionId, worker.id, instructions],
-          }),
-        });
-      }
-    }
 
     return { sessionId, role: input.role };
   }

@@ -13,7 +13,7 @@ const baseTask: TeamTask = {
 };
 
 describe("FakeAdapter protocol", () => {
-  it("emits lead_started and a worker_requested per non-lead role", async () => {
+  it("emits lead_started without legacy worker-request bridge events", async () => {
     const adapter = new FakeAdapter({ team: DEFAULT_TEAM });
     await adapter.startRun({ runId: "r1", task: baseTask, team: DEFAULT_TEAM });
 
@@ -26,10 +26,7 @@ describe("FakeAdapter protocol", () => {
     const events = await adapter.readEvents({ runId: "r1" });
     const types = events.map((e) => e.type);
     expect(types[0]).toBe("lead_started");
-
-    const requested = events.filter((e) => e.type === "worker_requested");
-    const requestedRoles = requested.map((e) => e.payload["targetRole"]);
-    expect(requestedRoles).toEqual(["planner", "generator", "evaluator"]);
+    expect(types).not.toContain("worker_requested");
   });
 
   it("emits worker_started + worker_completed when workers are created", async () => {
