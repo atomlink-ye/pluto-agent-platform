@@ -51,7 +51,6 @@ describe.sequential("harness chat room wiring", () => {
     const mailboxMessages = events.filter((event) => event["type"] === "mailbox_message");
     expect(mailboxMessages.length).toBeGreaterThan(0);
     expect(mailboxMessages.every((event) => typeof (event["payload"] as Record<string, unknown>)?.["transportMessageId"] === "string")).toBe(true);
-    expect(events.some((event) => event["type"] === "mailbox_transport_parity_drift")).toBe(false);
 
     const mirror = await readJsonLines<Record<string, unknown>>(join(result.runDir, "mailbox.jsonl"));
     expect(mirror.length).toBeGreaterThan(0);

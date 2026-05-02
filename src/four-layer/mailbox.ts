@@ -29,6 +29,9 @@ export interface SendMailboxMessageInput {
   transportMessageId?: string;
   transportTimestamp?: string;
   transportStatus?: MailboxTransportStatus;
+  deliveryStatus?: MailboxMessage["deliveryStatus"];
+  deliveryAttemptedAt?: MailboxMessage["deliveryAttemptedAt"];
+  deliveryFailedReason?: MailboxMessage["deliveryFailedReason"];
 }
 
 export class FileBackedMailbox {
@@ -93,6 +96,9 @@ export class FileBackedMailbox {
       ...(input.transportMessageId ? { transportMessageId: input.transportMessageId } : {}),
       ...(input.transportTimestamp ? { transportTimestamp: input.transportTimestamp } : {}),
       ...(input.transportStatus ? { transportStatus: input.transportStatus } : {}),
+      ...(input.deliveryStatus ? { deliveryStatus: input.deliveryStatus } : {}),
+      ...(input.deliveryAttemptedAt ? { deliveryAttemptedAt: input.deliveryAttemptedAt } : {}),
+      ...(input.deliveryFailedReason ? { deliveryFailedReason: input.deliveryFailedReason } : {}),
     };
   }
 

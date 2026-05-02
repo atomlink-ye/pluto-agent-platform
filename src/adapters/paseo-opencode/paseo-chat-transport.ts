@@ -68,6 +68,7 @@ export class PaseoChatTransport implements MailboxTransport {
     await this.probeSubcommand("create");
     await this.probeSubcommand("post");
     await this.probeSubcommand("read");
+    await this.probeSubcommand("wait");
   }
 
   drainEnvelopeRejections(): PaseoChatEnvelopeRejection[] {
@@ -98,7 +99,19 @@ export class PaseoChatTransport implements MailboxTransport {
       input.room,
       JSON.stringify(input.envelope),
     ];
-    const parsed = await this.execJson(args);
+    let parsed: Record<string, unknown> | unknown[];
+    try {
+      parsed = await this.execJson(args);
+    } catch (error) {
+      if (!isTimeoutError(error)) {
+        throw error;
+      }
+      const recovered = await this.recoverPostedMessage(input);
+      if (!recovered) {
+        throw error;
+      }
+      return recovered;
+    }
     const transportMessageId = requireString(parsed, ["id", "messageId", "transportMessageId"]);
     const transportTimestamp = requireString(parsed, ["timestamp", "createdAt", "ts"]);
     return {
@@ -158,7 +171,55 @@ export class PaseoChatTransport implements MailboxTransport {
     return { messages, latestTimestamp };
   }
 
-  private async probeSubcommand(subcommand: "create" | "post" | "read"): Promise<void> {
+  async wait(input: { room: RoomRef; since?: TransportSince; timeoutMs: number }) {
+    const waitArgs = [
+      "chat",
+      "wait",
+      "--timeout",
+      String(Math.max(0, Math.ceil(input.timeoutMs / 1_000))),
+      "--json",
+      ...this.hostArgs(),
+      input.room,
+    ];
+    const waitResult = await this.runner.exec(this.paseoBin, waitArgs);
+    if (waitResult.exitCode !== 0 && !isTimeoutResult(waitResult.stdout, waitResult.stderr)) {
+      throw new Error(waitResult.stderr || `paseo chat command failed: ${waitArgs.join(" ")}`);
+    }
+
+    const readResult = await this.read({ room: input.room, since: input.since });
+    return {
+      messages: dedupeMessages(readResult.messages),
+      latestTimestamp: readResult.latestTimestamp,
+      timedOut: waitResult.exitCode !== 0,
+    };
+  }
+
+  private async recoverPostedMessage(input: {
+    room: RoomRef;
+    envelope: MailboxEnvelope;
+    replyTo?: string;
+  }): Promise<TransportMessageRef | null> {
+    const readResult = await this.read({ room: input.room });
+    const matches = readResult.messages.filter((message) => {
+      if (JSON.stringify(message.envelope) !== JSON.stringify(input.envelope)) {
+        return false;
+      }
+      if (input.replyTo && message.replyTo !== input.replyTo) {
+        return false;
+      }
+      return true;
+    });
+    if (matches.length !== 1) {
+      return null;
+    }
+    return {
+      transportMessageId: matches[0]!.transportMessageId,
+      transportTimestamp: matches[0]!.transportTimestamp,
+      roomRef: input.room,
+    };
+  }
+
+  private async probeSubcommand(subcommand: "create" | "post" | "read" | "wait"): Promise<void> {
     const command = `paseo chat ${subcommand} --help`;
     try {
       const result = await this.runner.exec(this.paseoBin, ["chat", subcommand, "--help"]);
@@ -260,6 +321,27 @@ function normalizeReplyTo(value: string | undefined): string | undefined {
     return undefined;
   }
   return value;
+}
+
+function dedupeMessages(messages: ReceivedTransportMessage[]): ReceivedTransportMessage[] {
+  const seen = new Set<string>();
+  const deduped: ReceivedTransportMessage[] = [];
+  for (const message of messages) {
+    if (seen.has(message.transportMessageId)) {
+      continue;
+    }
+    seen.add(message.transportMessageId);
+    deduped.push(message);
+  }
+  return deduped;
+}
+
+function isTimeoutResult(stdout: string, stderr: string): boolean {
+  return /timed?\s*out|timeout/i.test(`${stdout}\n${stderr}`);
+}
+
+function isTimeoutError(error: unknown): boolean {
+  return error instanceof Error && isTimeoutResult("", error.message);
 }
 
 function isMailboxEnvelope(value: unknown): value is MailboxEnvelope {

@@ -332,7 +332,7 @@ describe("PaseoOpenCodeAdapter — protocol with mocked runner", () => {
     expect(prompts[0]).toContain("Selected playbook title: Default planner → generator → evaluator");
     expect(prompts[0]).toContain("- planner-contract | Planner contract | role=planner | dependsOn=none");
     expect(prompts[0]).toContain("- generator-output | Generator output | role=generator | dependsOn=planner-contract");
-    expect(prompts[0]).toContain("Mailbox path: /tmp/pluto-live/.pluto/runs/r1/coordination-transcript.jsonl");
+    expect(prompts[0]).toContain("Mailbox kind: file");
     expect(prompts[0]).toContain("Mailbox reference: file-transcript:r1");
     expect(prompts[0]).toContain("Do not emit legacy marker prefixes or delegation markers");
   });

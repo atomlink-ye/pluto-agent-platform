@@ -40,6 +40,7 @@ import type {
 import type { MailboxTransport } from "../four-layer/mailbox-transport.js";
 import { classifyBlocker } from "./blocker-classifier.js";
 import { generateEvidencePacket, writeEvidence } from "./evidence.js";
+import { startInboxDeliveryLoop, type InboxDeliveryLoopHandle } from "./inbox-delivery-loop.js";
 import { RunStore, sanitizeEventForPersistence } from "./run-store.js";
 import type { AcceptanceCheckResult } from "../four-layer/acceptance-runner.js";
 import type { AuditMiddlewareResult } from "../four-layer/audit-middleware.js";
@@ -166,8 +167,11 @@ export async function runManagerHarness(options: ManagerRunHarnessOptions): Prom
   let blockerReason: BlockerReasonV0 | null = null;
   let adapter: PaseoTeamAdapter | undefined;
   let mailboxTransport: MailboxTransport | undefined;
+  let inboxDeliveryLoop: InboxDeliveryLoopHandle | undefined;
   const playbookMetadata = buildPlaybookMetadata(resolved.playbook.value);
   const adapterPlaybook = buildAdapterPlaybook(resolved);
+  const roleSessionIds = new Map<string, string>();
+  const respondedPlanApprovalRequests = new Set<string>();
   const task: TeamTask = {
     id: `manager-run-${runId}`,
     title: resolved.scenario.value.name,
@@ -190,6 +194,16 @@ export async function runManagerHarness(options: ManagerRunHarnessOptions): Prom
     collected.push(event);
     await store.appendEvent(event);
     return event;
+  };
+
+  const recordMailboxMessageEvent = async (message: MailboxMessage, roleId?: string, sessionId?: string) => {
+    await emit("mailbox_message", {
+      messageId: message.id,
+      to: message.to,
+      from: message.from,
+      kind: message.kind,
+      transportMessageId: message.transportMessageId,
+    }, roleId, sessionId);
   };
 
   const persistAdapterEvents = async () => {
@@ -239,11 +253,15 @@ export async function runManagerHarness(options: ManagerRunHarnessOptions): Prom
         transportMessageId: transportRef.transportMessageId,
         transportTimestamp: transportRef.transportTimestamp,
         transportStatus: "ok",
+        deliveryStatus: "pending",
       };
     } catch (error) {
       mirroredMessage = {
         ...baseMessage,
         transportStatus: "post_failed",
+        deliveryStatus: "failed",
+        deliveryAttemptedAt: clock().toISOString(),
+        deliveryFailedReason: "transport_post_failed",
       };
       await emit("mailbox_transport_post_failed", {
         messageId: baseMessage.id,
@@ -429,7 +447,47 @@ export async function runManagerHarness(options: ManagerRunHarnessOptions): Prom
       playbook: adapterPlaybook,
       transcript: mailboxRef,
     });
+    roleSessionIds.set(leadRole.id, leadSession.sessionId);
     await persistAdapterEvents();
+    inboxDeliveryLoop = startInboxDeliveryLoop({
+      runId,
+      room: mailboxRef.roomRef,
+      transport: mailboxTransport,
+      adapter,
+      resolveSessionId: (roleId) => roleSessionIds.get(roleId),
+      emit,
+      clock,
+      markMessageRead: async (message) => {
+        await mailbox.markRead(message.to, [message.id]);
+      },
+      onDelivered: async ({ message, roleId }) => {
+        if (message.kind !== "plan_approval_request" || roleId !== leadRole.id) {
+          return;
+        }
+        if (respondedPlanApprovalRequests.has(message.id)) {
+          return;
+        }
+        respondedPlanApprovalRequests.add(message.id);
+        const taskId = typeof message.body === "object" && message.body !== null && "taskId" in message.body
+          ? String((message.body as { taskId?: string }).taskId ?? "") || undefined
+          : undefined;
+        const responseMessage = await sendMailboxMessage({
+          to: message.from,
+          from: leadRole.id,
+          kind: "plan_approval_response",
+          summary: taskId ? `PLAN_APPROVED ${taskId}` : "PLAN_APPROVED",
+          body: createPlanApprovalResponse({ approved: true, mode: "workspace_write", taskId }),
+          replyTo: message.id,
+          transportReplyTo: message.transportMessageId,
+          taskId,
+        });
+        if (!isTrustedPlanApprovalResponse(responseMessage, leadRole.id)) {
+          throw new Error(`untrusted_plan_approval_response:${taskId ?? message.id}`);
+        }
+        await recordMailboxMessageEvent(responseMessage, leadRole.id, leadSession.sessionId);
+        await emit("plan_approval_responded", { messageId: responseMessage.id, taskId: taskId ?? null }, leadRole.id, leadSession.sessionId);
+      },
+    });
 
     const memberRoles = team.roles.filter((role) => role.kind === "worker");
     const acceptanceHook = createAcceptanceHook({
@@ -447,7 +505,7 @@ export async function runManagerHarness(options: ManagerRunHarnessOptions): Prom
       to: leadRole.id,
       from: "pluto",
       summary: "RUN_START",
-      body: `Run ${runId} started. Mailbox: ${mailbox.mirrorPath()} Task list: ${taskList.path()}`,
+      body: `Run ${runId} started. Pluto owns the mailbox mirror and shared task list for this run.`,
     });
 
     for (const role of memberRoles) {
@@ -459,21 +517,28 @@ export async function runManagerHarness(options: ManagerRunHarnessOptions): Prom
       lastTask = createdTask;
       await emit("task_created", { taskId: createdTask.id, summary: createdTask.summary, dependsOn: createdTask.dependsOn }, role.id);
 
+      const claimedTask = await taskList.claim(createdTask.id, role.id);
+      await emit("task_claimed", { taskId: claimedTask.id, claimedBy: role.id }, role.id);
+
+      const idleHook = createIdleNudgeHook({ roleId: role.id, taskList });
+      await runHooks([idleHook], { roleId: role.id });
+
+      const workerSession = await adapter.createWorkerSession({
+        runId,
+        role,
+        instructions: `Task ${createdTask.id}\n${taskText}`,
+      });
+      roleSessionIds.set(role.id, workerSession.sessionId);
+
       const assignmentMessage = await sendMailboxMessage({
         to: role.id,
         from: leadRole.id,
         summary: `TASK ${createdTask.id}`,
-        body: `Task ${createdTask.id}\nRole: ${role.id}\nGoal: ${taskText}\nMailbox: ${mailbox.mirrorPath()}\nTasks: ${taskList.path()}`,
+        body: `Task ${createdTask.id}\nRole: ${role.id}\nGoal: ${taskText}`,
         replyTo: createdTask.id,
         taskId: createdTask.id,
       });
-      await emit("mailbox_message", {
-        messageId: assignmentMessage.id,
-        to: role.id,
-        from: leadRole.id,
-        kind: assignmentMessage.kind,
-        transportMessageId: assignmentMessage.transportMessageId,
-      }, role.id, leadSession.sessionId);
+      await recordMailboxMessageEvent(assignmentMessage, role.id, leadSession.sessionId);
 
       if (role.id === "planner") {
         const requestBody = createPlanApprovalRequest({
@@ -490,34 +555,10 @@ export async function runManagerHarness(options: ManagerRunHarnessOptions): Prom
           replyTo: createdTask.id,
           taskId: createdTask.id,
         });
+        await recordMailboxMessageEvent(requestMessage, role.id, workerSession.sessionId);
         await emit("plan_approval_requested", { messageId: requestMessage.id, taskId: createdTask.id }, role.id);
-        const responseMessage = await sendMailboxMessage({
-          to: role.id,
-          from: leadRole.id,
-          kind: "plan_approval_response",
-          summary: `PLAN_APPROVED ${createdTask.id}`,
-          body: createPlanApprovalResponse({ approved: true, mode: "workspace_write", taskId: createdTask.id }),
-          replyTo: requestMessage.id,
-          transportReplyTo: requestMessage.transportMessageId,
-          taskId: createdTask.id,
-        });
-        if (!isTrustedPlanApprovalResponse(responseMessage, leadRole.id)) {
-          throw new Error(`untrusted_plan_approval_response:${createdTask.id}`);
-        }
-        await emit("plan_approval_responded", { messageId: responseMessage.id, taskId: createdTask.id }, role.id);
       }
 
-      const claimedTask = await taskList.claim(createdTask.id, role.id);
-      await emit("task_claimed", { taskId: claimedTask.id, claimedBy: role.id }, role.id);
-
-      const idleHook = createIdleNudgeHook({ roleId: role.id, taskList });
-      await runHooks([idleHook], { roleId: role.id });
-
-      await adapter.createWorkerSession({
-        runId,
-        role,
-        instructions: `Task ${createdTask.id}\n${taskText}`,
-      });
       const workerEvents = await persistAdapterEvents();
       const completedEvent = [...workerEvents].reverse().find((event) => event.type === "worker_completed" && event.roleId === role.id);
       const output = completedEvent
@@ -532,18 +573,12 @@ export async function runManagerHarness(options: ManagerRunHarnessOptions): Prom
         to: leadRole.id,
         from: role.id,
         summary: `COMPLETE ${createdTask.id}`,
-        body: `Task ${createdTask.id} complete. Output:\n${output}`,
+        body: buildCompletionMessageBody(createdTask.id, output),
         replyTo: createdTask.id,
         taskId: createdTask.id,
       });
       completionMessages.push(completionMessage);
-      await emit("mailbox_message", {
-        messageId: completionMessage.id,
-        to: leadRole.id,
-        from: role.id,
-        kind: completionMessage.kind,
-        transportMessageId: completionMessage.transportMessageId,
-      }, role.id, completedEvent?.sessionId);
+      await recordMailboxMessageEvent(completionMessage, role.id, completedEvent?.sessionId);
 
       await taskList.complete(createdTask.id, []);
       await emit("task_completed", { taskId: createdTask.id, messageId: completionMessage.id }, role.id, completedEvent?.sessionId);
@@ -570,14 +605,7 @@ export async function runManagerHarness(options: ManagerRunHarnessOptions): Prom
         ...completionMessages.map((message) => `${message.from}:${message.id}`),
       ].join("\n"),
     });
-    await emit("mailbox_message", {
-      messageId: finalSummaryMessage.id,
-      to: "pluto",
-      from: leadRole.id,
-      kind: finalSummaryMessage.kind,
-      transportMessageId: finalSummaryMessage.transportMessageId,
-    }, leadRole.id, leadSession.sessionId);
-    await auditMailboxTransportParity();
+    await recordMailboxMessageEvent(finalSummaryMessage, leadRole.id, leadSession.sessionId);
 
     const artifact: FinalArtifact = {
       runId,
@@ -759,6 +787,8 @@ export async function runManagerHarness(options: ManagerRunHarnessOptions): Prom
       audit,
     });
   } finally {
+    await inboxDeliveryLoop?.stop().catch(() => undefined);
+    await auditMailboxTransportParity().catch(() => undefined);
     await adapter?.endRun({ runId }).catch(() => undefined);
   }
 }
@@ -1055,10 +1085,10 @@ function hasEnvelopeRejectionDrain(
 }
 
 function buildSummaryRequest(taskText: string, contributions: ReadonlyArray<WorkerContribution>, completionMessages: ReadonlyArray<MailboxMessage>, mailboxPath: string): string {
+  void mailboxPath;
   return [
     "SUMMARIZE",
     `Task: ${taskText}`,
-    `Mailbox: ${mailboxPath}`,
     "Completion messages:",
     ...completionMessages.map((message) => `- ${message.from}: ${message.id}`),
     "Contributions:",
@@ -1072,6 +1102,10 @@ function buildFallbackSummary(taskText: string, contributions: ReadonlyArray<Wor
     "",
     ...contributions.flatMap((contribution) => [`## ${contribution.roleId}`, contribution.output, ""]),
   ].join("\n");
+}
+
+function buildCompletionMessageBody(taskId: string, output: string): string {
+  return [`Task ${taskId} complete.`, `Summary: ${firstNonEmptyLine(output) || "completed"}`].join("\n");
 }
 
 function renderTaskTree(playbookName: string, roles: string[]): string {

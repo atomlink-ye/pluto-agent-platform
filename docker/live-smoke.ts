@@ -26,7 +26,7 @@
  */
 import { fileURLToPath } from "node:url";
 import { access, mkdir, readFile } from "node:fs/promises";
-import { resolve } from "node:path";
+import { join, resolve } from "node:path";
 import { constants, existsSync } from "node:fs";
 import * as process from "node:process";
 
@@ -537,11 +537,21 @@ async function main() {
     process.exit(1);
   }
   const mailboxJsonlPath = result.run.coordinationChannel.path ?? `${result.runDir}/mailbox.jsonl`;
+  const eventsPath = `${result.runDir}/events.jsonl`;
+  const runEvents = (await readFile(eventsPath, "utf8"))
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0)
+    .map((line) => JSON.parse(line) as AgentEvent);
   const mailboxEntries = (await readFile(mailboxJsonlPath, "utf8"))
     .split("\n")
     .map((line) => line.trim())
     .filter((line) => line.length > 0)
-    .map((line) => JSON.parse(line) as Record<string, unknown>);
+      .map((line) => JSON.parse(line) as Record<string, unknown>);
+  const deliverableMailboxEntries = mailboxEntries.filter((entry) => {
+    const to = entry["to"];
+    return typeof to === "string" && to !== "pluto" && to !== "broadcast";
+  });
   if (mailboxEntries.length === 0) {
     console.error(
       JSON.stringify(
@@ -568,6 +578,100 @@ async function main() {
           message: "mailbox.jsonl entries are missing transport metadata",
           summary,
           mailboxJsonlPath,
+        },
+        null,
+        2,
+      ),
+    );
+    process.exit(1);
+  }
+  const deliveredEvents = runEvents.filter((event) => event.type === "mailbox_message_delivered");
+  const queuedEvents = runEvents.filter((event) => event.type === "mailbox_message_queued");
+  const deliveredTransportIds = new Set(
+    deliveredEvents
+      .map((event) => event.payload["transportMessageId"])
+      .filter((value): value is string => typeof value === "string" && value.length > 0),
+  );
+  if (deliveredEvents.length === 0) {
+    console.error(
+      JSON.stringify(
+        {
+          status: "assertion_failed",
+          message: "events.jsonl is missing mailbox_message_delivered evidence",
+          summary,
+          eventsPath,
+        },
+        null,
+        2,
+      ),
+    );
+    process.exit(1);
+  }
+  if (deliveredEvents.length !== deliverableMailboxEntries.length) {
+    console.error(
+      JSON.stringify(
+        {
+          status: "assertion_failed",
+          message: "deliverable mailbox entries and delivered event count diverged",
+          summary,
+          mailboxJsonlPath,
+          deliverableMailboxMessageCount: deliverableMailboxEntries.length,
+          deliveredEventCount: deliveredEvents.length,
+        },
+        null,
+        2,
+      ),
+    );
+    process.exit(1);
+  }
+  const planApprovalRequest = mailboxEntries.find((entry) => entry["kind"] === "plan_approval_request");
+  const planApprovalResponse = mailboxEntries.find((entry) => entry["kind"] === "plan_approval_response");
+  if (!planApprovalRequest || !planApprovalResponse) {
+    console.error(
+      JSON.stringify(
+        {
+          status: "assertion_failed",
+          message: "mailbox.jsonl is missing the plan-approval round-trip messages",
+          summary,
+          mailboxJsonlPath,
+        },
+        null,
+        2,
+      ),
+    );
+    process.exit(1);
+  }
+  const requestTransportId = typeof planApprovalRequest["transportMessageId"] === "string"
+    ? planApprovalRequest["transportMessageId"]
+    : null;
+  const responseTransportId = typeof planApprovalResponse["transportMessageId"] === "string"
+    ? planApprovalResponse["transportMessageId"]
+    : null;
+  if (!requestTransportId || !responseTransportId || !deliveredTransportIds.has(requestTransportId) || !deliveredTransportIds.has(responseTransportId)) {
+    console.error(
+      JSON.stringify(
+        {
+          status: "assertion_failed",
+          message: "plan-approval round-trip is missing delivery evidence in events.jsonl",
+          summary,
+          eventsPath,
+          requestTransportId,
+          responseTransportId,
+        },
+        null,
+        2,
+      ),
+    );
+    process.exit(1);
+  }
+  if (!runEvents.some((event) => event.type === "plan_approval_requested") || !runEvents.some((event) => event.type === "plan_approval_responded")) {
+    console.error(
+      JSON.stringify(
+        {
+          status: "assertion_failed",
+          message: "events.jsonl is missing plan_approval_requested/plan_approval_responded evidence",
+          summary,
+          eventsPath,
         },
         null,
         2,
@@ -733,12 +837,17 @@ async function main() {
     ...summary,
     coordinationChannel: result.run.coordinationChannel,
     mailboxJsonlPath,
-    mailboxMessageCount: mailboxEntries.length,
+    mailboxMessageCount: deliverableMailboxEntries.length,
+    mirroredMailboxMessageCount: mailboxEntries.length,
+    deliveryEvents: {
+      delivered: deliveredEvents.length,
+      queued: queuedEvents.length,
+    },
     liveChatParity,
   };
 
   // Assertions on the artifact content.
-  const artifactMd = await readFile(result.artifactPath ?? `${result.runDir}/artifact.md`, "utf8");
+  const artifactMd = await readFile(join(WORKSPACE, "artifact.md"), "utf8");
   const requiredRoles = ["lead", ...expectedWorkerRoles];
   const missing = requiredRoles.filter((r) => !artifactMd.toLowerCase().includes(r));
   if (missing.length > 0) {

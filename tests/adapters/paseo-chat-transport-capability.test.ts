@@ -121,4 +121,57 @@ describe("PaseoChatTransport capability probing", () => {
       }),
     ]);
   });
+
+  it("recovers a posted message by reading the room when chat post times out after delivery", async () => {
+    const envelope = {
+      schemaVersion: "v1",
+      fromRole: "planner",
+      toRole: "lead",
+      runId: "run-1",
+      body: {
+        id: "local-1",
+        to: "lead",
+        from: "planner",
+        createdAt: "2026-05-02T00:00:00.000Z",
+        kind: "text",
+        body: "hello",
+      },
+    } as const;
+    const runner: ProcessRunner = {
+      async exec(_cmd, args) {
+        if (args[0] === "chat" && args[1] === "post") {
+          return {
+            stdout: "",
+            stderr: "CHAT_POST_FAILED: Timeout waiting for message (10000ms)",
+            exitCode: 1,
+          };
+        }
+        if (args[0] === "chat" && args[1] === "read") {
+          return {
+            stdout: JSON.stringify([
+              {
+                id: "transport-2",
+                createdAt: "2026-05-02T00:00:01.000Z",
+                replyTo: "transport-1",
+                body: JSON.stringify(envelope),
+              },
+            ]),
+            stderr: "",
+            exitCode: 0,
+          };
+        }
+        return { stdout: "{}", stderr: "", exitCode: 0 };
+      },
+      follow() {
+        return { dispose: async () => undefined };
+      },
+    };
+
+    const transport = new PaseoChatTransport({ paseoBin: "paseo", runner });
+    await expect(transport.post({ room: "room-1", envelope, replyTo: "transport-1" })).resolves.toEqual({
+      transportMessageId: "transport-2",
+      transportTimestamp: "2026-05-02T00:00:01.000Z",
+      roomRef: "room-1",
+    });
+  });
 });

@@ -220,6 +220,9 @@ export interface MailboxMessage {
   transportMessageId?: string;
   transportTimestamp?: string;
   transportStatus?: MailboxTransportStatus;
+  deliveryStatus?: "pending" | "delivered" | "queued" | "failed";
+  deliveryAttemptedAt?: string;
+  deliveryFailedReason?: string;
 }
 
 export type RoomRef = string;
@@ -244,6 +247,12 @@ export interface ReceivedTransportMessage {
 export interface TransportReadResult {
   messages: ReceivedTransportMessage[];
   latestTimestamp: string | null;
+}
+
+export interface TransportWaitResult {
+  messages: ReceivedTransportMessage[];
+  latestTimestamp: string | null;
+  timedOut: boolean;
 }
 
 export interface MailboxEnvelope {

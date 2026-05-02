@@ -14,6 +14,7 @@ Run after every meaningful change.
 
 - [ ] `pnpm pluto:run --scenario hello-team --run-profile fake-smoke --workspace .tmp/pluto-cli`
 - [ ] `.pluto/runs/<runId>/mailbox.jsonl` exists
+- [ ] `.pluto/runs/<runId>/events.jsonl` shows at least one `mailbox_message_delivered` event
 - [ ] `.pluto/runs/<runId>/tasks.json` exists
 - [ ] planner, generator, evaluator tasks complete in dependency order
 - [ ] `.pluto/runs/<runId>/evidence-packet.json` exists and validates
@@ -23,6 +24,7 @@ Run after every meaningful change.
 - [ ] `pnpm smoke:local` returns `status: ok` or an allowed structured blocker/partial per current policy
 - [ ] `PASEO_HOST=<host> pnpm smoke:live` behaves the same when using an explicit daemon
 - [ ] `mailbox.jsonl` contains team coordination, teammate completion, FINAL summary, and plan-approval messages when applicable
+- [ ] `events.jsonl` contains a delivery event chain plus `plan_approval_requested` and `plan_approval_responded`
 - [ ] `tasks.json` contains pending → in_progress → completed transitions
 - [ ] `artifact.md` references lead, planner, generator, evaluator
 - [ ] `evidence-packet.json` cites mailbox/task lineage and role citations

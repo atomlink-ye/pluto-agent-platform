@@ -83,9 +83,9 @@ function renderCoordinationGuidance(): string {
     "## Coordination via SendMessage and TaskTools",
     "- Create tasks with `task.create({ role: <role>, instructions: <task>, dependsOn: [...] })`.",
     "- Coordinate teammates with `SendMessage({ to: <name>, summary?: <short>, message: <text-or-typed-envelope> })`.",
-    "- Treat the shared task list as the source of truth for pending, in-progress, and completed work.",
+    "- Treat the shared task list as the source of truth for pending, in-progress, and completed work, but never edit mailbox.jsonl or tasks.json directly; Pluto owns those artifacts.",
     "- Read your inbox and completion notices before moving to downstream roles.",
-    "- When a teammate needs plan approval, respond with a `plan_approval_response` message from `team-lead`.",
+    "- When a teammate needs plan approval, review the request in your inbox; Pluto owns posting the transport-backed `plan_approval_response` after delivery.",
     "- Final output must cite the completion message id for every required role.",
   ].join("\n");
 }

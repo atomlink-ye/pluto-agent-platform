@@ -6,6 +6,7 @@ import type {
   RoomRef,
   TransportMessageRef,
   TransportReadResult,
+  TransportWaitResult,
   TransportSince,
 } from "../../contracts/four-layer.js";
 
@@ -18,6 +19,12 @@ interface StoredFakeTransportMessage {
   wireMessage: string;
   replyTo?: string;
   agentId?: string;
+}
+
+interface PendingFakeTransportWait {
+  since?: TransportSince;
+  timeout?: ReturnType<typeof setTimeout>;
+  resolve: (result: TransportWaitResult) => void;
 }
 
 export interface FakeMailboxTransportOptions {
@@ -37,6 +44,7 @@ export class FakeMailboxTransport {
   private readonly idGen: () => string;
   private readonly roomRefsByKey = new Map<string, RoomRef>();
   private readonly roomMessages = new Map<RoomRef, StoredFakeTransportMessage[]>();
+  private readonly pendingWaits = new Map<RoomRef, PendingFakeTransportWait[]>();
   private readonly rejections: FakeMailboxEnvelopeRejection[] = [];
 
   constructor(options: FakeMailboxTransportOptions = {}) {
@@ -71,6 +79,7 @@ export class FakeMailboxTransport {
       agentId: input.envelope.fromRole,
     };
     this.messagesForRoom(input.room).push(stored);
+    await this.flushWaits(input.room);
     return ref;
   }
 
@@ -113,6 +122,34 @@ export class FakeMailboxTransport {
     return { messages, latestTimestamp };
   }
 
+  async wait(input: { room: RoomRef; since?: TransportSince; timeoutMs: number }): Promise<TransportWaitResult> {
+    const immediate = await this.read({ room: input.room, since: input.since });
+    if (hasWaitResultPayload(immediate)) {
+      return { ...immediate, timedOut: false };
+    }
+    if (input.timeoutMs === 0) {
+      return { ...immediate, timedOut: true };
+    }
+
+    return await new Promise<TransportWaitResult>((resolve) => {
+      const wait: PendingFakeTransportWait = {
+        since: input.since,
+        resolve: (result) => {
+          if (wait.timeout) {
+            clearTimeout(wait.timeout);
+          }
+          this.removePendingWait(input.room, wait);
+          resolve(result);
+        },
+      };
+      wait.timeout = setTimeout(() => {
+        wait.resolve({ messages: [], latestTimestamp: null, timedOut: true });
+      }, input.timeoutMs);
+      this.pendingWaitsForRoom(input.room).push(wait);
+      void this.flushWaits(input.room);
+    });
+  }
+
   appendRawMessage(input: {
     room: RoomRef;
     wireMessage: string;
@@ -128,6 +165,7 @@ export class FakeMailboxTransport {
       ...(input.replyTo ? { replyTo: input.replyTo } : {}),
       ...(input.agentId ? { agentId: input.agentId } : {}),
     });
+    void this.flushWaits(input.room);
   }
 
   drainEnvelopeRejections(): FakeMailboxEnvelopeRejection[] {
@@ -142,6 +180,41 @@ export class FakeMailboxTransport {
     const created: StoredFakeTransportMessage[] = [];
     this.roomMessages.set(room, created);
     return created;
+  }
+
+  private pendingWaitsForRoom(room: RoomRef): PendingFakeTransportWait[] {
+    const existing = this.pendingWaits.get(room);
+    if (existing) {
+      return existing;
+    }
+    const created: PendingFakeTransportWait[] = [];
+    this.pendingWaits.set(room, created);
+    return created;
+  }
+
+  private removePendingWait(room: RoomRef, wait: PendingFakeTransportWait): void {
+    const waits = this.pendingWaits.get(room);
+    if (!waits) {
+      return;
+    }
+    const index = waits.indexOf(wait);
+    if (index >= 0) {
+      waits.splice(index, 1);
+    }
+    if (waits.length === 0) {
+      this.pendingWaits.delete(room);
+    }
+  }
+
+  private async flushWaits(room: RoomRef): Promise<void> {
+    const waits = [...(this.pendingWaits.get(room) ?? [])];
+    for (const wait of waits) {
+      const read = await this.read({ room, since: wait.since });
+      if (!hasWaitResultPayload(read)) {
+        continue;
+      }
+      wait.resolve({ ...read, timedOut: false });
+    }
   }
 
   private tryParseEnvelope(stored: StoredFakeTransportMessage): MailboxEnvelope | null {
@@ -170,6 +243,10 @@ export class FakeMailboxTransport {
 
     return parsed;
   }
+}
+
+function hasWaitResultPayload(result: TransportReadResult): boolean {
+  return result.messages.length > 0 || result.latestTimestamp !== null;
 }
 
 function matchesSince(
