@@ -846,64 +846,6 @@ function extractLeadTimeoutSeconds(runProfile: RunProfile | undefined): number {
   return DEFAULT_LEAD_TIMEOUT_SECONDS;
 }
 
-async function observeLeadCompletion(input: {
-  adapter: PaseoTeamAdapter;
-  runId: string;
-  collected: AgentEvent[];
-  persistAdapterEvents: () => Promise<AgentEvent[]>;
-  timeoutMs: number;
-}): Promise<AgentEvent[]> {
-  const deadline = Date.now() + input.timeoutMs;
-  const leadDone = (events: AgentEvent[]) =>
-    events.some((e) => e.type === "lead_message" && String(e.payload.kind) === "summary");
-
-  if (leadDone(input.collected)) return input.collected;
-
-  while (Date.now() < deadline) {
-    const remaining = Math.max(100, deadline - Date.now());
-    const batch = await input.adapter.waitForCompletion({ runId: input.runId, timeoutMs: Math.min(remaining, 30_000) });
-    input.collected.push(...batch);
-    if (leadDone(input.collected)) return input.collected;
-    await delay(1_000);
-    await input.persistAdapterEvents();
-    if (leadDone(input.collected)) return input.collected;
-  }
-
-  throw new Error(`lead_timeout:exceeded ${input.timeoutMs}ms`);
-}
-
-function extractStageTransitions(events: ReadonlyArray<AgentEvent>): EvidenceTransition[] {
-  const transitions: EvidenceTransition[] = [];
-  for (const event of events) {
-    if (event.type !== "lead_message") continue;
-    for (const value of extractEventTextValues(event)) {
-      for (const line of value.split(/\r?\n/)) {
-        const match = /^STAGE:\s*(\S+)\s*->\s*(\S+)$/i.exec(line.trim());
-        if (match) {
-          transitions.push({
-            from: match[1]!,
-            to: match[2]!,
-            observedAt: event.ts,
-            source: "lead_output",
-          });
-        }
-      }
-    }
-  }
-  if (transitions.length === 0) {
-    const workerCompleted = events.filter((e) => e.type === "worker_completed");
-    for (const event of workerCompleted) {
-      transitions.push({
-        from: "lead",
-        to: event.roleId ?? "unknown",
-        observedAt: event.ts,
-        source: "worker_completed_event",
-      });
-    }
-  }
-  return transitions;
-}
-
 function extractDeviations(events: ReadonlyArray<AgentEvent>): string[] {
   const deviations = new Set<string>();
   for (const event of events) {
@@ -932,36 +874,6 @@ function extractLeadTextOutput(events: ReadonlyArray<AgentEvent>): string {
   return "";
 }
 
-// Legacy v1 bridge helpers — kept for backward compatibility but no longer
-// called from the mainline path. The fake adapter still emits worker_requested
-// events synchronously; the new harness observes lead output instead of
-// collecting worker intent.
-async function waitForWorkerRequests(input: {
-  adapter: PaseoTeamAdapter;
-  runId: string;
-  collected: AgentEvent[];
-  persistAdapterEvents: () => Promise<AgentEvent[]>;
-  expectedCount: number;
-}): Promise<AgentEvent[]> {
-  const deadline = Date.now() + 5_000;
-  let requests = input.collected.filter((event) => event.type === "worker_requested");
-  while (requests.length < input.expectedCount && Date.now() < deadline) {
-    await delay(100);
-    await input.persistAdapterEvents();
-    requests = input.collected.filter((event) => event.type === "worker_requested");
-  }
-  if (requests.length === 0) {
-    throw new Error("worker_intent_missing:any");
-  }
-  if (requests.length < input.expectedCount) {
-    const observed = requests
-      .map((event) => String(event.payload.targetRole ?? event.roleId ?? "unknown"))
-      .join(",");
-    throw new Error(`worker_intent_incomplete:expected=${input.expectedCount}:observed=${observed || "none"}`);
-  }
-  return requests.slice(0, input.expectedCount);
-}
-
 function countObservedRevisionCycles(events: ReadonlyArray<AgentEvent>): number {
   const started = events.filter((event) => event.type === "revision_started").length;
   const completed = events.filter((event) => event.type === "revision_completed").length;
@@ -974,46 +886,6 @@ function countObservedRevisionCycles(events: ReadonlyArray<AgentEvent>): number 
   }
   const inferred = [...requestCounts.values()].reduce((sum, count) => sum + Math.max(0, count - 1), 0);
   return Math.max(started, completed, inferred);
-}
-
-// The shipped v1 harness is a lead-intent bridge: it records routed worker intent and
-// completions, then synthesizes workflow/deviation reporting from that record plus any
-// explicit `DEVIATION:` lines emitted by the lead. It does not observe a live
-// STAGE/DEVIATION event stream yet.
-function synthesizeDeviations(input: {
-  events: ReadonlyArray<AgentEvent>;
-  workerRequests: ReadonlyArray<AgentEvent>;
-  expectedRoles: ReadonlyArray<string>;
-}): string[] {
-  const deviations = new Set<string>();
-
-  for (const [index, request] of input.workerRequests.entries()) {
-    const observedRole = typeof request.payload.targetRole === "string" ? request.payload.targetRole : request.roleId;
-    const expectedRole = input.expectedRoles[index];
-    if (observedRole && expectedRole && observedRole !== expectedRole) {
-      deviations.add(`routing step ${index + 1} expected ${expectedRole} but launched ${observedRole}`);
-    }
-    const orchestratorSource = typeof request.payload.orchestratorSource === "string"
-      ? request.payload.orchestratorSource
-      : null;
-    if (observedRole && orchestratorSource && orchestratorSource !== "teamlead_direct") {
-      deviations.add(`routing for ${observedRole} used ${orchestratorSource} instead of teamlead_direct`);
-    }
-  }
-
-  for (const event of input.events) {
-    if (event.type !== "lead_message") continue;
-    for (const value of extractEventTextValues(event)) {
-      for (const line of value.split(/\r?\n/)) {
-        const match = /^DEVIATION:\s*(.+)$/i.exec(line.trim());
-        if (match) {
-          deviations.add(match[1]!);
-        }
-      }
-    }
-  }
-
-  return [...deviations];
 }
 
 async function executeAcceptanceCommand(
