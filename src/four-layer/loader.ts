@@ -16,6 +16,7 @@ import {
   type RunProfileAcceptanceCommand,
   type RunProfileCommandSpec,
   type RunProfileRequiredRead,
+  type RunProfileRuntime,
   type RunProfileWorkspace,
   type Scenario,
   type ScenarioRoleOverlay,
@@ -310,6 +311,16 @@ export function validateRunProfile(value: unknown): FourLayerValidationResult<Ru
     }
   }
 
+  const runtime = record["runtime"];
+  if (runtime !== undefined) {
+    if (!isRecord(runtime)) {
+      errors.push("runtime must be an object");
+    } else {
+      optionalString(runtime, "paseo_mode", errors, "runtime.paseo_mode");
+      optionalInteger(runtime, "lead_timeout_seconds", errors, "runtime.lead_timeout_seconds", 1);
+    }
+  }
+
   return errors.length === 0
     ? { ok: true, value: record as unknown as RunProfile }
     : { ok: false, errors };
@@ -518,6 +529,7 @@ function normalizeRunProfile(record: MutableRecord): RunProfile {
     ? (record["approvalGates"] ?? record["approval_gates"]) as MutableRecord
     : undefined;
   const secrets = isRecord(record["secrets"]) ? record["secrets"] : undefined;
+  const runtime = isRecord(record["runtime"]) ? record["runtime"] : undefined;
   const preLaunch = approvalGates && isRecord(approvalGates["preLaunch"] ?? approvalGates["pre_launch"])
     ? (approvalGates["preLaunch"] ?? approvalGates["pre_launch"]) as MutableRecord
     : undefined;
@@ -582,6 +594,18 @@ function normalizeRunProfile(record: MutableRecord): RunProfile {
       : {}),
     ...(secrets && (typeof secrets["redact"] === "boolean")
       ? { secrets: { redact: Boolean(secrets["redact"]) } }
+      : {}),
+    ...(runtime
+      ? {
+          runtime: {
+            ...(typeof runtime["paseo_mode"] === "string" || typeof runtime["paseoMode"] === "string"
+              ? { paseo_mode: String(runtime["paseo_mode"] ?? runtime["paseoMode"]) }
+              : {}),
+            ...((typeof runtime["lead_timeout_seconds"] === "number" || typeof runtime["leadTimeoutSeconds"] === "number")
+              ? { lead_timeout_seconds: Number(runtime["lead_timeout_seconds"] ?? runtime["leadTimeoutSeconds"]) }
+              : {}),
+          } satisfies RunProfileRuntime,
+        }
       : {}),
   };
 }

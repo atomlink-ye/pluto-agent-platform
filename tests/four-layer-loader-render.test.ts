@@ -142,9 +142,19 @@ describe("four-layer loader and render", () => {
     expect(leadPrompt.indexOf("## Available Roles")).toBeLessThan(leadPrompt.indexOf("## Workflow"));
     expect(leadPrompt.indexOf("## Workflow")).toBeLessThan(leadPrompt.indexOf("## Task"));
     expect(leadPrompt).toContain("- planner: Writes the execution plan.");
-    expect(leadPrompt).toContain("## Delegation / Spawn Template");
-    expect(leadPrompt).toContain("DELEGATE: <available-role-name> :: <specific task");
-    expect(leadPrompt).toContain("SPAWN: <available-role-name> :: <specific task");
+    expect(leadPrompt).toContain("## Available Roles and Spawn Commands");
+    expect(leadPrompt).toContain("paseo run");
+    expect(leadPrompt).toContain("--label parent_run=");
+    expect(leadPrompt).toContain("--label role=planner");
+    expect(leadPrompt).toContain("--json --detach");
+    expect(leadPrompt).toContain("## Stage and Deviation Discipline");
+    expect(leadPrompt).toContain("STAGE: <from-stage-id> -> <to-stage-id>");
+    expect(leadPrompt).toContain("DEVIATION: <reason>");
+    expect(leadPrompt).toContain("## Worker Coordination");
+    expect(leadPrompt).toContain("paseo wait <id>");
+    expect(leadPrompt).toContain("paseo logs <id>");
+    expect(leadPrompt).not.toContain("## Delegation / Spawn Template");
+    expect(leadPrompt).not.toContain("DELEGATE: <available-role-name>");
     expect(leadPrompt).toContain("As team lead:");
 
     expect(plannerPrompt).not.toContain("## Available Roles");

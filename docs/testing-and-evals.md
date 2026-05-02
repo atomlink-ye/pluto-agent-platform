@@ -34,6 +34,7 @@ follow-up recorded.
 Mainline four-layer test lanes:
 - `tests/manager-run-harness.test.ts` — checked-in scenario/run-profile exercised end-to-end with the fake adapter
 - `tests/cli/run.test.ts` — `src/cli/run.ts` invocation path for scenario/run-profile execution
+- `tests/team-lead-owned-orchestration.test.ts` — v1.5 team-lead-owned orchestration contract: prompt template presence, worker discovery expectations, audit fail-closed on missing STAGE events
 
 Compatibility / MVP-beta test lanes:
 - `tests/blocker-classifier.test.ts` — all 11 canonical `BlockerReasonV0` values plus legacy aliases exercised
@@ -49,7 +50,7 @@ Compatibility / MVP-beta test lanes:
 
 ### Integration/Smoke Tests
 
-- Mainline path uses the four-layer manager-run harness: `pnpm smoke:fake`
+- Mainline path uses the four-layer manager-run harness with team-lead-owned orchestration (v1.5): `pnpm smoke:fake`
 - Runs in CI with Docker when needed: `pnpm smoke:docker`
 - Example: `docker/live-smoke.ts`
 - Live smoke classifies evidence outcomes as:

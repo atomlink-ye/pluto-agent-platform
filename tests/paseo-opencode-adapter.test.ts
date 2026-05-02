@@ -187,10 +187,94 @@ describe("PaseoOpenCodeAdapter — protocol with mocked runner", () => {
     };
   }
 
-  it("uses provider/mode build by default and passes --cwd", async () => {
+  it("defaults mode to orchestrator when no PASEO_MODE env or option is set", () => {
+    const previousMode = process.env["PASEO_MODE"];
+    delete process.env["PASEO_MODE"];
+    try {
+      const adapter = new PaseoOpenCodeAdapter({ workspaceCwd: "/tmp/pluto-live" });
+      expect(adapter.getEffectiveMode()).toBe("orchestrator");
+    } finally {
+      if (previousMode !== undefined) {
+        process.env["PASEO_MODE"] = previousMode;
+      }
+    }
+  });
+
+  it("honors PASEO_MODE env override for mode selection", () => {
+    const previousMode = process.env["PASEO_MODE"];
+    process.env["PASEO_MODE"] = "build";
+    try {
+      const adapter = new PaseoOpenCodeAdapter({ workspaceCwd: "/tmp/pluto-live" });
+      expect(adapter.getEffectiveMode()).toBe("build");
+    } finally {
+      if (previousMode === undefined) {
+        delete process.env["PASEO_MODE"];
+      } else {
+        process.env["PASEO_MODE"] = previousMode;
+      }
+    }
+  });
+
+  it("honors explicit mode option over env and default", () => {
+    const previousMode = process.env["PASEO_MODE"];
+    process.env["PASEO_MODE"] = "build";
+    try {
+      const adapter = new PaseoOpenCodeAdapter({ mode: "orchestrator", workspaceCwd: "/tmp/pluto-live" });
+      expect(adapter.getEffectiveMode()).toBe("orchestrator");
+    } finally {
+      if (previousMode === undefined) {
+        delete process.env["PASEO_MODE"];
+      } else {
+        process.env["PASEO_MODE"] = previousMode;
+      }
+    }
+  });
+
+  it("includes systemPrompt in lead_started event payload", async () => {
+    const adapter = new PaseoOpenCodeAdapter({
+      workspaceCwd: "/tmp/pluto-live",
+      runner: makeRunner({ run: () => ({ stdout: '{"agentId":"lead-prompt-test"}' }) }),
+    });
+
+    await adapter.startRun({ runId: "r-prompt", task: baseTask, team: DEFAULT_TEAM });
+    await adapter.createLeadSession({
+      runId: "r-prompt",
+      task: baseTask,
+      role: getRole(DEFAULT_TEAM, DEFAULT_TEAM.leadRoleId),
+    });
+
+    const events = await adapter.readEvents({ runId: "r-prompt" });
+    const leadStarted = events.find((e) => e.type === "lead_started");
+    expect(leadStarted).toBeDefined();
+    expect(typeof leadStarted!.payload["systemPrompt"]).toBe("string");
+    expect(leadStarted!.payload["systemPrompt"]).toContain("TEAMLEAD-DIRECT ORCHESTRATION");
+  });
+
+  it("uses orchestrator mode in paseo run args by default", async () => {
     const captured: string[][] = [];
     const adapter = new PaseoOpenCodeAdapter({
       host: "",
+      workspaceCwd: "/tmp/pluto-live",
+      runner: makeRunner({ onArgs: (_c, a) => captured.push(a) }),
+      idGen: () => "fixed-id",
+    });
+    await adapter.startRun({ runId: "r1-orch", task: baseTask, team: DEFAULT_TEAM });
+    await adapter.createLeadSession({
+      runId: "r1-orch",
+      task: baseTask,
+      role: getRole(DEFAULT_TEAM, DEFAULT_TEAM.leadRoleId),
+    });
+    const runArgs = captured.find((a) => a[0] === "run");
+    expect(runArgs).toBeDefined();
+    const modeIdx = runArgs!.indexOf("--mode");
+    expect(runArgs![modeIdx + 1]).toBe("orchestrator");
+  });
+
+  it("uses provider/opencode and passes --cwd with explicit build mode", async () => {
+    const captured: string[][] = [];
+    const adapter = new PaseoOpenCodeAdapter({
+      host: "",
+      mode: "build",
       workspaceCwd: "/tmp/pluto-live",
       runner: makeRunner({ onArgs: (_c, a) => captured.push(a) }),
       idGen: () => "fixed-id",
@@ -206,7 +290,6 @@ describe("PaseoOpenCodeAdapter — protocol with mocked runner", () => {
     expect(runArgs).toContain("--mode");
     const modeIdx = runArgs!.indexOf("--mode");
     expect(runArgs![modeIdx + 1]).toBe("build");
-    // Provider is now separate from model
     const provIdx = runArgs!.indexOf("--provider");
     expect(runArgs![provIdx + 1]).toBe("opencode");
     const modelIdx = runArgs!.indexOf("--model");

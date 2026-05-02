@@ -10,6 +10,8 @@ import {
 export type AuditIssueCode =
   | "missing_stage_transitions"
   | "missing_required_role"
+  | "missing_stage_event"
+  | "missing_deviation_evidence"
   | "missing_revision_count"
   | "revision_cap_breached"
   | "missing_final_report"
@@ -41,9 +43,10 @@ export interface AuditMiddlewareInput {
   playbook: Pick<Playbook, "audit">;
   runProfile: Pick<RunProfile, "artifactContract" | "stdoutContract">;
   stageTransitions?: AuditStageTransition[];
-  stageTransitionSource?: "observed_event_stream" | "synthesized_routing";
+  stageTransitionSource?: "observed_event_stream" | "observed_lead_output" | "synthesized_routing";
   revisionCount?: number;
   finalReportPath?: string;
+  deviations?: string[];
 }
 
 export interface AuditMiddlewareResult {
@@ -61,16 +64,22 @@ export async function runAuditMiddleware(input: AuditMiddlewareInput): Promise<A
   const issues: AuditIssue[] = [...acceptance.issues];
   const audit = input.playbook.audit;
 
+  const isSynthesizedBridge = input.stageTransitionSource === "synthesized_routing";
+
   if (audit?.requiredRoles?.length) {
     const transitions = input.stageTransitions;
     if (!transitions?.length) {
-      const transitionLabel = input.stageTransitionSource === "synthesized_routing"
-        ? "synthesized routing transitions"
-        : "observed stage transitions";
-      issues.push({
-        code: "missing_stage_transitions",
-        message: `stage coverage cannot be verified without ${transitionLabel}`,
-      });
+      if (isSynthesizedBridge) {
+        issues.push({
+          code: "missing_stage_transitions",
+          message: "stage coverage cannot be verified: synthesized routing transitions are not accepted in the team-lead-owned mainline; provide real observed STAGE events from the lead's text stream",
+        });
+      } else {
+        issues.push({
+          code: "missing_stage_transitions",
+          message: "stage coverage cannot be verified without observed stage transitions",
+        });
+      }
     } else {
       const observedRoles = new Set(
         transitions.flatMap((transition) => [transition.from, transition.to]).map(normalizeRoleName),
@@ -84,6 +93,30 @@ export async function runAuditMiddleware(input: AuditMiddlewareInput): Promise<A
           });
         }
       }
+    }
+
+    if (!isSynthesizedBridge) {
+      const stdoutStageEvents = parseStageEventsFromStdout(input.stdout);
+      for (const role of audit.requiredRoles) {
+        if (!stdoutStageEvents.has(normalizeRoleName(role))) {
+          issues.push({
+            code: "missing_stage_event",
+            message: `required role ${role} has no corresponding STAGE: event in the lead's text stream`,
+            role,
+          });
+        }
+      }
+    }
+  }
+
+  if (!isSynthesizedBridge) {
+    const stdoutDeviations = parseDeviationsFromStdout(input.stdout);
+    const reportedDeviations = input.deviations ?? [];
+    if (reportedDeviations.length > 0 && stdoutDeviations.size === 0) {
+      issues.push({
+        code: "missing_deviation_evidence",
+        message: "deviations were reported but no DEVIATION: lines found in the lead's text stream",
+      });
     }
   }
 
@@ -224,6 +257,27 @@ async function validateFinalReportSections(finalReportPath: string, requiredSect
       path: finalReportPath,
     }];
   }
+}
+
+function parseStageEventsFromStdout(stdout: string): Set<string> {
+  const roles = new Set<string>();
+  const re = /^STAGE:\s*(\S+)\s*->\s*(\S+)/gm;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(stdout)) !== null) {
+    roles.add(normalizeRoleName(m[1]!));
+    roles.add(normalizeRoleName(m[2]!));
+  }
+  return roles;
+}
+
+function parseDeviationsFromStdout(stdout: string): Set<string> {
+  const deviations = new Set<string>();
+  const re = /^DEVIATION:\s*(.+)$/gm;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(stdout)) !== null) {
+    deviations.add(m[1]!.trim().toLowerCase());
+  }
+  return deviations;
 }
 
 function normalizeRoleName(role: string): string {

@@ -3,6 +3,7 @@ import type { ResolvedFourLayerSelection } from "./loader.js";
 
 export interface RenderRolePromptOptions {
   runtimeTask?: string;
+  runId?: string;
 }
 
 export function renderRolePrompt(
@@ -15,8 +16,10 @@ export function renderRolePrompt(
   const sections = [agent.value.system.trim()];
 
   if (roleName === selection.playbook.value.teamLead) {
-    sections.push(renderAvailableRoles(selection));
+    sections.push(renderAvailableRoles(selection, options.runId));
     sections.push(["## Workflow", selection.playbook.value.workflow.trim()].join("\n"));
+    sections.push(renderStageDeviationDiscipline());
+    sections.push(renderWorkerCoordinationGuidance());
   }
 
   if (overlay?.prompt) {
@@ -61,23 +64,52 @@ function getRoleAgent(selection: ResolvedFourLayerSelection, roleName: string) {
   return member;
 }
 
-function renderAvailableRoles(selection: ResolvedFourLayerSelection): string {
+function renderAvailableRoles(selection: ResolvedFourLayerSelection, runId?: string): string {
   const lines = ["## Available Roles"];
   const roles = [selection.teamLead, ...selection.members];
   for (const role of roles) {
     const description = role.value.description?.trim();
     lines.push(`- ${role.value.name}${description ? `: ${description}` : ""}`);
   }
-  lines.push(
-    "",
-    "## Delegation / Spawn Template",
-    "Before Pluto mechanically launches a teammate, emit exactly one canonical intent line:",
-    "DELEGATE: <available-role-name> :: <specific task, expected output, dependencies, and citation requirements>",
-    "If the runtime can truly spawn directly, you may instead emit:",
-    "SPAWN: <available-role-name> :: <specific task, expected output, dependencies, and citation requirements>",
-    "Only request roles listed above. Wait for each requested role's contribution before final reconciliation unless the workflow says otherwise.",
-  );
+
+  const workerRoles = selection.members;
+  if (workerRoles.length > 0) {
+    lines.push("", "## Available Roles and Spawn Commands");
+    lines.push("Use `paseo run` to spawn each worker role. Fill in `<prompt>` with the stage-specific task.");
+    lines.push("Emit `STAGE: <from> -> <to>` before each `paseo run` invocation.");
+    lines.push("");
+    for (const role of workerRoles) {
+      const provider = role.value.provider ?? "<provider>";
+      const model = role.value.model ?? "<model>";
+      const mode = role.value.mode ?? "<mode>";
+      const labelRunId = runId ?? "<runId>";
+      const cmd = `paseo run --provider ${provider} --model ${model} --mode ${mode} --cwd <workspace> --title ${role.value.name}-stage --label parent_run=${labelRunId} --label role=${role.value.name} --json --detach "<prompt>"`;
+      lines.push(`- **${role.value.name}**: \`${cmd}\``);
+    }
+  }
+
   return lines.join("\n");
+}
+
+function renderStageDeviationDiscipline(): string {
+  return [
+    "",
+    "## Stage and Deviation Discipline",
+    "- Emit `STAGE: <from-stage-id> -> <to-stage-id>` BEFORE each `paseo run` invocation.",
+    "- Emit `DEVIATION: <reason>` when you depart from the authored playbook workflow.",
+    "- The from-stage should be the most recently completed or active stage; use `lead` as the initial from-stage.",
+  ].join("\n");
+}
+
+function renderWorkerCoordinationGuidance(): string {
+  return [
+    "",
+    "## Worker Coordination",
+    "- After spawning a worker with `paseo run`, capture its ID from the JSON output.",
+    "- Use `paseo wait <id>` to block until the worker completes.",
+    "- Use `paseo logs <id> --filter text` to capture the worker's output before proceeding.",
+    "- Feed worker outputs into downstream stages as instructed by the workflow.",
+  ].join("\n");
 }
 
 function resolveTask(scenario: Scenario, runtimeTask?: string): string {

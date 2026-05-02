@@ -42,7 +42,7 @@ describe("manager run harness", () => {
     expect(stdout).toContain("WROTE: artifact.md");
   });
 
-  it("observes adapter worker intent before dispatching workers", async () => {
+  it("observes worker completions from the fake adapter", async () => {
     const workspace = await mkdtemp(join(tmpdir(), "pluto-four-layer-intent-"));
     const dataDir = join(workspace, ".pluto");
     tempDirs.push(workspace);
@@ -56,10 +56,8 @@ describe("manager run harness", () => {
     });
 
     for (const role of ["planner", "generator", "evaluator"]) {
-      const requested = result.legacyResult.events.findIndex((event) => event.type === "worker_requested" && event.roleId === role);
-      const started = result.legacyResult.events.findIndex((event) => event.type === "worker_started" && event.roleId === role);
-      expect(requested).toBeGreaterThanOrEqual(0);
-      expect(started).toBeGreaterThan(requested);
+      const completed = result.legacyResult.events.findIndex((event) => event.type === "worker_completed" && event.roleId === role);
+      expect(completed).toBeGreaterThanOrEqual(0);
     }
   });
 
@@ -135,44 +133,25 @@ describe("manager run harness", () => {
     await expect(readFile(join(result.runDir, "cwd.txt"), "utf8")).rejects.toBeTruthy();
   });
 
-  it("writes synthesized routing deviations honestly in the final report", async () => {
+  it("writes final report from observed transitions without synthesis note", async () => {
     const workspace = await mkdtemp(join(tmpdir(), "pluto-four-layer-deviations-"));
     const dataDir = join(workspace, ".pluto");
     tempDirs.push(workspace);
-
-    class OutOfOrderIntentAdapter extends FakeAdapter {
-      private reordered = false;
-
-      override async readEvents(input: Parameters<PaseoTeamAdapter["readEvents"]>[0]) {
-        const events = await super.readEvents(input);
-        if (this.reordered) {
-          return events;
-        }
-        const requests = events.filter((event) => event.type === "worker_requested");
-        if (requests.length < 2) {
-          return events;
-        }
-        this.reordered = true;
-        const requestIds = new Set(requests.map((event) => event.id));
-        return [
-          ...events.filter((event) => !requestIds.has(event.id)),
-          ...[...requests].reverse(),
-        ];
-      }
-    }
 
     const result = await runManagerHarness({
       rootDir: repoRoot,
       selection: { scenario: "hello-team", runProfile: "fake-smoke" },
       workspaceOverride: workspace,
       dataDir,
-      createAdapter: ({ team }) => new OutOfOrderIntentAdapter({ team }),
+      createAdapter: ({ team }) => new FakeAdapter({ team }),
     });
 
     expect(result.run.status).toBe("succeeded");
     const finalReport = await readFile(result.finalReportPath, "utf8");
-    expect(finalReport).toContain("Synthesized from routing decisions; no live STAGE/DEVIATION event stream observed in the v1 bridge.");
-    expect(finalReport).toContain("routing step 1 expected planner but launched evaluator");
+    expect(finalReport).not.toContain("Synthesized from routing decisions");
+    expect(finalReport).toContain("## Workflow Steps Executed");
+    expect(finalReport).toContain("## Deviations");
+    expect(finalReport).toContain("none observed");
   });
 
   it.each([

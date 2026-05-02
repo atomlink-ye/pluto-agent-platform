@@ -187,60 +187,76 @@ must agree:
    after the run, and any declared `required_sections` must be present in that file.
 2. **Stdout**: every regex/line in `RunProfile.stdout_contract.required_lines` must
    appear in the team_lead's stdout.
-3. **Workflow/deviation trace**: v1 records adapter-emitted lead delegation intent,
-   worker completions, and any explicit `DEVIATION: <reason>` lead output, then
-   synthesizes `workflow_steps_executed` / `deviations` report sections from that
-   trace. Live `STAGE: <from> -> <to>` / `DEVIATION:` room events remain the target
-   model for v1.5+.
+3. **Workflow/deviation trace**: the lead emits `STAGE: <from> -> <to>` and
+   `DEVIATION: <reason>` lines in its stdout; Pluto observes those directly and
+   validates that each `audit.required_roles` entry has a corresponding STAGE
+   transition in the lead's text stream.
 
 Validation is fail-closed: a missing file, missing required section, missing stdout
-line, or unsupported/missing workflow evidence marks the run `failed_audit`
-regardless of whether the team_lead claims success.
+line, or missing STAGE/DEVIATION event marks the run `failed_audit` regardless of
+whether the team_lead claims success.
 
 `Playbook.audit.required_roles` enforces final-report citations of those role outputs;
 `max_revision_cycles` caps the evaluator→generator loop; `final_report_sections`
 determines the section schema for the final report file.
 
-## 5. Runtime — Pluto as harness, team_lead-authored orchestration, shipped via a v1 bridge
+## 5. Runtime — Pluto as harness, team_lead-owned orchestration (v1.5 mainline)
+
+The v1.5 runtime is the canonical team-lead-owned orchestration model. The team_lead
+reads its rendered prompt (which includes per-role `paseo run` command templates),
+spawns workers directly via `paseo run --detach --json`, and coordinates via `paseo
+wait` / `paseo logs`. Pluto materializes the workspace, hands the lead its rendered
+prompt, then **observes** — it does not bridge.
 
 Pluto's runtime responsibility is bounded:
 
 1. Load Agent + Playbook + Scenario + RunProfile, validate refs, render team_lead and
     member system prompts according to §3.
-2. Fail closed on unsupported runtime policy before materializing workspace state
-   (for example pre-launch approval gates, non-repo required reads, unsupported
-   concurrency, or authored worktree materialization).
+2. Fail closed on unsupported runtime policy before materializing workspace state.
 3. Verify `RunProfile.required_reads` are reachable and contained to the declared repo
-   root when `kind=repo`.
-4. Materialize the workspace/run directory for supported runs.
+    root when `kind=repo`.
+4. Materialize the workspace/run directory for supported runs (but do NOT pre-write
+    status/task-tree/artifact files — those are produced by the lead/workers).
 5. Launch team_lead through the adapter seam (`paseo run --detach --json --provider
-   <agent.provider> ...` in the live path), passing the rendered system prompt plus the
-   transcript / coordination handle.
-6. Wait for adapter-emitted lead delegation intent, then perform the mechanical worker
-   launch/spawn fallback in the observed order.
-7. Synthesize workflow/deviation evidence from routed worker intent/completions plus
-   any explicit lead `DEVIATION:` output; v1 does **not** observe a live
-   STAGE/DEVIATION room stream yet.
-8. After team_lead exits, run `RunProfile.acceptance_commands` and validate
-   `artifact_contract` and `stdout_contract`.
-9. Emit `EvidencePacket` aggregating routed transitions, file checkpoints, command
-   outputs, synthesized workflow/deviation traces, and final-report citations. Redact
-   per `RunProfile.secrets.redact`.
+    <agent.provider> ...` in the live path), passing the rendered system prompt plus
+    per-role spawn command templates and the transcript / coordination handle.
+6. Observe the lead's stdout/transcript for `STAGE: <from> -> <to>` and
+    `DEVIATION: <reason>` lines emitted directly by the lead.
+7. Discover spawned worker agents via `paseo ls --label parent_run=<runId>`.
+8. Capture each spawned worker's logs/output for evidence (via `paseo logs <id>`).
+9. Wait for the lead to exit (configurable via `RunProfile.runtime.lead_timeout_seconds`,
+    default ≥ 600s).
+10. After team_lead exits, run `RunProfile.acceptance_commands` and validate
+    `artifact_contract` and `stdout_contract`.
+11. Emit `EvidencePacket` aggregating observed STAGE/DEVIATION events, worker
+    discovery data, file checkpoints, command outputs, and final-report citations.
+    Redact per `RunProfile.secrets.redact`.
 
-### 5.5 Operational scope for v1 (acceptance target)
+### 5.1 Lead prompt (v1.5)
 
-- **Shipped v1 runtime:** a lead-intent compatibility bridge. team_lead authors the
-  orchestration decisions through Playbook + Scenario prompt context; adapters surface
-  those delegation intents to Pluto as `worker_requested` events; Pluto performs the
-  mechanical worker launch/spawn fallback.
-- **Audit honesty in v1:** workflow/deviation reporting is synthesized from routing
-  decisions and explicit lead `DEVIATION:` output. The final report and audit layer must
-  describe that synthesis honestly rather than claim a live STAGE/DEVIATION event
-  stream.
-- **Fallback quarantine:** legacy marker parsing remains a compatibility-only fallback,
-  not the accepted mainline model.
-- **Canonical aspiration preserved:** true TeamLead-owned child spawning and room-backed
-  STAGE/DEVIATION observation remain deferred to v1.5+.
+The team_lead's rendered prompt includes, in addition to the canonical stack from §3:
+
+- **Available Roles and Spawn Commands**: for each member role, a concrete
+  `paseo run --provider <p> --model <m> --mode <mo> --cwd <cwd> --title <stage-id>
+  --label parent_run=<runId> --label role=<roleId> --json --detach "<rendered worker
+  prompt>"` template line, so the lead can spawn workers directly.
+- **STAGE/DEVIATION emission discipline**: the lead must emit
+  `STAGE: <from-stage-id> -> <to-stage-id>` BEFORE each `paseo run`, and
+  `DEVIATION: <reason>` when departing from the playbook workflow.
+- **Worker coordination guidance**: use `paseo wait <id>` and
+  `paseo logs <id> --filter text` to capture worker output before proceeding.
+
+### 5.5 Quarantined fallback lanes
+
+The following lanes remain available for backward compatibility but are not the
+mainline model:
+
+- **Legacy marker bridge** (`WORKER_REQUEST: …`): the original marker-based dispatch
+  from `TeamRunService`. Quarantined fallback only.
+- **v1 lead-intent compatibility bridge**: adapters surface lead delegation intent to
+  Pluto as `worker_requested` events; Pluto performs the mechanical worker
+  launch/spawn fallback. Workflow/deviation reporting is synthesized from routing
+  decisions. Quarantined fallback only.
 
 ## 6. What this supersedes
 
@@ -249,26 +265,24 @@ Pluto's runtime responsibility is bounded:
 | "Document-first" product positioning | Superseded. Documents/Versions/Publish Packages are downstream governance objects, not the product entry point. |
 | `TeamPlaybookV0` as stage/DAG/revision data | Superseded. Playbook is composition + workflow narrative + minimal audit side-data. |
 | `TeamRunService` as deterministic stage dispatcher | Superseded. Pluto runs a manager-run harness path; TeamRunService is legacy bridge. |
-| Pluto-mediated marker bridge (`WORKER_REQUEST: …`) | Narrowed to fallback-only. The shipped mainline is a lead-intent compatibility bridge where adapters surface team_lead delegation intent and Pluto performs the mechanical spawn fallback; true team_lead-owned `paseo run` recursion is deferred. |
-| EvidencePacket as run-level only | Extended. Stage-level evidence comes from `artifact_contract.required_files` plus synthesized routing transitions in v1; live STAGE/DEVIATION room capture is deferred. |
+| Pluto-mediated marker bridge (`WORKER_REQUEST: …`) | Quarantined fallback. Both the legacy marker bridge and the v1 lead-intent compatibility bridge remain available for backward compatibility but are not the mainline model. |
+| v1 lead-intent compatibility bridge | Quarantined fallback. Adapters surface team_lead delegation intent and Pluto performs the mechanical spawn fallback. Superseded by v1.5 team-lead-owned orchestration where the lead spawns directly via `paseo run`. |
+| EvidencePacket as run-level only | Extended. Stage-level evidence comes from `artifact_contract.required_files` plus observed STAGE/DEVIATION events in v1.5; synthesized routing transitions remain only in the quarantined v1 fallback lane. |
 | Provider-specific terms in core types (`paseo_chat`, etc.) | Must move into adapter layer; core stays runtime-neutral. |
 
-## 7. Open questions deferred to v1.5+
+## 7. Open questions
 
 - Outcome-style independent grader (separate context window from evaluator agent).
 - `knowledge_refs` chunking, summarization, and a manifest of omitted refs when caps
   are hit.
 - Multi-runtime support (currently hard-bound to Paseo).
-- True TeamLead-owned child orchestration via in-agent `paseo run --detach --json`
-  recursion plus room-backed STAGE/DEVIATION observation, reducing Pluto to environment
-  preparation and evidence observation only. Keep this aligned with the local deferral
-  note in `.local/manager/handoff/state.md` and the repo follow-up plan
-  `docs/plans/active/teamlead-orchestrated-agent-team-architecture.md`.
 - Recursive `callable_agents` (Claude Managed Agents allows only one level; Pluto
-  matches that for v1).
+  matches that).
 - Workflow→RunProfile binding: whether a Playbook can declare a default RunProfile or
   whether they always pair at run invocation.
 - Marketplace / catalog distribution of Agents and Playbooks.
+- Local Claude Code Opus 4.7 lead + OpenCode workers configuration (recorded as a
+  follow-up plan).
 
 ## 8. Source of truth & file layout
 

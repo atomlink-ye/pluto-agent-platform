@@ -71,7 +71,11 @@ export interface PaseoOpenCodeAdapterOptions {
   runner?: ProcessRunner;
   /** Optional thinking flag value. */
   thinking?: string;
-  /** Defaults to "build" — the mode opencode-provider expects. */
+  /**
+   * Paseo agent mode. Defaults to $PASEO_MODE env, then "orchestrator" for the
+   * lead path (falling back to "build" if orchestrator is unavailable), or
+   * RunProfile.runtime.paseo_mode if set.
+   */
   mode?: string;
   /** Per-agent wait timeout in seconds. */
   waitTimeoutSec?: number;
@@ -106,6 +110,20 @@ interface RunState {
 const WORKER_REQUEST_RE = /^WORKER_REQUEST:\s*([a-zA-Z0-9_-]+)\s*::\s*(.*)$/;
 const CANONICAL_DELEGATION_RE = /^(?:DELEGATE|SPAWN):\s*([a-zA-Z0-9_-]+)\s*::\s*(.*)$/;
 
+const SUPPORTED_PASEO_MODES = ["orchestrator", "build"] as const;
+
+function resolvePaseoMode(explicitMode?: string): string {
+  if (explicitMode) return explicitMode;
+  const envMode = process.env["PASEO_MODE"]?.trim();
+  if (envMode) return envMode;
+  return "orchestrator";
+}
+
+export function applyRunProfileMode(adapter: PaseoOpenCodeAdapter, paseoMode?: string): void {
+  if (!paseoMode) return;
+  (adapter as unknown as { mode: string }).mode = paseoMode;
+}
+
 export class PaseoOpenCodeAdapter implements PaseoTeamAdapter {
   private readonly bin: string;
   private readonly provider: string;
@@ -122,6 +140,10 @@ export class PaseoOpenCodeAdapter implements PaseoTeamAdapter {
   private readonly clock: () => Date;
   private readonly idGen: () => string;
   private runs = new Map<string, RunState>();
+
+  getEffectiveMode(): string {
+    return this.mode;
+  }
 
   constructor(opts: PaseoOpenCodeAdapterOptions = {}) {
     this.bin = opts.paseoBin ?? process.env["PASEO_BIN"] ?? "paseo";
@@ -142,7 +164,7 @@ export class PaseoOpenCodeAdapter implements PaseoTeamAdapter {
     this.workspaceCwd = opts.workspaceCwd;
     this.runner = opts.runner ?? DEFAULT_RUNNER;
     this.thinking = opts.thinking;
-    this.mode = opts.mode ?? "build";
+    this.mode = resolvePaseoMode(opts.mode);
     this.waitTimeoutSec = opts.waitTimeoutSec ?? 180;
     this.logsTail = opts.logsTail ?? 200;
     this.followDrainMs = opts.followDrainMs ?? 250;
@@ -207,6 +229,7 @@ export class PaseoOpenCodeAdapter implements PaseoTeamAdapter {
         ...(this.host ? { host: this.host } : {}),
         paseoAgentId: agentId,
         mode: this.mode,
+        systemPrompt: prompt,
         playbookId: (input.playbook ?? run.playbook)?.id ?? null,
         orchestrationMode: input.task.orchestrationMode ?? "teamlead_direct",
         transcript: (input.transcript ?? run.transcript) ?? null,

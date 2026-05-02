@@ -155,6 +155,11 @@ export interface SecretHandlingPolicy {
   redact?: boolean;
 }
 
+export interface RunProfileRuntime {
+  paseo_mode?: string;
+  lead_timeout_seconds?: number;
+}
+
 export interface RunProfile extends AuthoredNamedObject<"run_profile"> {
   workspace: RunProfileWorkspace;
   requiredReads?: RunProfileRequiredRead[];
@@ -164,6 +169,7 @@ export interface RunProfile extends AuthoredNamedObject<"run_profile"> {
   concurrency?: ConcurrencyPolicy;
   approvalGates?: ApprovalGates;
   secrets?: SecretHandlingPolicy;
+  runtime?: RunProfileRuntime;
 }
 
 export interface CoordinationChannelRef {

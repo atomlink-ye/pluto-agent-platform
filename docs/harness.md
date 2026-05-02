@@ -59,7 +59,7 @@ Persisted events are part of the same control surface. `RunStore.appendEvent()` 
 
 - `lead_marker` — the live lead emitted a legacy marker line.
 - `pluto_fallback` — Pluto synthesized the dispatch in `maybeDispatchUnderdispatchFallback()`.
-- `teamlead_direct` — the manager-run harness mainline lead-intent bridge path.
+- `teamlead_direct` — the manager-run harness mainline team-lead-owned orchestration path (v1.5). The lead spawns workers directly via `paseo run` and Pluto observes STAGE/DEVIATION events.
 
 `docker/live-smoke.ts` records the per-worker `orchestratorSource` distribution and fails when more than 50% of completed workers were dispatched via `pluto_fallback`, which guards against a misleadingly green smoke that is still relying on Pluto-owned dispatch instead of observed lead intent.
 
@@ -81,7 +81,7 @@ Persisted events are part of the same control surface. `RunStore.appendEvent()` 
 
 ## CLI Surfaces
 
-- `pnpm pluto:run --scenario <name> --run-profile <name> [--workspace <path>]` is the mainline runtime entrypoint for the four-layer lead-intent bridge.
+- `pnpm pluto:run --scenario <name> --run-profile <name> [--workspace <path>]` is the mainline runtime entrypoint for the four-layer team-lead-owned orchestration (v1.5).
 - `pnpm runs list/show/events/artifact/evidence` all read from `.pluto/runs/`.
 - `pnpm runs events --follow` is a real file-backed follow mode over `events.jsonl`, with role/kind/since filters applied to each poll.
 - `pnpm runs evidence` degrades gracefully for pre-evidence runs instead of failing.

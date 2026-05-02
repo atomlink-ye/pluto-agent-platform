@@ -9,8 +9,8 @@ Prove the smallest closed loop where Pluto loads authored `Agent`, `Playbook`, `
 - Mainline entrypoint: `src/orchestrator/manager-run-harness.ts`
 - Mainline CLI: `src/cli/run.ts` (`pnpm pluto:run ...`)
 - Mainline evidence: `.pluto/runs/<runId>/evidence-packet.{md,json}`
-- Mainline orchestration mode: lead-intent compatibility bridge — the harness waits for adapter-emitted lead delegation intent, then performs the mechanical worker launch/spawn fallback.
-- Compatibility-only path: `TeamRunService`, `pnpm submit`, and legacy `EvidencePacketV0` readers
+- Mainline orchestration mode: team-lead-owned orchestration (v1.5) — the lead reads per-role `paseo run` command templates from its rendered prompt, spawns workers directly via `paseo run --detach --json`, and Pluto observes STAGE/DEVIATION events.
+- Quarantined fallback lanes: legacy `TeamRunService` marker bridge, v1 lead-intent compatibility bridge, and `pnpm submit`
 
 ## Objects
 
@@ -22,8 +22,8 @@ Prove the smallest closed loop where Pluto loads authored `Agent`, `Playbook`, `
 | `RunProfile` | `run-profiles/*.yaml` | authored workspace + acceptance + artifact/stdout policy |
 | `Run` | `.pluto/runs/<runId>/` | materialized runtime record for the selected four-layer stack |
 | `EvidencePacket` | `.pluto/runs/<runId>/evidence-packet.{md,json}` | canonical evidence packet for command outputs, transitions, artifact refs, and citations |
-| `TeamTask` | compatibility bridge only | still used to drive legacy `EvidencePacketV0` writes and older adapter seams |
-| `TeamConfig` | compatibility bridge only | synthesized by the harness when an adapter still expects the legacy seam |
+| `TeamTask` | quarantined fallback only | still used to drive legacy `EvidencePacketV0` writes and older adapter seams |
+| `TeamConfig` | quarantined fallback only | synthesized by the harness when an adapter still expects the legacy seam |
 | `AgentRoleConfig` | `src/contracts/types.ts` | legacy adapter-facing role contract |
 | `AgentSession` | adapter-owned | opaque sessionId; adapter-specific `external` payload |
 | `AgentEvent` | `.pluto/runs/<runId>/events.jsonl` | append-only JSONL |
@@ -87,7 +87,7 @@ A run is acceptable iff:
 - `src/four-layer/render.ts` renders prompts in canonical order.
 - `src/four-layer/acceptance-runner.ts` and `src/four-layer/audit-middleware.ts` enforce fail-closed post-run checks.
 - `src/four-layer/evidence-packet.ts` aggregates the canonical evidence packet and lineage.
-- `src/orchestrator/manager-run-harness.ts` is the main runtime path that ties those primitives together through a lead-intent compatibility bridge rather than true runtime-owned child spawning.
+- `src/orchestrator/manager-run-harness.ts` is the main runtime path that ties those primitives together through team-lead-owned orchestration (v1.5): the lead spawns workers directly via `paseo run` and Pluto observes STAGE/DEVIATION events rather than bridging mechanical spawn.
 
 ## Where each phase lives
 

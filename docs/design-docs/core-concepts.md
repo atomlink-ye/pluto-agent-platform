@@ -170,10 +170,14 @@ redacted summaries and EvidencePacket refs, not raw provider state. PM Space:
 ### Coordination Channel (paseo chat)
 
 The coordination channel is the transcript / room handle passed to the team
-lead at launch. In the shipped v1 manager-run harness, team lead still owns the
-orchestration decisions, but adapters surface delegation intent and Pluto
-performs the mechanical worker launch/spawn fallback. Room-backed
-`STAGE`/`DEVIATION` observation remains the v1.5+ target model.
+lead at launch. In the v1.5 mainline, the team lead owns orchestration
+end-to-end: it spawns workers directly via `paseo run --detach --json` and
+coordinates via `paseo wait` / `paseo logs`. Pluto observes the lead's stdout
+for `STAGE:` / `DEVIATION:` events and discovers spawned workers via
+`paseo ls --label parent_run=<runId>`.
+
+The legacy marker bridge and v1 lead-intent compatibility bridge remain
+quarantined fallback lanes for backward compatibility.
 
 The chat room is not a foreground object. Pluto records relevant events into
 the EvidencePacket after validation and redaction.
@@ -181,13 +185,13 @@ the EvidencePacket after validation and redaction.
 ### Audit Middleware
 
 Audit Middleware is the fail-closed validation layer driven by RunProfile and
-Playbook audit fields. It observes file checkpoints, stdout matches,
-synthesized workflow/deviation traces, acceptance commands, required role
-citations, and revision cap behavior.
+Playbook audit fields. It observes file checkpoints, stdout matches, observed
+STAGE/DEVIATION events from the lead's text stream, acceptance commands,
+required role citations, and revision cap behavior.
 
 It does not decide the workflow. It verifies that the team lead's claimed work
-is supported by contracted files, stdout, events, citations, and command
-outputs. Any missing required element marks the run `failed_audit`,
+is supported by contracted files, stdout, observed STAGE events, citations, and
+command outputs. Any missing required element marks the run `failed_audit`,
 `failed_command`, or `failed_artifact` as appropriate. PM Space:
 [Run, Audit Middleware & Evidence Packet Model](https://ocnb314kma1f.feishu.cn/wiki/V4mcwu6DmiYim1kEhI2cd8G3nMb).
 

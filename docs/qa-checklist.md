@@ -1,6 +1,6 @@
 # MVP-alpha QA Checklist
 
-Run after every meaningful change. Mark `[x]` only when the actual command succeeds. The four-layer manager-run harness is the mainline runtime; `TeamRunService` and `pnpm submit` are compatibility-only surfaces.
+Run after every meaningful change. Mark `[x]` only when the actual command succeeds. The four-layer manager-run harness is the mainline runtime with team-lead-owned orchestration (v1.5); `TeamRunService`, the v1 lead-intent compatibility bridge, and `pnpm submit` are quarantined fallback lanes.
 
 ## 1. Static gates
 
@@ -105,7 +105,7 @@ Live uses the local Paseo daemon/socket by default. Set `PASEO_HOST` to run agai
 
 - [ ] README quickstart reproducible by a fresh clone.
 - [ ] `docs/mvp-alpha.md` contracts match `src/contracts/`.
-- [ ] README/docs position `src/orchestrator/manager-run-harness.ts` and `pnpm pluto:run` as the main runtime path; `TeamRunService` is explicitly legacy/quarantined.
+- [ ] README/docs position `src/orchestrator/manager-run-harness.ts` and `pnpm pluto:run` as the main runtime path (v1.5 team-lead-owned orchestration); `TeamRunService` and the v1 lead-intent compatibility bridge are explicitly quarantined fallbacks.
 - [ ] Lifecycle vocabulary note stays explicit: v0 still writes `done` / `run_completed`; readers tolerate future `succeeded` / `completion`.
 - [ ] `final-report.md` lists branch, commits, command outputs, blockers, PM status mapping.
 - [ ] Repository-documentation consistency check passes: code, contracts, CLI behavior, docs/plans, design docs, and reference docs do not contradict each other.

@@ -111,7 +111,7 @@ describe("four-layer audit middleware", () => {
     );
   });
 
-  it("describes missing synthesized transitions honestly in bridge mode", async () => {
+  it("rejects synthesized_routing transitions in the team-lead-owned mainline", async () => {
     await writeValidArtifacts();
 
     const result = await runAuditMiddleware(makeInput({
@@ -124,10 +124,72 @@ describe("four-layer audit middleware", () => {
       expect.arrayContaining([
         expect.objectContaining({
           code: "missing_stage_transitions",
-          message: "stage coverage cannot be verified without synthesized routing transitions",
+          message: expect.stringContaining("synthesized routing transitions are not accepted"),
         }),
       ]),
     );
+  });
+
+  it("fails closed when STAGE events are missing from the lead's text stream", async () => {
+    await writeValidArtifacts();
+
+    const result = await runAuditMiddleware(makeInput({
+      stdout: "SUMMARY: finished\n",
+      stageTransitions: [
+        { from: "planner", to: "generator" },
+        { from: "generator", to: "evaluator" },
+      ],
+    }));
+
+    expect(result.ok).toBe(false);
+    expect(result.issues).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ code: "missing_stage_event", role: "planner" }),
+        expect.objectContaining({ code: "missing_stage_event", role: "generator" }),
+        expect.objectContaining({ code: "missing_stage_event", role: "evaluator" }),
+      ]),
+    );
+  });
+
+  it("passes when STAGE events are present in stdout for all required roles", async () => {
+    await writeValidArtifacts();
+
+    const result = await runAuditMiddleware(makeInput({
+      stdout: "STAGE: lead -> planner\nSTAGE: planner -> generator\nSTAGE: generator -> evaluator\nSUMMARY: finished\n",
+      stageTransitions: [
+        { from: "planner", to: "generator" },
+        { from: "generator", to: "evaluator" },
+      ],
+    }));
+
+    expect(result.issues.some((i) => i.code === "missing_stage_event")).toBe(false);
+  });
+
+  it("fails closed when deviations are reported but no DEVIATION: lines in stdout", async () => {
+    await writeValidArtifacts();
+
+    const result = await runAuditMiddleware(makeInput({
+      deviations: ["evaluator requested rework"],
+      stdout: "STAGE: lead -> planner\nSTAGE: planner -> generator\nSTAGE: generator -> evaluator\nSUMMARY: finished\n",
+    }));
+
+    expect(result.ok).toBe(false);
+    expect(result.issues).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ code: "missing_deviation_evidence" }),
+      ]),
+    );
+  });
+
+  it("passes when DEVIATION: lines in stdout match reported deviations", async () => {
+    await writeValidArtifacts();
+
+    const result = await runAuditMiddleware(makeInput({
+      deviations: ["evaluator requested rework"],
+      stdout: "STAGE: lead -> planner\nSTAGE: planner -> generator\nSTAGE: generator -> evaluator\nDEVIATION: evaluator requested rework\nSUMMARY: finished\n",
+    }));
+
+    expect(result.issues.some((i) => i.code === "missing_deviation_evidence")).toBe(false);
   });
 
   it("fails closed when the revision cap is breached", async () => {
@@ -160,7 +222,7 @@ describe("four-layer audit middleware", () => {
 function makeInput(overrides: Partial<Parameters<typeof runAuditMiddleware>[0]> = {}): Parameters<typeof runAuditMiddleware>[0] {
   return {
     artifactRootDir,
-    stdout: "SUMMARY: finished\nSTAGE: planner -> generator\n",
+    stdout: "STAGE: lead -> planner\nSTAGE: planner -> generator\nSTAGE: generator -> evaluator\nSUMMARY: finished\n",
     playbook: basePlaybook,
     runProfile: baseRunProfile,
     stageTransitions: [

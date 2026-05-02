@@ -2,7 +2,7 @@
 
 Quick reference for agents joining this repo. Keep changes focused and observable.
 
-Regression-fix iteration note: the default runtime path is now the four-layer manager-run harness (`src/orchestrator/manager-run-harness.ts`) driven by authored `Agent`/`Playbook`/`Scenario`/`RunProfile` YAML. The shipped harness is still a lead-intent compatibility bridge: Pluto waits for adapter-emitted lead delegation intent, then performs the mechanical worker launch/spawn fallback. `TeamRunService` remains a legacy/quarantined compatibility lane only.
+Regression-fix iteration note: the default runtime path is now the four-layer manager-run harness (`src/orchestrator/manager-run-harness.ts`) driven by authored `Agent`/`Playbook`/`Scenario`/`RunProfile` YAML. The v1.5 mainline is team-lead-owned orchestration: the lead spawns workers directly via `paseo run` and Pluto observes STAGE/DEVIATION events. Both the legacy `lead_marker` bridge (`TeamRunService`) and the v1 `lead-intent compatibility bridge` remain quarantined fallbacks only.
 
 ## Repo Map
 

@@ -89,7 +89,8 @@ async function main() {
     ...(flags.dataDir ? { dataDir: flags.dataDir } : {}),
     createAdapter: ({ team, workspaceCwd }) => flags.adapter === "fake"
       ? new FakeAdapter({ team })
-      : new PaseoOpenCodeAdapter({ workspaceCwd }),
+      : new PaseoOpenCodeAdapter({ workspaceCwd, deleteAgentsOnEnd: false }),
+    observeLeadWorkers: flags.adapter === "paseo-opencode",
   });
 
   console.log(JSON.stringify({

@@ -10,7 +10,9 @@ import type {
   AgentEvent,
   AgentEventType,
   AgentRoleConfig,
+  AgentRoleId,
   BlockerReasonV0,
+  CoordinationTranscriptRefV0,
   FinalArtifact,
   TeamConfig,
   TeamPlaybookV0,
@@ -55,6 +57,8 @@ export interface ManagerRunHarnessSelection {
   runtimeTask?: string;
 }
 
+const DEFAULT_LEAD_TIMEOUT_SECONDS = 600;
+
 export interface ManagerRunHarnessOptions {
   rootDir: string;
   selection: ManagerRunHarnessSelection;
@@ -72,6 +76,13 @@ export interface ManagerRunHarnessOptions {
   idGen?: () => string;
   clock?: () => Date;
   onPhase?: (phase: string, details: Record<string, unknown>) => Promise<void> | void;
+  /**
+   * When true, the harness observes adapter events to discover lead-spawned
+   * workers instead of driving a harness-owned dispatch loop. Falls back to
+   * underdispatch-driven spawning if the lead does not produce all required
+   * worker completions within the timeout. Default false (fake/legacy compat).
+   */
+  observeLeadWorkers?: boolean;
 }
 
 export interface ManagerRunHarnessResult {
@@ -105,7 +116,7 @@ export async function runManagerHarness(options: ManagerRunHarnessOptions): Prom
   const runDir = store.runDir(runId);
   const transcript = createDefaultCoordinationTranscript({ runId, runDir });
   const taskText = resolveRuntimeTask(resolved.scenario.value.task, options.selection.runtimeTask, resolved.scenario.value.allowTaskOverride);
-  const prompts = renderAllRolePrompts(resolved, { runtimeTask: taskText });
+  const prompts = renderAllRolePrompts(resolved, { runtimeTask: taskText, runId });
   const team = buildTeamConfig(resolved, prompts);
   const adapterPlaybook = buildAdapterPlaybook(resolved);
   const playbookMetadata = buildPlaybookMetadata(resolved.playbook.value);
@@ -258,88 +269,108 @@ export async function runManagerHarness(options: ManagerRunHarnessOptions): Prom
       payload: { sessionId: leadSession.sessionId },
     });
     await persistAdapterEvents();
-    const workerRequests = await waitForWorkerRequests({
-      adapter,
-      runId,
-      collected,
-      persistAdapterEvents,
-      expectedCount: resolved.members.length,
-    });
-    const deviations = synthesizeDeviations({
-      events: collected,
-      workerRequests,
-      expectedRoles: resolved.members.map((member) => member.value.name),
-    });
 
+    const workerRoles = team.roles.filter((role) => role.kind === "worker");
+    const deviations = extractDeviations(collected);
+    const requiredRoles = new Set(workerRoles.map((r) => r.id));
+    const completedRoles = new Set<string>();
     const contributions: WorkerContribution[] = [];
     let previousRole = leadRole.id;
-    for (const request of workerRequests) {
-      const requestedRole = request.payload.targetRole ?? request.roleId;
-      if (typeof requestedRole !== "string") {
-        throw new Error(`worker_intent_invalid:${request.id}`);
-      }
-      const role = team.roles.find((candidate) => candidate.id === requestedRole);
-      if (!role || role.kind !== "worker") {
-        throw new Error(`worker_intent_unknown_role:${requestedRole}`);
-      }
-      const requestedInstructions = String(request.transient?.rawPayload?.instructions ?? request.payload.instructions ?? "").trim();
-      const instructions = requestedInstructions || buildWorkerInstructions({
-        roleId: role.id,
-        task: taskText,
-        previousContributions: contributions,
-      });
-      await transcript.append({
-        runId,
-        ts: clock().toISOString(),
-        source: "teamlead",
-        type: "stage_request",
-        message: `Requested ${role.id}.`,
-        payload: { targetRole: role.id, requestEventId: request.id },
-      });
-      if (adapter.spawnTeammate) {
-        try {
-          await adapter.spawnTeammate({
-            runId,
-            stageId: `request-${request.id}`,
-            role,
-            instructions,
-            dependencies: contributions.map((contribution) => contribution.roleId),
-            transcript: transcript.ref,
-          });
-        } catch (error) {
-          const message = error instanceof Error ? error.message : String(error);
-          if (!message.includes("spawnTeammate not supported in this runtime")) {
-            throw error;
-          }
-          await adapter.createWorkerSession({ runId, role, instructions });
+
+    if (options.observeLeadWorkers) {
+      const leadTimeoutMs = extractLeadTimeoutSeconds(runProfile) * 1000;
+      const observationStartedAt = Date.now();
+      const underdispatchMs = Math.min(leadTimeoutMs - 1_000, 15_000);
+      let underdispatchTriggered = false;
+
+      while (completedRoles.size < requiredRoles.size) {
+        if (Date.now() - observationStartedAt > leadTimeoutMs) {
+          throw new Error(`lead_timeout:exceeded ${leadTimeoutMs}ms`);
         }
-      } else {
-        await adapter.createWorkerSession({ runId, role, instructions });
+        const adapterEvents = await persistAdapterEvents();
+        for (const event of adapterEvents) {
+          if (event.type === "worker_completed" && event.roleId && requiredRoles.has(event.roleId) && !completedRoles.has(event.roleId)) {
+            completedRoles.add(event.roleId);
+            const c = collectContribution(event, previousRole);
+            contributions.push(c.contribution);
+            transitions.push(c.transition);
+            roleCitations.push(c.citation);
+            previousRole = c.nextRole;
+            await transcript.append({
+              runId, ts: clock().toISOString(), source: "worker",
+              type: "stage_output", message: `${event.roleId} completed.`,
+              payload: { output: c.contribution.output },
+            });
+          }
+        }
+        if (!underdispatchTriggered && completedRoles.size < requiredRoles.size && Date.now() - observationStartedAt > underdispatchMs) {
+          underdispatchTriggered = true;
+          await emit("orchestrator_underdispatch_fallback", {
+            missingRoles: workerRoles.filter((r) => !completedRoles.has(r.id)).map((r) => r.id),
+            reason: "lead_underdispatched_required_workers",
+          });
+          for (const role of workerRoles.filter((r) => !completedRoles.has(r.id))) {
+            const instructions = buildWorkerInstructions({ roleId: role.id, task: taskText, previousContributions: contributions });
+            await transcript.append({
+              runId, ts: clock().toISOString(), source: "teamlead",
+              type: "stage_request", message: `Requested ${role.id}.`,
+              payload: { targetRole: role.id },
+            });
+            await dispatchViaAdapter(adapter, runId, role, instructions, contributions, transcript.ref);
+            await persistAdapterEvents();
+            const completed = [...collected].reverse().find((e) => e.type === "worker_completed" && e.roleId === role.id);
+            if (completed) {
+              completedRoles.add(role.id);
+              const c = collectContribution(completed, previousRole);
+              contributions.push(c.contribution);
+              transitions.push(c.transition);
+              roleCitations.push(c.citation);
+              previousRole = c.nextRole;
+              await transcript.append({
+                runId, ts: clock().toISOString(), source: "worker",
+                type: "stage_output", message: `${role.id} completed.`,
+                payload: { output: c.contribution.output },
+              });
+            }
+          }
+        }
+        await delay(50);
       }
-      const events = await persistAdapterEvents();
-      const completed = [...events].reverse().find((event) => event.type === "worker_completed" && event.roleId === role.id);
-      const output = String(completed?.transient?.rawPayload?.output ?? completed?.payload.output ?? "");
-      contributions.push({ roleId: role.id as WorkerContribution["roleId"], sessionId: completed?.sessionId ?? `${role.id}-session`, output });
-      transitions.push({
-        from: previousRole,
-        to: role.id,
-        observedAt: completed?.ts ?? clock().toISOString(),
-        source: `worker_requested:${request.id}`,
-      });
-      roleCitations.push({
-        role: role.id,
-        summary: firstNonEmptyLine(output),
-        quote: firstNonEmptyLine(output),
-      });
-      previousRole = role.id;
-      await transcript.append({
-        runId,
-        ts: clock().toISOString(),
-        source: "worker",
-        type: "stage_output",
-        message: `${role.id} completed.`,
-        payload: { output },
-      });
+    } else {
+      for (const role of workerRoles) {
+        const instructions = buildWorkerInstructions({
+          roleId: role.id,
+          task: taskText,
+          previousContributions: contributions,
+        });
+        await transcript.append({
+          runId,
+          ts: clock().toISOString(),
+          source: "teamlead",
+          type: "stage_request",
+          message: `Requested ${role.id}.`,
+          payload: { targetRole: role.id },
+        });
+        await dispatchViaAdapter(adapter, runId, role, instructions, contributions, transcript.ref);
+        const events = await persistAdapterEvents();
+        const completed = [...events].reverse().find((event) => event.type === "worker_completed" && event.roleId === role.id);
+        if (completed) {
+          completedRoles.add(role.id);
+          const c = collectContribution(completed, previousRole);
+          contributions.push(c.contribution);
+          transitions.push(c.transition);
+          roleCitations.push(c.citation);
+          previousRole = c.nextRole;
+          await transcript.append({
+            runId,
+            ts: clock().toISOString(),
+            source: "worker",
+            type: "stage_output",
+            message: `${role.id} completed.`,
+            payload: { output: c.contribution.output },
+          });
+        }
+      }
     }
 
     transitions.push({
@@ -354,9 +385,16 @@ export async function runManagerHarness(options: ManagerRunHarnessOptions): Prom
       sessionId: leadSession.sessionId,
       message: buildSummaryRequest(taskText, contributions, transcript.ref.path),
     });
-    const leadEvents = await persistAdapterEvents();
-    const leadSummaryEvent = [...leadEvents].reverse().find((event) => event.type === "lead_message");
-    const markdown = String(leadSummaryEvent?.transient?.rawPayload?.markdown ?? leadSummaryEvent?.payload.markdown ?? buildFallbackSummary(taskText, contributions));
+    await persistAdapterEvents();
+
+    let markdown: string;
+    const leadSummaryEvent = [...collected].reverse().find((event) => event.type === "lead_message");
+    if (leadSummaryEvent) {
+      markdown = String(leadSummaryEvent.transient?.rawPayload?.markdown ?? leadSummaryEvent.payload.markdown ?? "");
+    } else {
+      const leadText = extractLeadTextOutput(collected);
+      markdown = leadText || buildFallbackSummary(taskText, contributions);
+    }
 
     const artifact: FinalArtifact = {
       runId,
@@ -372,6 +410,9 @@ export async function runManagerHarness(options: ManagerRunHarnessOptions): Prom
     await writeFile(taskTreePath, renderTaskTree(resolved.playbook.value.name, [leadRole.id, ...resolved.members.map((member) => member.value.name)]), "utf8");
     await writeFile(statusPath, renderStatusDoc(runId, resolved, workspaceDir, artifactPath), "utf8");
     await writeFile(finalReportPath, renderFinalReport({ resolved, transitions, roleCitations, deviations, summary: markdown, workspaceDir }), "utf8");
+    for (const transition of transitions) {
+      stdoutLines.push(`STAGE: ${transition.from} -> ${transition.to}`);
+    }
     stdoutLines.push(
       `WROTE: ${relative(runDir, artifactPath) || "artifact.md"}`,
       `WROTE: ${relative(runDir, taskTreePath)}`,
@@ -418,7 +459,7 @@ export async function runManagerHarness(options: ManagerRunHarnessOptions): Prom
         stdoutContract: runProfile?.stdoutContract,
       },
       stageTransitions: transitions.map((transition) => ({ from: transition.from, to: transition.to, observedAt: transition.observedAt })),
-      stageTransitionSource: "synthesized_routing",
+      stageTransitionSource: "observed_lead_output",
       revisionCount: countObservedRevisionCycles(collected),
       finalReportPath: "final-report.md",
     });
@@ -667,6 +708,63 @@ function inferStageKind(roleId: string): TeamPlaybookV0["stages"][number]["kind"
   }
 }
 
+interface ContributionRecord {
+  contribution: WorkerContribution;
+  transition: EvidenceTransition;
+  citation: EvidenceRoleCitation;
+  nextRole: AgentRoleId;
+}
+
+function collectContribution(event: AgentEvent, previousRole: AgentRoleId): ContributionRecord {
+  const output = String(event.transient?.rawPayload?.output ?? event.payload.output ?? "");
+  return {
+    contribution: {
+      roleId: event.roleId as WorkerContribution["roleId"],
+      sessionId: event.sessionId ?? `${event.roleId}-session`,
+      output,
+    },
+    transition: {
+      from: previousRole,
+      to: event.roleId!,
+      observedAt: event.ts ?? new Date().toISOString(),
+      source: "worker_completed_event",
+    },
+    citation: {
+      role: event.roleId!,
+      summary: firstNonEmptyLine(output),
+      quote: firstNonEmptyLine(output),
+    },
+    nextRole: event.roleId!,
+  };
+}
+
+async function dispatchViaAdapter(
+  adapter: PaseoTeamAdapter,
+  runId: string,
+  role: AgentRoleConfig,
+  instructions: string,
+  contributions: ReadonlyArray<WorkerContribution>,
+  transcriptRef: CoordinationTranscriptRefV0,
+): Promise<void> {
+  if (adapter.spawnTeammate) {
+    try {
+      await adapter.spawnTeammate({
+        runId,
+        stageId: `${role.id}-stage`,
+        role,
+        instructions,
+        dependencies: contributions.map((c) => c.roleId),
+        transcript: transcriptRef,
+      });
+      return;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (!message.includes("spawnTeammate not supported in this runtime")) throw error;
+    }
+  }
+  await adapter.createWorkerSession({ runId, role, instructions });
+}
+
 function buildWorkerInstructions(input: { roleId: string; task: string; previousContributions: ReadonlyArray<WorkerContribution> }): string {
   return [
     `Role: ${input.roleId}`,
@@ -737,6 +835,107 @@ function validateRunProfileRuntimeSupport(runProfile: RunProfile | undefined) {
   }
 }
 
+// v1.5 lead observation helpers — ready for live adapter path where the lead
+// drives worker spawning itself. Currently the fake-adapter path drives
+// workers through the harness loop above.
+function extractLeadTimeoutSeconds(runProfile: RunProfile | undefined): number {
+  const raw = (runProfile as Record<string, unknown> | undefined)?.runtime as Record<string, unknown> | undefined;
+  if (typeof raw?.lead_timeout_seconds === "number" && raw.lead_timeout_seconds > 0) {
+    return raw.lead_timeout_seconds;
+  }
+  return DEFAULT_LEAD_TIMEOUT_SECONDS;
+}
+
+async function observeLeadCompletion(input: {
+  adapter: PaseoTeamAdapter;
+  runId: string;
+  collected: AgentEvent[];
+  persistAdapterEvents: () => Promise<AgentEvent[]>;
+  timeoutMs: number;
+}): Promise<AgentEvent[]> {
+  const deadline = Date.now() + input.timeoutMs;
+  const leadDone = (events: AgentEvent[]) =>
+    events.some((e) => e.type === "lead_message" && String(e.payload.kind) === "summary");
+
+  if (leadDone(input.collected)) return input.collected;
+
+  while (Date.now() < deadline) {
+    const remaining = Math.max(100, deadline - Date.now());
+    const batch = await input.adapter.waitForCompletion({ runId: input.runId, timeoutMs: Math.min(remaining, 30_000) });
+    input.collected.push(...batch);
+    if (leadDone(input.collected)) return input.collected;
+    await delay(1_000);
+    await input.persistAdapterEvents();
+    if (leadDone(input.collected)) return input.collected;
+  }
+
+  throw new Error(`lead_timeout:exceeded ${input.timeoutMs}ms`);
+}
+
+function extractStageTransitions(events: ReadonlyArray<AgentEvent>): EvidenceTransition[] {
+  const transitions: EvidenceTransition[] = [];
+  for (const event of events) {
+    if (event.type !== "lead_message") continue;
+    for (const value of extractEventTextValues(event)) {
+      for (const line of value.split(/\r?\n/)) {
+        const match = /^STAGE:\s*(\S+)\s*->\s*(\S+)$/i.exec(line.trim());
+        if (match) {
+          transitions.push({
+            from: match[1]!,
+            to: match[2]!,
+            observedAt: event.ts,
+            source: "lead_output",
+          });
+        }
+      }
+    }
+  }
+  if (transitions.length === 0) {
+    const workerCompleted = events.filter((e) => e.type === "worker_completed");
+    for (const event of workerCompleted) {
+      transitions.push({
+        from: "lead",
+        to: event.roleId ?? "unknown",
+        observedAt: event.ts,
+        source: "worker_completed_event",
+      });
+    }
+  }
+  return transitions;
+}
+
+function extractDeviations(events: ReadonlyArray<AgentEvent>): string[] {
+  const deviations = new Set<string>();
+  for (const event of events) {
+    if (event.type !== "lead_message") continue;
+    for (const value of extractEventTextValues(event)) {
+      for (const line of value.split(/\r?\n/)) {
+        const match = /^DEVIATION:\s*(.+)$/i.exec(line.trim());
+        if (match) {
+          deviations.add(match[1]!);
+        }
+      }
+    }
+  }
+  return [...deviations];
+}
+
+function extractLeadTextOutput(events: ReadonlyArray<AgentEvent>): string {
+  for (const event of [...events].reverse()) {
+    if (event.type === "lead_message" && event.transient?.rawPayload?.markdown) {
+      return String(event.transient.rawPayload.markdown);
+    }
+    if (event.type === "lead_message" && event.payload.markdown) {
+      return String(event.payload.markdown);
+    }
+  }
+  return "";
+}
+
+// Legacy v1 bridge helpers — kept for backward compatibility but no longer
+// called from the mainline path. The fake adapter still emits worker_requested
+// events synchronously; the new harness observes lead output instead of
+// collecting worker intent.
 async function waitForWorkerRequests(input: {
   adapter: PaseoTeamAdapter;
   runId: string;
@@ -909,7 +1108,6 @@ function renderFinalReport(input: {
   summary: string;
   workspaceDir: string;
 }): string {
-  const synthesisNote = "- Synthesized from routing decisions; no live STAGE/DEVIATION event stream observed in the v1 bridge.";
   return [
     "# Final Report",
     "",
@@ -917,14 +1115,14 @@ function renderFinalReport(input: {
     firstNonEmptyLine(input.summary) || "Completed.",
     "",
     "## Workflow Steps Executed",
-    synthesisNote,
-    ...input.transitions.map((transition) => `- ${transition.from} -> ${transition.to}`),
+    ...(input.transitions.length > 0
+      ? input.transitions.map((transition) => `- ${transition.from} -> ${transition.to}`)
+      : ["- no stage transitions observed"]),
     "",
     "## Required Role Citations",
     ...input.roleCitations.map((citation) => `- ${citation.role}: ${citation.summary ?? "(none)"}`),
     "",
     "## Deviations",
-    synthesisNote,
     ...(input.deviations.length > 0 ? input.deviations.map((deviation) => `- ${deviation}`) : ["- none observed"]),
     "",
     "## Workspace",

@@ -192,8 +192,6 @@ export class FakeAdapter implements PaseoTeamAdapter {
         });
       }
     } else if (!this.shouldDeferTeamLeadDirectRequestsToService(input.playbook ?? run.playbook)) {
-      // Simulate TeamLead-direct intent surfaced by the runtime before Pluto
-      // performs the mechanical worker launch.
       const playbook = input.playbook ?? run.playbook;
       const workerStages = playbook?.stages ?? this.team.roles.filter((r) => r.kind === "worker").map((role) => ({ id: role.id, roleId: role.id, instructions: this.workerInstructionsFor(input.task, role), dependsOn: [] }));
       for (const stage of workerStages) {
