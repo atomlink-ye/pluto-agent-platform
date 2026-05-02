@@ -218,3 +218,12 @@ Detailed OpenCode Companion review plus independent `@oracle` and `@council` syn
 - `docs/plans/active/opencode-agent-teams-gap-review.md`
 
 That review confirms the current implementation is a marker-based Pluto dispatcher and recommends the staged path: explicit playbook contract → shared coordination channel/transcript → TeamLead-direct Paseo orchestration with fallback bridge only when needed → revision loop → marker protocol retirement/quarantine.
+
+## Completion record (2026-05-02)
+
+This plan envisaged TeamLead-direct orchestration with a Pluto fallback bridge as a
+transitional layer toward fully runtime-owned child spawning. v1.5 shipped the
+TeamLead-direct lane with underdispatch fallback; v1.6 (commit `72e063d`) replaced both
+with the Claude-Code Agent Teams aligned mailbox + shared task list + active hooks +
+plan-approval round-trip runtime, using paseo chat as the mailbox transport. The v1 and
+v1.5 paths are deleted, not cohabited. Plan is closed.
