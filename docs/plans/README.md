@@ -56,6 +56,7 @@ Each plan is a markdown file. Use this template:
 ## Active Plans
 
 - `active/full-product-shape-hardening.md` — post-PRODUCT_COMPLETE hardening and cleanup.
+- `active/pluto-paseo-docs-as-config-refactor.md` — boundary-first docs-as-config seam for Pluto over Paseo, including the inspectable `RunPackage` MVP.
 
 ## Completed Plans
 
@@ -72,3 +73,4 @@ Completed plans are stored in `docs/plans/completed/` with verification/evidence
 
 - `docs/debt/README.md` — Technical debt tracking
 - `docs/mvp-alpha.md` — MVP object contracts
+- `docs/design-docs/pluto-paseo-runtime-boundary.md` — Pluto vs Paseo ownership matrix and boundary rules

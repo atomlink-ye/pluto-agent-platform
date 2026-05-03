@@ -61,6 +61,7 @@
 
 ## CLI surfaces
 
+- `pnpm pluto:package --scenario <name> [--run-profile <name>] [--playbook <name>] [--task <id>] [--workspace <path>]` — compile + inspect the `RunPackage` (loaded + validated + rendered four-layer config) without running agents
 - `pnpm pluto:run --scenario <name> --run-profile <name> [--workspace <path>]`
 - `pnpm runs list/show/events/artifact/evidence`
 - `pnpm smoke:fake`

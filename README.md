@@ -17,6 +17,9 @@ after `agent-teams-chat-mailbox-runtime` Stage B.
 pnpm install
 pnpm typecheck
 pnpm test
+# Inspect the compiled run package before execution:
+pnpm pluto:package -- --scenario hello-team --run-profile fake-smoke
+# Execute the harness offline:
 pnpm pluto:run --scenario hello-team --run-profile fake-smoke --workspace .tmp/pluto-cli
 ```
 
@@ -53,6 +56,7 @@ Canonical live-smoke knobs:
 - `PASEO_MODE` — adapter launch mode (`orchestrator` by default)
 - `PASEO_HOST` — explicit paseo daemon host
 - `PLUTO_DISPATCH_MODE` — dispatch mode (`teamlead_chat` by default, `static_loop` fallback)
+- `PLUTO_RUNTIME_HELPER_MVP` — opt-in unified Pluto mailbox helper MVP
 - `PLUTO_SCENARIO` — scenario selection
 - `PLUTO_RUN_PROFILE` — run-profile selection
 - `PLUTO_PLAYBOOK` — playbook override
@@ -68,6 +72,7 @@ See `docs/harness.md` for the canonical knob table.
 - Run starts and writes `mailbox.jsonl` plus `tasks.json`.
 - Planner → generator → evaluator tasks complete in dependency order.
 - `events.jsonl` records `spawn_request_received`, `spawn_request_executed`, `worker_complete_received`, and `final_reconciliation_received` with `orchestrationSource: "teamlead_chat"` in the chat-driven path.
+- When `PLUTO_RUNTIME_HELPER_MVP=1`, the canonical helper lives at `.pluto-runtime/pluto-mailbox` (the only materialized executable; role is a parameter, not a path), runtime-injected env (`PLUTO_RUNTIME_HELPER_CONTEXT` / `_ROLE` / `_RUN_ID`) is authoritative over CLI flags, and `.pluto/runs/<runId>/runtime-helper-usage.jsonl` shows helper-authored mailbox activity.
 - `mailbox.jsonl` contains team-lead coordination, teammate completion, FINAL summary,
   and plan-approval messages when applicable.
 - `evidence-packet.json` records role citations and lineage back to mailbox/task files.

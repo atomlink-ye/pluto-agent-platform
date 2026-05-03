@@ -24,6 +24,7 @@ audit-grade evidence.
 | `MailboxMessage` | `mailbox.jsonl` / `src/contracts/four-layer.ts` | typed coordination message with baked transport and additive delivery metadata |
 | `Task` | `tasks.json` / `src/contracts/four-layer.ts` | shared task-list record |
 | `Run` | `.pluto/runs/<runId>/` | materialized runtime record |
+| `RunPackage` | `src/four-layer/run-package.ts` (compiled in-memory; inspectable via `pnpm pluto:package`) | normalized compiled output of Agent + Playbook + Scenario + RunProfile; the object handed to the runtime executor |
 | `EvidencePacket` | `.pluto/runs/<runId>/evidence-packet.{md,json}` | canonical evidence |
 
 ## Adapter contract
@@ -48,6 +49,7 @@ Required runtime artifacts:
 
 - The manager harness owns one inbox delivery loop per run.
 - The loop waits on `MailboxTransport.wait()`, skips non-agent targets like `pluto` and `broadcast`, resolves role-to-session ids, and delivers ordinary mailbox traffic with `sendSessionMessage({ wait: false })`.
+- In `PLUTO_RUNTIME_HELPER_MVP=1`, helper `wait` requests are resolved on Pluto's side from task-state transitions, and already-handled lead control envelopes are recorded as semantic deliveries instead of being replayed back into the lead session.
 - If a target session is busy, the loop queues the message per session and drains it after a later just-in-time idle check.
 - Planner plan approval is now a real room round-trip: planner posts `plan_approval_request`, the lead response is posted back to the room as `plan_approval_response`, and both deliveries are evidenced through the loop.
 - TeamLead-message-driven dispatch is now the default runtime path: the lead posts `spawn_request` and `final_reconciliation` envelopes, Pluto validates them on inbox delivery, and `PLUTO_DISPATCH_MODE=static_loop` keeps the v1.6 fallback for one release.

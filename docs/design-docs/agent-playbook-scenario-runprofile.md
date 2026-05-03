@@ -142,7 +142,7 @@ The v1.6 runtime is the canonical execution model.
 
 Pluto's runtime responsibility is bounded but active:
 
-1. Load Agent + Playbook + Scenario + RunProfile, validate refs, and render prompts.
+1. Load Agent + Playbook + Scenario + RunProfile, validate refs, and render prompts. The compiled output is a `RunPackage` object (`src/four-layer/run-package.ts`) — the normalized seam handed to the runtime executor. It is independently inspectable via `pnpm pluto:package` without running agents. Boundary intent for the `RunPackage` seam is in `docs/design-docs/pluto-paseo-runtime-boundary.md`.
 2. Materialize the run workspace plus four-layer runtime state.
 3. Create the **file-backed mailbox mirror** (`mailbox.jsonl`) and **shared task list**
    (`tasks.json`).
