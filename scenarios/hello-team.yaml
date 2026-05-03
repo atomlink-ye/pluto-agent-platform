@@ -14,4 +14,4 @@ overlays:
       Produce a concise artifact-ready contribution.
   evaluator:
     prompt: |-
-      Respond with PASS: when the artifact is acceptable.
+      Decide whether the artifact passes or fails and explain briefly in the structured `evaluator_verdict` envelope.

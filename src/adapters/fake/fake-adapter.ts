@@ -51,6 +51,14 @@ export class FakeAdapter implements PaseoTeamAdapter {
   ) => string;
   private readonly clock: () => Date;
   private readonly idGen: () => string;
+  private readonly sentMessages: Array<{
+    runId: string;
+    sessionId: string;
+    roleId?: string;
+    message: string;
+    via: "session" | "role";
+  }> = [];
+  private readonly sessionIdle = new Map<string, boolean>();
 
   private runs = new Map<
     string,
@@ -62,6 +70,7 @@ export class FakeAdapter implements PaseoTeamAdapter {
       events: AgentEvent[];
       cursor: number;
       leadSessionId?: string;
+      roleSessionIds: Map<string, string>;
       workerSessions: Map<string, AgentSession>;
       workerAttempts: Map<string, number>;
       directStageAttempts: Map<string, number>;
@@ -115,6 +124,7 @@ export class FakeAdapter implements PaseoTeamAdapter {
       transcript: input.transcript,
       events: [],
       cursor: 0,
+      roleSessionIds: new Map(),
       workerSessions: new Map(),
       workerAttempts: new Map(),
       directStageAttempts: new Map(),
@@ -138,6 +148,8 @@ export class FakeAdapter implements PaseoTeamAdapter {
     }
     const sessionId = `fake-lead-${this.idGen()}`;
     run.leadSessionId = sessionId;
+    run.roleSessionIds.set(input.role.id, sessionId);
+    this.sessionIdle.set(sessionId, true);
     const leadBatchId = this.nextBatchId(input.runId, "lead");
     this.appendEvent(input.runId, {
       type: "lead_started",
@@ -175,7 +187,9 @@ export class FakeAdapter implements PaseoTeamAdapter {
     run.workerAttempts.set(input.role.id, attempt);
     const workerBatchId = this.nextBatchId(input.runId, `worker-${input.role.id}`);
     const session: AgentSession = { sessionId, role: input.role };
+    run.roleSessionIds.set(input.role.id, sessionId);
     run.workerSessions.set(sessionId, session);
+    this.sessionIdle.set(sessionId, true);
 
     this.appendEvent(input.runId, {
       type: "worker_started",
@@ -269,6 +283,53 @@ export class FakeAdapter implements PaseoTeamAdapter {
     });
   }
 
+  async sendSessionMessage(input: {
+    runId: string;
+    sessionId: string;
+    message: string;
+    wait?: boolean;
+  }): Promise<void> {
+    const run = this.expectRun(input.runId);
+    this.expectKnownSession(run, input.sessionId);
+    this.sentMessages.push({
+      runId: input.runId,
+      sessionId: input.sessionId,
+      message: input.message,
+      via: "session",
+    });
+    if (input.wait === true) {
+      this.sessionIdle.set(input.sessionId, true);
+    }
+  }
+
+  async sendRoleMessage(input: {
+    runId: string;
+    roleId: string;
+    message: string;
+    wait?: boolean;
+  }): Promise<void> {
+    const run = this.expectRun(input.runId);
+    const sessionId = run.roleSessionIds.get(input.roleId);
+    if (!sessionId) {
+      throw new Error(`fake_adapter_unknown_role: ${input.roleId}`);
+    }
+    this.sentMessages.push({
+      runId: input.runId,
+      sessionId,
+      roleId: input.roleId,
+      message: input.message,
+      via: "role",
+    });
+    if (input.wait === true) {
+      this.sessionIdle.set(sessionId, true);
+    }
+  }
+
+  async listActiveRoleSessions(input: { runId: string }): Promise<Record<string, string>> {
+    const run = this.expectRun(input.runId);
+    return Object.fromEntries(run.roleSessionIds.entries());
+  }
+
   async readEvents(input: { runId: string }): Promise<AgentEvent[]> {
     const run = this.expectRun(input.runId);
     const next = run.events.slice(run.cursor);
@@ -288,6 +349,25 @@ export class FakeAdapter implements PaseoTeamAdapter {
     const run = this.runs.get(input.runId);
     if (!run) return;
     run.ended = true;
+  }
+
+  getSentMessages(): Array<{
+    runId: string;
+    sessionId: string;
+    roleId?: string;
+    message: string;
+    via: "session" | "role";
+  }> {
+    return this.sentMessages.map((entry) => ({ ...entry }));
+  }
+
+  setSessionIdle(sessionId: string, idle: boolean): void {
+    this.sessionIdle.set(sessionId, idle);
+  }
+
+  async isSessionIdle(input: { runId: string; sessionId: string }): Promise<boolean> {
+    this.expectRun(input.runId);
+    return this.sessionIdle.get(input.sessionId) ?? false;
   }
 
   // ---------- helpers ----------
@@ -339,6 +419,18 @@ export class FakeAdapter implements PaseoTeamAdapter {
     };
     this.attachValueRefs(event, partial.rawPayloadKeys);
     run.events.push(event);
+  }
+
+  private expectKnownSession(
+    run: {
+      leadSessionId?: string;
+      workerSessions: Map<string, AgentSession>;
+    },
+    sessionId: string,
+  ): void {
+    if (run.leadSessionId === sessionId) return;
+    if (run.workerSessions.has(sessionId)) return;
+    throw new Error(`fake_adapter_unknown_session: ${sessionId}`);
   }
 
   private attachValueRefs(event: AgentEvent, rawPayloadKeys?: readonly string[]) {

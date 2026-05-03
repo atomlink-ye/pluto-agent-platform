@@ -39,11 +39,20 @@ export const RUN_STATUSES = [
 
 export const MAILBOX_MESSAGE_KINDS = [
   "text",
+  "evaluator_verdict",
+  "revision_request",
   "shutdown_request",
   "shutdown_response",
   "plan_approval_request",
   "plan_approval_response",
+  "spawn_request",
+  "worker_complete",
+  "final_reconciliation",
 ] as const;
+
+export const DISPATCH_ORCHESTRATION_SOURCES = ["teamlead_chat", "static_loop"] as const;
+
+export const MAILBOX_TRANSPORT_STATUSES = ["ok", "post_failed"] as const;
 
 export const TASK_LIST_STATUSES = ["pending", "in_progress", "completed"] as const;
 
@@ -51,15 +60,30 @@ export const REQUIRED_READ_KINDS = ["repo", "external_document"] as const;
 
 export const COORDINATION_CHANNEL_KINDS = ["shared_channel", "transcript"] as const;
 
+export const EVIDENCE_AUDIT_EVENT_KINDS = [
+  "mailbox_external_write_detected",
+  "tasklist_external_write_detected",
+] as const;
+
+export const EVIDENCE_AUDIT_HOOK_BOUNDARIES = [
+  "teammate_idle",
+  "task_completed",
+  "run_end",
+] as const;
+
 export type FourLayerAuthoredObjectKind = typeof FOUR_LAYER_AUTHORED_OBJECT_KINDS[number];
 export type FourLayerRuntimeObjectKind = typeof FOUR_LAYER_RUNTIME_OBJECT_KINDS[number];
 export type FourLayerObjectKind = typeof FOUR_LAYER_OBJECT_KINDS[number];
 export type ScenarioTaskMode = typeof SCENARIO_TASK_MODES[number];
 export type RunStatus = typeof RUN_STATUSES[number];
 export type MailboxMessageKind = typeof MAILBOX_MESSAGE_KINDS[number];
+export type DispatchOrchestrationSource = typeof DISPATCH_ORCHESTRATION_SOURCES[number];
+export type MailboxTransportStatus = typeof MAILBOX_TRANSPORT_STATUSES[number];
 export type TaskListStatus = typeof TASK_LIST_STATUSES[number];
 export type RequiredReadKind = typeof REQUIRED_READ_KINDS[number];
 export type CoordinationChannelKind = typeof COORDINATION_CHANNEL_KINDS[number];
+export type EvidenceAuditEventKind = typeof EVIDENCE_AUDIT_EVENT_KINDS[number];
+export type EvidenceAuditHookBoundary = typeof EVIDENCE_AUDIT_HOOK_BOUNDARIES[number];
 
 export interface FourLayerSchemaHeader<TKind extends FourLayerObjectKind> {
   schemaVersion: typeof FOUR_LAYER_SCHEMA_VERSION;
@@ -168,7 +192,7 @@ export interface SecretHandlingPolicy {
 }
 
 export interface RunProfileRuntime {
-  paseo_mode?: string;
+  dispatchMode?: string;
   lead_timeout_seconds?: number;
 }
 
@@ -197,12 +221,67 @@ export interface PlanApprovalResponseBody {
   taskId?: string;
 }
 
+export interface SpawnRequestBody {
+  schemaVersion: "v1";
+  targetRole: string;
+  taskId: string;
+  rationale?: string;
+}
+
+export interface WorkerCompleteBody {
+  schemaVersion: "v1";
+  taskId: string;
+  status: "succeeded" | "failed";
+  artifactRef?: string;
+  summary?: string;
+}
+
+export interface FinalReconciliationBody {
+  schemaVersion: "v1";
+  summary: string;
+  completedTaskIds: string[];
+}
+
+export interface ShutdownRequestBody {
+  schemaVersion: "v1";
+  targetRole?: string;
+  reason: string;
+  timeoutMs?: number;
+}
+
+export interface ShutdownResponseBody {
+  schemaVersion: "v1";
+  fromTaskId?: string;
+  acknowledged: true;
+}
+
+export interface EvaluatorVerdictBody {
+  schemaVersion: "v1";
+  taskId: string;
+  verdict: "pass" | "fail";
+  rationale?: string;
+  failedRubricRef?: string;
+}
+
+export interface RevisionRequestBody {
+  schemaVersion: "v1";
+  failedTaskId: string;
+  failedVerdictMessageId: string;
+  targetRole: string;
+  instructions: string;
+}
+
 export type MailboxMessageBody =
   | string
+  | EvaluatorVerdictBody
+  | RevisionRequestBody
+  | ShutdownRequestBody
+  | ShutdownResponseBody
   | PlanApprovalRequestBody
   | PlanApprovalResponseBody
-  | { reason?: string; taskId?: string }
-  | { acknowledged?: boolean; reason?: string; taskId?: string };
+  | SpawnRequestBody
+  | WorkerCompleteBody
+  | FinalReconciliationBody;
 
 export interface MailboxMessage {
   id: string;
@@ -214,6 +293,51 @@ export interface MailboxMessage {
   summary?: string;
   replyTo?: string;
   readAt?: string;
+  transportMessageId?: string;
+  transportTimestamp?: string;
+  transportStatus?: MailboxTransportStatus;
+  deliveryStatus?: "pending" | "delivered" | "queued" | "failed";
+  deliveryAttemptedAt?: string;
+  deliveryFailedReason?: string;
+}
+
+export type RoomRef = string;
+
+export type TransportSince =
+  | { kind: "duration"; value: string }
+  | { kind: "timestamp"; value: string };
+
+export interface TransportMessageRef {
+  transportMessageId: string;
+  transportTimestamp: string;
+  roomRef: RoomRef;
+}
+
+export interface ReceivedTransportMessage {
+  transportMessageId: string;
+  transportTimestamp: string;
+  envelope: MailboxEnvelope;
+  replyTo?: string;
+}
+
+export interface TransportReadResult {
+  messages: ReceivedTransportMessage[];
+  latestTimestamp: string | null;
+}
+
+export interface TransportWaitResult {
+  messages: ReceivedTransportMessage[];
+  latestTimestamp: string | null;
+  timedOut: boolean;
+}
+
+export interface MailboxEnvelope {
+  schemaVersion: "v1";
+  fromRole: string;
+  toRole: string | "broadcast";
+  runId: string;
+  taskId?: string;
+  body: MailboxMessage;
 }
 
 export interface TaskRecord {
@@ -291,6 +415,16 @@ export interface EvidenceLineage {
   auditOk?: boolean;
 }
 
+export interface EvidenceAuditEvent {
+  kind: EvidenceAuditEventKind;
+  filePath: string;
+  lastKnownSha256: string;
+  observedSha256: string;
+  lastKnownLineCount: number;
+  observedLineCount: number;
+  hookBoundary: EvidenceAuditHookBoundary;
+}
+
 export interface EvidencePacket extends FourLayerSchemaHeader<"evidence_packet"> {
   runId: string;
   status: RunStatus;
@@ -302,6 +436,7 @@ export interface EvidencePacket extends FourLayerSchemaHeader<"evidence_packet">
   commandResults?: EvidenceCommandResult[];
   transitions?: EvidenceTransition[];
   roleCitations?: EvidenceRoleCitation[];
+  auditEvents?: EvidenceAuditEvent[];
   lineage?: EvidenceLineage;
   generatedAt: string;
 }

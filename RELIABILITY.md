@@ -11,8 +11,9 @@
 ## Runtime policy (v1.6)
 
 - The default and only runtime is the mailbox + shared task list path.
-- Mailbox transport uses paseo chat in live mode, but Pluto mirrors authoritative runtime
-  evidence into `mailbox.jsonl` and `tasks.json`.
+- Target after `agent-teams-chat-mailbox-runtime` Stage B: mailbox transport uses paseo
+  chat in live mode. Until then, Pluto mirrors authoritative runtime evidence into
+  `mailbox.jsonl` and `tasks.json`.
 - Active hooks (`TaskCreated`, `TaskCompleted`, `TeammateIdle`) are part of the runtime
   control path and may block continuation.
 - Plan approval is a typed mailbox round-trip, not an out-of-band operator action.

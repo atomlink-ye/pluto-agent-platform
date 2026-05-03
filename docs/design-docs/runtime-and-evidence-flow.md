@@ -23,9 +23,10 @@ combination of:
 3. Render team-lead and member prompts in canonical stack order.
 4. Materialize workspace plus run directory.
 5. Create the mirrored mailbox log and shared task list.
-6. Launch the team lead and bind live mailbox transport through paseo chat.
+6. Launch the team lead and bind the target live mailbox transport through paseo chat
+   after `agent-teams-chat-mailbox-runtime` Stage B.
 7. Create tasks in the shared task list and persist task transitions.
-8. Exchange teammate coordination through typed mailbox messages.
+8. Exchange teammate coordination through typed mailbox messages, including TeamLead-driven `spawn_request`, `worker_complete`, and `final_reconciliation` envelopes in the default chat-backed path.
 9. Run `TaskCreated`, `TaskCompleted`, and `TeammateIdle` hooks.
 10. Process plan-approval request/response messages when teammates need permission
     elevation.
@@ -63,13 +64,16 @@ The v1.6 EvidencePacket records:
 
 ## Mailbox and task-list lineage
 
-`mailbox.jsonl` is the durable, replayable message log for the run. Live paseo chat is a
-transport, not the final evidence store.
+`mailbox.jsonl` is the durable, replayable message log for the run. Target after
+`agent-teams-chat-mailbox-runtime` Stage B: live paseo chat is a transport, not the
+final evidence store.
 
 `tasks.json` is the durable task ledger. It records task ids, dependency edges,
 assignment/claim state, and pending → in_progress → completed transitions.
 
 Together they provide the canonical runtime proof surface for orchestration.
+
+`PLUTO_DISPATCH_MODE=teamlead_chat` is the default execution path. `PLUTO_DISPATCH_MODE=static_loop` preserves the legacy one-release fallback while the chat-driven path hardens.
 
 ## Run lifecycle states
 

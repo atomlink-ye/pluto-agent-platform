@@ -1,7 +1,19 @@
 import { appendFile, mkdir, open, readFile, rm, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 
-import type { MailboxMessage, MailboxMessageBody, MailboxMessageKind } from "../contracts/four-layer.js";
+import type {
+  MailboxMessage,
+  MailboxMessageBody,
+  MailboxMessageKind,
+  MailboxTransportStatus,
+} from "../contracts/four-layer.js";
+import {
+  captureRuntimeOwnedFileSnapshot,
+  persistRuntimeOwnedFileSnapshot,
+  readRuntimeOwnedFileSnapshot,
+  runtimeOwnedSnapshotPath,
+  type RuntimeOwnedFileSnapshot,
+} from "./runtime-owned-files.js";
 
 const LOCK_RETRY_MS = 25;
 const LOCK_TIMEOUT_MS = 5_000;
@@ -21,6 +33,12 @@ export interface SendMailboxMessageInput {
   body: MailboxMessageBody;
   summary?: string;
   replyTo?: string;
+  transportMessageId?: string;
+  transportTimestamp?: string;
+  transportStatus?: MailboxTransportStatus;
+  deliveryStatus?: MailboxMessage["deliveryStatus"];
+  deliveryAttemptedAt?: MailboxMessage["deliveryAttemptedAt"];
+  deliveryFailedReason?: MailboxMessage["deliveryFailedReason"];
 }
 
 export class FileBackedMailbox {
@@ -46,6 +64,10 @@ export class FileBackedMailbox {
     return join(this.runDir, "mailbox.jsonl");
   }
 
+  runtimeSnapshotPath(): string {
+    return runtimeOwnedSnapshotPath(this.runDir, "mailbox");
+  }
+
   async ensure(): Promise<void> {
     await mkdir(join(this.runDir, "inboxes"), { recursive: true });
     await mkdir(dirname(this.mirrorPath()), { recursive: true });
@@ -61,13 +83,20 @@ export class FileBackedMailbox {
       await readFile(this.mirrorPath(), "utf8");
     } catch {
       await writeFile(this.mirrorPath(), "", "utf8");
+      await this.captureRuntimeSnapshot();
     }
   }
 
   async send(input: SendMailboxMessageInput): Promise<MailboxMessage> {
     await this.ensure();
-    const teammateId = input.to;
-    const message: MailboxMessage = {
+    const message = this.createMessage(input);
+    await this.appendToInbox(message);
+    await this.appendToMirror(message);
+    return message;
+  }
+
+  createMessage(input: SendMailboxMessageInput): MailboxMessage {
+    return {
       id: this.idGen(),
       to: input.to,
       from: input.from,
@@ -76,16 +105,45 @@ export class FileBackedMailbox {
       body: input.body,
       ...(input.summary ? { summary: input.summary } : {}),
       ...(input.replyTo ? { replyTo: input.replyTo } : {}),
+      ...(input.transportMessageId ? { transportMessageId: input.transportMessageId } : {}),
+      ...(input.transportTimestamp ? { transportTimestamp: input.transportTimestamp } : {}),
+      ...(input.transportStatus ? { transportStatus: input.transportStatus } : {}),
+      ...(input.deliveryStatus ? { deliveryStatus: input.deliveryStatus } : {}),
+      ...(input.deliveryAttemptedAt ? { deliveryAttemptedAt: input.deliveryAttemptedAt } : {}),
+      ...(input.deliveryFailedReason ? { deliveryFailedReason: input.deliveryFailedReason } : {}),
     };
+  }
+
+  async appendToInbox(message: MailboxMessage): Promise<void> {
+    await this.ensure();
+    const teammateId = message.to;
     await withFileLock(`${this.inboxPath(teammateId)}.lock`, async () => {
       const inbox = await this.readInbox(teammateId);
       inbox.push(message);
       await writeFile(this.inboxPath(teammateId), JSON.stringify(inbox, null, 2) + "\n", "utf8");
     });
+  }
+
+  async appendToMirror(message: MailboxMessage): Promise<void> {
+    await this.ensure();
     await withFileLock(`${this.mirrorPath()}.lock`, async () => {
       await appendFile(this.mirrorPath(), JSON.stringify(message) + "\n", "utf8");
+      await this.captureRuntimeSnapshot();
     });
-    return message;
+  }
+
+  async readMirror(): Promise<MailboxMessage[]> {
+    await this.ensure();
+    const raw = await readFile(this.mirrorPath(), "utf8");
+    return raw
+      .split("\n")
+      .map((line) => line.trim())
+      .filter((line) => line.length > 0)
+      .map((line) => JSON.parse(line) as MailboxMessage);
+  }
+
+  async readRuntimeSnapshot(): Promise<RuntimeOwnedFileSnapshot | null> {
+    return readRuntimeOwnedFileSnapshot(this.runtimeSnapshotPath());
   }
 
   async read(teammateId: string, options: { unreadOnly?: boolean } = {}): Promise<MailboxMessage[]> {
@@ -113,6 +171,19 @@ export class FileBackedMailbox {
     const raw = await readFile(this.inboxPath(teammateId), "utf8");
     const parsed = JSON.parse(raw) as MailboxMessage[];
     return Array.isArray(parsed) ? parsed : [];
+  }
+
+  private async captureRuntimeSnapshot(): Promise<void> {
+    // Best-effort: audit guard is emit-only, so snapshot I/O failure must not
+    // fail the surrounding mailbox write. Loss of a snapshot just means a
+    // future external-write check will skip rather than producing a false
+    // positive.
+    try {
+      const snapshot = await captureRuntimeOwnedFileSnapshot(this.mirrorPath(), this.clock().toISOString());
+      await persistRuntimeOwnedFileSnapshot(this.runtimeSnapshotPath(), snapshot);
+    } catch {
+      // intentionally swallowed
+    }
   }
 }
 

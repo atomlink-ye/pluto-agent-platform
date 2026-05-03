@@ -5,6 +5,8 @@ export const CANONICAL_BLOCKER_REASONS: readonly BlockerReasonV0[] = [
   "credential_missing",
   "quota_exceeded",
   "capability_unavailable",
+  "chat_transport_unavailable",
+  "mailbox_mirror_failed",
   "runtime_permission_denied",
   "runtime_timeout",
   "empty_artifact",

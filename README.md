@@ -8,7 +8,8 @@ Pluto is a **playbook-first agent harness**.
 > Pluto persists mailbox/task/evidence artifacts.
 
 The v1.6 mainline is the four-layer manager-run harness with mailbox + shared task list +
-active hooks + plan-approval round-trip. Paseo chat is the live mailbox transport.
+active hooks + plan-approval round-trip. Paseo chat is the target live mailbox transport
+after `agent-teams-chat-mailbox-runtime` Stage B.
 
 ## Quickstart (offline, no Docker)
 
@@ -51,6 +52,7 @@ Canonical live-smoke knobs:
 - `PASEO_MODEL` — model id
 - `PASEO_MODE` — adapter launch mode (`orchestrator` by default)
 - `PASEO_HOST` — explicit paseo daemon host
+- `PLUTO_DISPATCH_MODE` — dispatch mode (`teamlead_chat` by default, `static_loop` fallback)
 - `PLUTO_SCENARIO` — scenario selection
 - `PLUTO_RUN_PROFILE` — run-profile selection
 - `PLUTO_PLAYBOOK` — playbook override
@@ -65,6 +67,7 @@ See `docs/harness.md` for the canonical knob table.
 
 - Run starts and writes `mailbox.jsonl` plus `tasks.json`.
 - Planner → generator → evaluator tasks complete in dependency order.
+- `events.jsonl` records `spawn_request_received`, `spawn_request_executed`, `worker_complete_received`, and `final_reconciliation_received` with `orchestrationSource: "teamlead_chat"` in the chat-driven path.
 - `mailbox.jsonl` contains team-lead coordination, teammate completion, FINAL summary,
   and plan-approval messages when applicable.
 - `evidence-packet.json` records role citations and lineage back to mailbox/task files.

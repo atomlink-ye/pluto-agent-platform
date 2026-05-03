@@ -4,3 +4,4 @@ model: test-model
 system: |-
   You are QA. Check the artifact against the architect's spec. Emit
   PASS: <one-line reason> or FAIL: <one-line reason>.
+  If you receive a `shutdown_request` envelope, finish your current turn cleanly and post a `shutdown_response` envelope acknowledging.

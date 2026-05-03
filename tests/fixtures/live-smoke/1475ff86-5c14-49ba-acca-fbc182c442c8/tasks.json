@@ -1,0 +1,42 @@
+{
+  "nextId": 4,
+  "tasks": [
+    {
+      "id": "task-1",
+      "status": "completed",
+      "dependsOn": [],
+      "createdAt": "2026-05-03T04:51:42.647Z",
+      "updatedAt": "2026-05-03T04:54:54.884Z",
+      "summary": "architect: Produce a markdown file that says hello from the lead, architect, coder, and qa (one line each).",
+      "artifacts": [],
+      "assigneeId": "architect",
+      "claimedBy": "architect"
+    },
+    {
+      "id": "task-2",
+      "status": "completed",
+      "dependsOn": [
+        "task-1"
+      ],
+      "createdAt": "2026-05-03T04:51:42.661Z",
+      "updatedAt": "2026-05-03T04:57:09.303Z",
+      "summary": "coder: Produce a markdown file that says hello from the lead, architect, coder, and qa (one line each).",
+      "artifacts": [],
+      "assigneeId": "coder",
+      "claimedBy": "coder"
+    },
+    {
+      "id": "task-3",
+      "status": "completed",
+      "dependsOn": [
+        "task-2"
+      ],
+      "createdAt": "2026-05-03T04:51:42.675Z",
+      "updatedAt": "2026-05-03T04:59:04.809Z",
+      "summary": "qa: Produce a markdown file that says hello from the lead, architect, coder, and qa (one line each).",
+      "artifacts": [],
+      "assigneeId": "qa",
+      "claimedBy": "qa"
+    }
+  ]
+}

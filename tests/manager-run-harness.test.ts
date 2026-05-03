@@ -35,8 +35,16 @@ describe("manager run harness", () => {
     await expect(access(join(result.runDir, "tasks.json"))).resolves.toBeUndefined();
     const mailboxLog = await readFile(join(result.runDir, "mailbox.jsonl"), "utf8");
     const tasks = await readFile(join(result.runDir, "tasks.json"), "utf8");
+    const artifact = await readFile(join(workspace, "artifact.md"), "utf8");
     expect(mailboxLog).toContain('"summary":"FINAL"');
+    expect(mailboxLog).toContain("Coordination handle");
+    expect(mailboxLog).not.toContain("/mailbox.jsonl");
+    expect(mailboxLog).not.toContain("/tasks.json");
     expect(tasks).toContain('"status": "completed"');
+    expect(artifact.toLowerCase()).toContain("lead");
+    expect(artifact.toLowerCase()).toContain("planner");
+    expect(artifact.toLowerCase()).toContain("generator");
+    expect(artifact.toLowerCase()).toContain("evaluator");
   });
 
   it("passes mailbox metadata into adapter startRun and createLeadSession", async () => {
@@ -70,7 +78,8 @@ describe("manager run harness", () => {
     expect(result.run.status).toBe("succeeded");
     expect(capturedStartRun?.playbook?.id).toBe("research-review");
     expect(capturedStartRun?.transcript?.path).toContain(`${result.run.runId}/mailbox.jsonl`);
-    expect(capturedStartRun?.transcript?.roomRef).toBe(`mailbox:${result.run.runId}`);
+    expect(capturedStartRun?.transcript?.roomRef).toBe(result.run.coordinationChannel?.locator);
+    expect(capturedStartRun?.transcript?.roomRef.startsWith("fake-room:")).toBe(true);
     expect(capturedCreateLeadSession?.transcript).toEqual(capturedStartRun?.transcript);
   });
 

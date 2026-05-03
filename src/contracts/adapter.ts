@@ -72,6 +72,27 @@ export interface PaseoTeamAdapter {
     message: string;
   }): Promise<void>;
 
+  /** Deliver a non-summary message into an existing session. */
+  sendSessionMessage(input: {
+    runId: string;
+    sessionId: string;
+    message: string;
+    wait?: boolean;
+  }): Promise<void>;
+
+  /** Resolve a role's active session for this run, then deliver a message. */
+  sendRoleMessage(input: {
+    runId: string;
+    roleId: string;
+    message: string;
+    wait?: boolean;
+  }): Promise<void>;
+
+  /** Return the currently active role -> session mapping for this run. */
+  listActiveRoleSessions(input: {
+    runId: string;
+  }): Promise<Record<string, string>>;
+
   /**
    * Pull the next batch of agent events. Implementations should buffer and
    * return events in arrival order, never replaying duplicates.

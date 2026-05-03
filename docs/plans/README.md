@@ -55,6 +55,7 @@ Each plan is a markdown file. Use this template:
 
 ## Active Plans
 
+- `active/agent-teams-chat-mailbox-runtime.md` — Stage C inbox delivery loop and plan-approval transport wiring.
 - `active/full-product-shape-hardening.md` — post-PRODUCT_COMPLETE hardening and cleanup.
 
 ## Completed Plans

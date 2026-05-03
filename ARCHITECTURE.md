@@ -9,7 +9,7 @@
 | `src/four-layer/` | mailbox/tasks/hooks/plan approval + render/load/audit | file-backed runtime primitives |
 | `src/orchestrator/manager-run-harness.ts` | main runtime orchestration | run lifecycle, evidence integration |
 | `src/adapters/fake/` | deterministic adapter | in-memory mailbox/task runtime |
-| `src/adapters/paseo-opencode/` | live adapter | paseo chat transport + OpenCode launch |
+| `src/adapters/paseo-opencode/` | live adapter | target paseo chat transport + OpenCode launch |
 | `docker/live-smoke.ts` | live E2E | smoke assertions |
 
 ## Control Flow

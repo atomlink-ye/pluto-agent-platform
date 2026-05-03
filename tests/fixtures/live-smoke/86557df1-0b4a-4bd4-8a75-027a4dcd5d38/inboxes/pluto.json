@@ -1,0 +1,15 @@
+[
+  {
+    "id": "98fdd76a-2b61-4c97-9618-8ee7f9991e4e",
+    "to": "pluto",
+    "from": "lead",
+    "createdAt": "2026-05-03T02:58:31.346Z",
+    "kind": "text",
+    "body": "Final Summary\nplanner:5cc0a766-95b9-4723-bf6d-e924905aaa25\ngenerator:91cc589f-3840-410b-829a-a4983464922d\nevaluator:8cea904a-d9b4-4d35-a593-9db322554e2c",
+    "summary": "FINAL",
+    "transportMessageId": "b8c03418-885e-4e96-9159-8f5c80c9f4db",
+    "transportTimestamp": "2026-05-03T02:58:34.833Z",
+    "transportStatus": "ok",
+    "deliveryStatus": "pending"
+  }
+]

@@ -6,6 +6,7 @@ import type {
   AcceptanceCheckResult,
 } from "./index.js";
 import type {
+  EvidenceAuditEvent,
   EvidenceCommandResult,
   EvidencePacket,
   EvidenceRoleCitation,
@@ -26,6 +27,7 @@ export interface AggregateEvidencePacketInput {
   commandResults?: EvidenceCommandResult[];
   transitions?: EvidenceTransition[];
   roleCitations?: EvidenceRoleCitation[];
+  auditEvents?: EvidenceAuditEvent[];
   acceptance?: AcceptanceCheckResult;
   audit?: AuditMiddlewareResult;
   stdoutPath?: string;
@@ -50,6 +52,7 @@ export function aggregateEvidencePacket(input: AggregateEvidencePacketInput): Ev
     ...(input.commandResults?.length ? { commandResults: redactObject(input.commandResults) as EvidenceCommandResult[] } : {}),
     ...(input.transitions?.length ? { transitions: redactObject(input.transitions) as EvidenceTransition[] } : {}),
     ...(input.roleCitations?.length ? { roleCitations: redactObject(input.roleCitations) as EvidenceRoleCitation[] } : {}),
+    ...(input.auditEvents?.length ? { auditEvents: redactObject(input.auditEvents) as EvidenceAuditEvent[] } : {}),
     ...((input.stdoutPath || input.transcriptPath || input.finalReportPath || input.mailboxLogPath || input.taskListPath || input.acceptance || input.audit)
       ? {
           lineage: {
@@ -111,6 +114,14 @@ export function renderEvidencePacketMarkdown(packet: EvidencePacket): string {
     lines.push("## Role citations", "");
     for (const citation of packet.roleCitations) {
       lines.push(`- ${citation.role}${citation.summary ? `: ${citation.summary}` : ""}`);
+    }
+    lines.push("");
+  }
+
+  if (packet.auditEvents?.length) {
+    lines.push("## Audit events", "");
+    for (const event of packet.auditEvents) {
+      lines.push(`- ${event.kind} @ ${event.hookBoundary}: ${event.filePath}`);
     }
     lines.push("");
   }

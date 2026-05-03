@@ -13,6 +13,8 @@ const canonicalReasons: BlockerReasonV0[] = [
   "credential_missing",
   "quota_exceeded",
   "capability_unavailable",
+  "chat_transport_unavailable",
+  "mailbox_mirror_failed",
   "runtime_permission_denied",
   "runtime_timeout",
   "empty_artifact",
@@ -24,9 +26,9 @@ const canonicalReasons: BlockerReasonV0[] = [
 
 describe("blocker-classifier", () => {
   describe("canonical taxonomy", () => {
-    it("declares exactly the canonical 11 BlockerReasonV0 values", () => {
+    it("declares exactly the canonical 13 BlockerReasonV0 values", () => {
       expect(CANONICAL_BLOCKER_REASONS).toEqual(canonicalReasons);
-      expect(new Set(CANONICAL_BLOCKER_REASONS).size).toBe(11);
+      expect(new Set(CANONICAL_BLOCKER_REASONS).size).toBe(13);
     });
 
     it.each<[BlockerReasonV0, Parameters<typeof classifyBlocker>[0]]>([

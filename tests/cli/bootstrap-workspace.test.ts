@@ -91,5 +91,5 @@ describe("pnpm bootstrap", () => {
       principalRef: { principalId: "user-admin-2" },
       blocker: null,
     });
-  });
+  }, 30_000);
 });

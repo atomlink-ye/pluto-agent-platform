@@ -64,6 +64,7 @@ export type AdapterHealthReasonClassV0 =
   | "credential_missing"
   | "quota_exceeded"
   | "capability_unavailable"
+  | "chat_transport_unavailable"
   | "adapter_protocol_error"
   | "runtime_permission_denied"
   | "runtime_timeout"
@@ -250,7 +251,11 @@ function toAdapterReasonClass(
     source: "adapter",
   }).reason;
 
-  if (classified === "empty_artifact" || classified === "validation_failed") {
+  if (
+    classified === "empty_artifact" ||
+    classified === "validation_failed" ||
+    classified === "mailbox_mirror_failed"
+  ) {
     return "runtime_error";
   }
 

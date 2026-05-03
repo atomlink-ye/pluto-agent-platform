@@ -1,0 +1,36 @@
+[
+  {
+    "id": "86c52df7-5d13-4bf5-9954-5d5e139e98fd",
+    "to": "planner",
+    "from": "lead",
+    "createdAt": "2026-05-03T02:51:38.700Z",
+    "kind": "text",
+    "body": "Task task-1\nRole: planner\nGoal: Produce a markdown file that says hello from the lead, planner, generator, and evaluator (one line each).",
+    "summary": "TASK task-1",
+    "replyTo": "task-1",
+    "transportMessageId": "51f46806-7ae4-492c-bd57-08dc6ef59fbc",
+    "transportTimestamp": "2026-05-03T02:51:42.672Z",
+    "transportStatus": "ok",
+    "deliveryStatus": "pending",
+    "readAt": "2026-05-03T02:52:28.205Z"
+  },
+  {
+    "id": "a753cc88-50b0-470a-a5c2-40f270c76ad6",
+    "to": "planner",
+    "from": "lead",
+    "createdAt": "2026-05-03T02:52:36.873Z",
+    "kind": "plan_approval_response",
+    "body": {
+      "approved": true,
+      "mode": "workspace_write",
+      "taskId": "task-1"
+    },
+    "summary": "PLAN_APPROVED task-1",
+    "replyTo": "44c40a77-e863-42f6-9ca3-43c797bfdb47",
+    "transportMessageId": "943b9f7f-38eb-4d5e-bbc6-ca53a7d5589b",
+    "transportTimestamp": "2026-05-03T02:52:43.440Z",
+    "transportStatus": "ok",
+    "deliveryStatus": "pending",
+    "readAt": "2026-05-03T02:53:33.460Z"
+  }
+]

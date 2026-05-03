@@ -6,7 +6,10 @@ Status: Active
 
 ## Goal
 
-Replace Pluto's v1.5 team-lead-direct plus fallback runtime with a single Claude Code Agent Teams aligned runtime built on mailbox, shared task list, active hooks, and plan-approval round-trips, using paseo chat as the mailbox transport and deleting the v1 bridge and v1.5 fallback paths entirely.
+Replace Pluto's v1.5 team-lead-direct plus fallback runtime with a single Claude Code Agent Teams aligned runtime built on mailbox, shared task list, active hooks, and plan-approval round-trips, targeting paseo chat as the mailbox transport and deleting the v1 bridge and v1.5 fallback paths entirely.
+
+Forward pointer: v1.6 commit `72e063d` did not actually wire paseo chat into the live
+path. Stage B of `agent-teams-chat-mailbox-runtime` is the planned wiring step.
 
 ## Scope
 
@@ -44,5 +47,5 @@ Replace Pluto's v1.5 team-lead-direct plus fallback runtime with a single Claude
 
 ## Risks
 
-- Paseo chat reliability may require Pluto-owned mailbox export to remain the authoritative store, with paseo chat acting as transport or notification only.
+- Target transport note: paseo chat reliability may require Pluto-owned mailbox export to remain the authoritative store, with paseo chat acting as transport or notification only.
 - The existing baseline timeout may be unrelated to v1.6 and could still affect final gate runs.

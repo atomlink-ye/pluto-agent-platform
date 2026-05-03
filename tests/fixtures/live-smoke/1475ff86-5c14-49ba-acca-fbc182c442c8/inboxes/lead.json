@@ -1,0 +1,158 @@
+[
+  {
+    "id": "79e068fe-3ccd-4960-b772-cc16383d4f98",
+    "to": "lead",
+    "from": "pluto",
+    "createdAt": "2026-05-03T04:51:42.688Z",
+    "kind": "text",
+    "body": "Run 1475ff86-5c14-49ba-acca-fbc182c442c8 started. Pluto owns the mailbox mirror and shared task list for this run.",
+    "summary": "RUN_START",
+    "transportStatus": "post_failed",
+    "deliveryStatus": "failed",
+    "deliveryAttemptedAt": "2026-05-03T04:52:13.048Z",
+    "deliveryFailedReason": "transport_post_failed",
+    "readAt": "2026-05-03T04:52:33.741Z"
+  },
+  {
+    "id": "c3431fbe-2d79-4560-ad03-48d98a7cccdf",
+    "to": "lead",
+    "from": "lead",
+    "createdAt": "2026-05-03T04:52:13.137Z",
+    "kind": "spawn_request",
+    "body": {
+      "schemaVersion": "v1",
+      "targetRole": "architect",
+      "taskId": "task-1",
+      "rationale": "Start the first dispatched task."
+    },
+    "summary": "SPAWN task-1",
+    "replyTo": "task-1",
+    "transportMessageId": "93cabaf4-f1d6-4ac0-a303-9743c7117078",
+    "transportTimestamp": "2026-05-03T04:52:17.737Z",
+    "transportStatus": "ok",
+    "deliveryStatus": "pending",
+    "readAt": "2026-05-03T04:52:33.753Z"
+  },
+  {
+    "id": "2c3f6cce-3c13-4382-8cc7-8db9518e2384",
+    "to": "lead",
+    "from": "architect",
+    "createdAt": "2026-05-03T04:54:12.439Z",
+    "kind": "worker_complete",
+    "body": {
+      "schemaVersion": "v1",
+      "taskId": "task-1",
+      "status": "succeeded",
+      "summary": "Checking the workspace state, then I’ll write the required markdown artifact.I found the target artifact; now I’m checking whether it already has content before overwriting it."
+    },
+    "summary": "COMPLETE task-1",
+    "replyTo": "task-1",
+    "transportMessageId": "d8c205fd-7933-4043-9954-732d1dcded3f",
+    "transportTimestamp": "2026-05-03T04:54:17.167Z",
+    "transportStatus": "ok",
+    "deliveryStatus": "pending",
+    "readAt": "2026-05-03T04:55:07.724Z"
+  },
+  {
+    "id": "739e1cf3-6dfb-475c-8ece-f703fca91656",
+    "to": "lead",
+    "from": "lead",
+    "createdAt": "2026-05-03T04:54:54.895Z",
+    "kind": "spawn_request",
+    "body": {
+      "schemaVersion": "v1",
+      "targetRole": "coder",
+      "taskId": "task-2",
+      "rationale": "Continue after task-1."
+    },
+    "summary": "SPAWN task-2",
+    "replyTo": "task-2",
+    "transportMessageId": "446488c4-e6e4-4248-85e0-0bef06cfd644",
+    "transportTimestamp": "2026-05-03T04:55:01.098Z",
+    "transportStatus": "ok",
+    "deliveryStatus": "pending",
+    "readAt": "2026-05-03T04:56:26.546Z"
+  },
+  {
+    "id": "9150e73c-9c39-49a4-9d6b-b0aa24c131d7",
+    "to": "lead",
+    "from": "coder",
+    "createdAt": "2026-05-03T04:56:13.787Z",
+    "kind": "worker_complete",
+    "body": {
+      "schemaVersion": "v1",
+      "taskId": "task-2",
+      "status": "succeeded",
+      "summary": "Inspecting the workspace and artifact target, then I’ll write the markdown file."
+    },
+    "summary": "COMPLETE task-2",
+    "replyTo": "task-2",
+    "transportMessageId": "872fd10d-8f48-481e-97c9-102d7b04cda7",
+    "transportTimestamp": "2026-05-03T04:56:21.359Z",
+    "transportStatus": "ok",
+    "deliveryStatus": "pending",
+    "readAt": "2026-05-03T04:57:17.526Z"
+  },
+  {
+    "id": "f354cc37-f4a5-4153-a7aa-900ac05a74b0",
+    "to": "lead",
+    "from": "lead",
+    "createdAt": "2026-05-03T04:57:09.315Z",
+    "kind": "spawn_request",
+    "body": {
+      "schemaVersion": "v1",
+      "targetRole": "qa",
+      "taskId": "task-3",
+      "rationale": "Continue after task-2."
+    },
+    "summary": "SPAWN task-3",
+    "replyTo": "task-3",
+    "transportMessageId": "e6c69dcc-688f-4451-a305-d5316123e26b",
+    "transportTimestamp": "2026-05-03T04:57:13.651Z",
+    "transportStatus": "ok",
+    "deliveryStatus": "pending",
+    "readAt": "2026-05-03T04:58:32.330Z"
+  },
+  {
+    "id": "3262e74a-8261-4c22-93da-e9fc09e3af3f",
+    "to": "lead",
+    "from": "qa",
+    "createdAt": "2026-05-03T04:58:20.753Z",
+    "kind": "worker_complete",
+    "body": {
+      "schemaVersion": "v1",
+      "taskId": "task-3",
+      "status": "succeeded",
+      "summary": "Inspecting the artifact content against the spec now."
+    },
+    "summary": "COMPLETE task-3",
+    "replyTo": "task-3",
+    "transportMessageId": "bbd06159-ebc1-47e6-ac46-f34e91969414",
+    "transportTimestamp": "2026-05-03T04:58:26.930Z",
+    "transportStatus": "ok",
+    "deliveryStatus": "pending",
+    "readAt": "2026-05-03T04:59:13.768Z"
+  },
+  {
+    "id": "db51d3d0-4c5b-498b-bc6c-0fb5a17dc806",
+    "to": "lead",
+    "from": "lead",
+    "createdAt": "2026-05-03T04:59:04.815Z",
+    "kind": "final_reconciliation",
+    "body": {
+      "schemaVersion": "v1",
+      "summary": "Completed 3 dispatched tasks.",
+      "completedTaskIds": [
+        "task-1",
+        "task-2",
+        "task-3"
+      ]
+    },
+    "summary": "FINAL_RECONCILIATION",
+    "transportMessageId": "227be284-979d-413c-8cda-5a7d2fe7bb5c",
+    "transportTimestamp": "2026-05-03T04:59:09.313Z",
+    "transportStatus": "ok",
+    "deliveryStatus": "pending",
+    "readAt": "2026-05-03T04:59:35.674Z"
+  }
+]

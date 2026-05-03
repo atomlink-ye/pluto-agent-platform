@@ -22,5 +22,5 @@ approval_gates:
 secrets:
   redact: true
 runtime:
-  paseo_mode: orchestrator
+  dispatch_mode: orchestrator
   lead_timeout_seconds: 600

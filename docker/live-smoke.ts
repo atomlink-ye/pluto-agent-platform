@@ -26,20 +26,20 @@
  */
 import { fileURLToPath } from "node:url";
 import { access, mkdir, readFile } from "node:fs/promises";
-import { resolve } from "node:path";
+import { join, resolve } from "node:path";
 import { constants, existsSync } from "node:fs";
 import * as process from "node:process";
 
 import { FakeAdapter } from "../src/adapters/fake/index.js";
 import { PaseoOpenCodeAdapter } from "../src/adapters/paseo-opencode/index.js";
 import { DEFAULT_RUNNER } from "../src/adapters/paseo-opencode/process-runner.js";
+import { loadFourLayerWorkspace, resolveFourLayerSelection } from "../src/four-layer/index.js";
 import { normalizeBlockerReason, runManagerHarness, validateEvidencePacketV0 } from "../src/orchestrator/index.js";
 import type { EvidencePacket } from "../src/contracts/four-layer.js";
 import type {
   AgentEvent,
   BlockerReasonV0,
   EvidencePacketV0,
-  WorkerRequestedOrchestratorSource,
 } from "../src/contracts/types.js";
 
 function normalizePaseoHostForCli(host: string | undefined): string | undefined {
@@ -146,55 +146,55 @@ export function classifyLiveSmokeEvidence(packet: EvidencePacketV0): LiveSmokeEv
   };
 }
 
-function summarizeOrchestratorSources(events: AgentEvent[]) {
-  const sourceByRole = new Map<string, WorkerRequestedOrchestratorSource>();
-  for (const event of events) {
-    if (event.type !== "worker_requested") continue;
-    const roleId = String(event.payload["targetRole"] ?? event.roleId ?? "");
-    const orchestratorSource = event.payload["orchestratorSource"];
-    if (!roleId) {
-      throw new Error("worker_requested event missing targetRole for orchestratorSource summary");
+function summarizeDispatchEvents(events: AgentEvent[]) {
+  const trackedTypes = [
+    "evaluator_verdict_received",
+    "spawn_request_received",
+    "spawn_request_executed",
+    "worker_complete_received",
+    "final_reconciliation_received",
+  ] as const;
+  const relevant = events.filter((event) => trackedTypes.includes(event.type as typeof trackedTypes[number]));
+  const counts = Object.fromEntries(trackedTypes.map((type) => [type, relevant.filter((event) => event.type === type).length]));
+  const sources = Array.from(new Set(
+    relevant
+      .map((event) => event.payload["orchestrationSource"])
+      .filter((value): value is string => typeof value === "string" && value.length > 0),
+  ));
+  return { counts, sources };
+}
+
+function formatRoleList(roles: string[]): string {
+  if (roles.length === 0) return "the team";
+  if (roles.length === 1) return roles[0]!;
+  if (roles.length === 2) return `${roles[0]} and ${roles[1]}`;
+  return `${roles.slice(0, -1).join(", ")}, and ${roles[roles.length - 1]}`;
+}
+
+function buildRuntimeTask(expectedWorkerRoles: string[]): string {
+  return `Produce a markdown file that says hello from the lead, ${formatRoleList(expectedWorkerRoles)} (one line each).`;
+}
+
+function extractTransportMessageId(value: unknown): string | null {
+  if (typeof value !== "object" || value === null) return null;
+  const record = value as Record<string, unknown>;
+  for (const key of ["id", "messageId", "transportMessageId"]) {
+    if (typeof record[key] === "string" && record[key]) {
+      return record[key] as string;
     }
-    if (
-      orchestratorSource !== "lead_marker" &&
-      orchestratorSource !== "pluto_fallback" &&
-      orchestratorSource !== "teamlead_direct"
-    ) {
-      throw new Error(`worker_requested event for ${roleId} missing valid orchestratorSource`);
-    }
-    sourceByRole.set(roleId, orchestratorSource);
   }
+  return null;
+}
 
-  const distribution: Record<WorkerRequestedOrchestratorSource, number> = {
-    lead_marker: 0,
-    pluto_fallback: 0,
-    teamlead_direct: 0,
-  };
-  const byRole: Record<string, WorkerRequestedOrchestratorSource> = {};
-
-  for (const event of events) {
-    if (event.type !== "worker_completed") continue;
-    const roleId = String(event.roleId ?? event.payload["targetRole"] ?? "");
-    if (!roleId) {
-      throw new Error("worker_completed event missing roleId for orchestratorSource summary");
-    }
-    const orchestratorSource = sourceByRole.get(roleId);
-    const normalizedSource = orchestratorSource ?? "teamlead_direct";
-    distribution[normalizedSource] += 1;
-    byRole[roleId] = normalizedSource;
+function extractTransportMessages(payload: unknown): Array<Record<string, unknown>> {
+  if (Array.isArray(payload)) {
+    return payload.filter((entry): entry is Record<string, unknown> => typeof entry === "object" && entry !== null);
   }
-
-  const totalWorkers = Object.keys(byRole).length;
-  if (totalWorkers === 0) {
-    throw new Error("no completed workers were attributed to a worker_requested orchestratorSource");
+  if (typeof payload === "object" && payload !== null && Array.isArray((payload as Record<string, unknown>)["messages"])) {
+    return ((payload as Record<string, unknown>)["messages"] as unknown[])
+      .filter((entry): entry is Record<string, unknown> => typeof entry === "object" && entry !== null);
   }
-
-  return {
-    byRole,
-    distribution,
-    totalWorkers,
-    fallbackRatio: distribution.pluto_fallback / totalWorkers,
-  };
+  return [];
 }
 
 async function preflight(): Promise<BlockerReport | null> {
@@ -293,7 +293,14 @@ async function main() {
     process.exit(2);
   }
 
-  const expectedWorkerRoles = ["planner", "generator", "evaluator"];
+  const workspace = await loadFourLayerWorkspace(process.cwd());
+  const resolvedSelection = await resolveFourLayerSelection(workspace, {
+    scenario: REQUESTED_SCENARIO,
+    runProfile: REQUESTED_RUN_PROFILE,
+    ...(REQUESTED_PLAYBOOK ? { playbook: REQUESTED_PLAYBOOK } : {}),
+  });
+  const expectedWorkerRoles = resolvedSelection.members.map((member) => member.value.name);
+  const runtimeTask = buildRuntimeTask(expectedWorkerRoles);
 
   const startedAt = Date.now();
   const result = await runManagerHarness({
@@ -302,7 +309,7 @@ async function main() {
       scenario: REQUESTED_SCENARIO,
       runProfile: REQUESTED_RUN_PROFILE,
       ...(REQUESTED_PLAYBOOK ? { playbook: REQUESTED_PLAYBOOK } : {}),
-      runtimeTask: "Produce a markdown file that says hello from the lead, planner, generator, and evaluator (one line each).",
+      runtimeTask,
     },
     workspaceOverride: WORKSPACE,
     dataDir: DATA_DIR,
@@ -311,23 +318,9 @@ async function main() {
       : new PaseoOpenCodeAdapter({ workspaceCwd }),
   });
 
-  let orchestratorSources: ReturnType<typeof summarizeOrchestratorSources>;
-  try {
-    orchestratorSources = summarizeOrchestratorSources(result.legacyResult.events);
-  } catch (error) {
-    console.error(
-      JSON.stringify(
-        {
-          status: "assertion_failed",
-          message: error instanceof Error ? error.message : String(error),
-          runId: result.run.runId,
-        },
-        null,
-        2,
-      ),
-    );
-    process.exit(1);
-  }
+  const expectedDispatchSource = process.env["PLUTO_DISPATCH_MODE"] === "static_loop" ? "static_loop" : "teamlead_chat";
+  const expectsPlanApprovalRoundTrip = expectedWorkerRoles.includes("planner");
+  const dispatchSummary = summarizeDispatchEvents(result.legacyResult.events);
 
   let summary: Record<string, unknown> = {
     runId: result.run.runId,
@@ -344,7 +337,8 @@ async function main() {
     })),
     artifactPath: result.artifactPath,
     eventsPath: `${result.runDir}/events.jsonl`,
-    orchestratorSources,
+    dispatchSummary,
+    expectedDispatchSource,
   };
 
   // --- MVP-beta evidence assertions ---
@@ -422,9 +416,7 @@ async function main() {
     );
     process.exit(1);
   }
-  if (!canonicalEvidence.roleCitations?.some((citation) => citation.role === "planner")
-    || !canonicalEvidence.roleCitations?.some((citation) => citation.role === "generator")
-    || !canonicalEvidence.roleCitations?.some((citation) => citation.role === "evaluator")) {
+  if (expectedWorkerRoles.some((roleId) => !canonicalEvidence.roleCitations?.some((citation) => citation.role === roleId))) {
     console.error(
       JSON.stringify(
         {
@@ -466,6 +458,279 @@ async function main() {
       ),
     );
     process.exit(1);
+  }
+  if (!result.run.coordinationChannel?.locator || result.run.coordinationChannel.locator.startsWith("mailbox:")) {
+    console.error(
+      JSON.stringify(
+        {
+          status: "assertion_failed",
+          message: "run coordination channel locator was not replaced with a real room id",
+          summary,
+          coordinationChannel: result.run.coordinationChannel ?? null,
+        },
+        null,
+        2,
+      ),
+    );
+    process.exit(1);
+  }
+  if (canonicalEvidence.coordinationChannel?.locator !== result.run.coordinationChannel.locator) {
+    console.error(
+      JSON.stringify(
+        {
+          status: "assertion_failed",
+          message: "canonical evidence coordination channel locator does not match the run coordination channel",
+          summary,
+          coordinationChannel: canonicalEvidence.coordinationChannel ?? null,
+          runCoordinationChannel: result.run.coordinationChannel,
+        },
+        null,
+        2,
+      ),
+    );
+    process.exit(1);
+  }
+  if (evidencePacket.orchestration.transcript.roomRef !== result.run.coordinationChannel.locator) {
+    console.error(
+      JSON.stringify(
+        {
+          status: "assertion_failed",
+          message: "legacy evidence transcript roomRef does not match the run coordination channel locator",
+          summary,
+          transcript: evidencePacket.orchestration.transcript,
+          runCoordinationChannel: result.run.coordinationChannel,
+        },
+        null,
+        2,
+      ),
+    );
+    process.exit(1);
+  }
+  const mailboxJsonlPath = result.run.coordinationChannel.path ?? `${result.runDir}/mailbox.jsonl`;
+  const eventsPath = `${result.runDir}/events.jsonl`;
+  const runEvents = (await readFile(eventsPath, "utf8"))
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0)
+    .map((line) => JSON.parse(line) as AgentEvent);
+  const mailboxEntries = (await readFile(mailboxJsonlPath, "utf8"))
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0)
+      .map((line) => JSON.parse(line) as Record<string, unknown>);
+  const deliverableMailboxEntries = mailboxEntries.filter((entry) => {
+    const to = entry["to"];
+    return typeof to === "string" && to !== "pluto" && to !== "broadcast";
+  });
+  if (mailboxEntries.length === 0) {
+    console.error(
+      JSON.stringify(
+        {
+          status: "assertion_failed",
+          message: "mailbox.jsonl is empty",
+          summary,
+          mailboxJsonlPath,
+        },
+        null,
+        2,
+      ),
+    );
+    process.exit(1);
+  }
+  const mirroredTransportIds = mailboxEntries
+    .filter((entry) => entry["transportStatus"] === "ok" && typeof entry["transportMessageId"] === "string")
+    .map((entry) => String(entry["transportMessageId"]));
+  if (mirroredTransportIds.length !== mailboxEntries.length) {
+    console.error(
+      JSON.stringify(
+        {
+          status: "assertion_failed",
+          message: "mailbox.jsonl entries are missing transport metadata",
+          summary,
+          mailboxJsonlPath,
+        },
+        null,
+        2,
+      ),
+    );
+    process.exit(1);
+  }
+  const deliveredEvents = runEvents.filter((event) => event.type === "mailbox_message_delivered");
+  const queuedEvents = runEvents.filter((event) => event.type === "mailbox_message_queued");
+  const deliveredTransportIds = new Set(
+    deliveredEvents
+      .map((event) => event.payload["transportMessageId"])
+      .filter((value): value is string => typeof value === "string" && value.length > 0),
+  );
+  if (deliveredEvents.length === 0) {
+    console.error(
+      JSON.stringify(
+        {
+          status: "assertion_failed",
+          message: "events.jsonl is missing mailbox_message_delivered evidence",
+          summary,
+          eventsPath,
+        },
+        null,
+        2,
+      ),
+    );
+    process.exit(1);
+  }
+  if (deliveredEvents.length !== deliverableMailboxEntries.length) {
+    console.error(
+      JSON.stringify(
+        {
+          status: "assertion_failed",
+          message: "deliverable mailbox entries and delivered event count diverged",
+          summary,
+          mailboxJsonlPath,
+          deliverableMailboxMessageCount: deliverableMailboxEntries.length,
+          deliveredEventCount: deliveredEvents.length,
+        },
+        null,
+        2,
+      ),
+    );
+    process.exit(1);
+  }
+  const planApprovalRequest = mailboxEntries.find((entry) => entry["kind"] === "plan_approval_request");
+  const planApprovalResponse = mailboxEntries.find((entry) => entry["kind"] === "plan_approval_response");
+  if (expectsPlanApprovalRoundTrip && (!planApprovalRequest || !planApprovalResponse)) {
+    console.error(
+      JSON.stringify(
+        {
+          status: "assertion_failed",
+          message: "mailbox.jsonl is missing the plan-approval round-trip messages",
+          summary,
+          mailboxJsonlPath,
+        },
+        null,
+        2,
+      ),
+    );
+    process.exit(1);
+  }
+  const requestTransportId = typeof planApprovalRequest?.["transportMessageId"] === "string"
+    ? planApprovalRequest["transportMessageId"]
+    : null;
+  const responseTransportId = typeof planApprovalResponse?.["transportMessageId"] === "string"
+    ? planApprovalResponse["transportMessageId"]
+    : null;
+  if (
+    expectsPlanApprovalRoundTrip
+    && (!requestTransportId || !responseTransportId || !deliveredTransportIds.has(requestTransportId) || !deliveredTransportIds.has(responseTransportId))
+  ) {
+    console.error(
+      JSON.stringify(
+        {
+          status: "assertion_failed",
+          message: "plan-approval round-trip is missing delivery evidence in events.jsonl",
+          summary,
+          eventsPath,
+          requestTransportId,
+          responseTransportId,
+        },
+        null,
+        2,
+      ),
+    );
+    process.exit(1);
+  }
+  if (
+    expectsPlanApprovalRoundTrip
+    && (!runEvents.some((event) => event.type === "plan_approval_requested") || !runEvents.some((event) => event.type === "plan_approval_responded"))
+  ) {
+    console.error(
+      JSON.stringify(
+        {
+          status: "assertion_failed",
+          message: "events.jsonl is missing plan_approval_requested/plan_approval_responded evidence",
+          summary,
+          eventsPath,
+        },
+        null,
+        2,
+      ),
+    );
+    process.exit(1);
+  }
+  if (ADAPTER_KIND === "paseo-opencode" && expectedDispatchSource === "teamlead_chat" && expectedWorkerRoles.includes("evaluator")
+    && !runEvents.some((event) => event.type === "evaluator_verdict_received")) {
+    console.error(
+      JSON.stringify(
+        {
+          status: "assertion_failed",
+          message: "events.jsonl is missing evaluator_verdict_received evidence for the chat-driven live path",
+          summary,
+          eventsPath,
+        },
+        null,
+        2,
+      ),
+    );
+    process.exit(1);
+  }
+  let liveChatParity: { checked: boolean; messageCount: number; roomRef: string } = {
+    checked: false,
+    messageCount: mirroredTransportIds.length,
+    roomRef: result.run.coordinationChannel.locator,
+  };
+  if (ADAPTER_KIND === "paseo-opencode") {
+    const paseoBin = process.env["PASEO_BIN"] ?? "paseo";
+    const paseoHost = normalizePaseoHostForCli(process.env["PASEO_HOST"]);
+    const chatRead = await DEFAULT_RUNNER.exec(
+      paseoBin,
+      [
+        "chat",
+        "read",
+        "--since",
+        result.run.startedAt ?? new Date(startedAt).toISOString(),
+        "--json",
+        ...(paseoHost ? ["--host", paseoHost] : []),
+        result.run.coordinationChannel.locator,
+      ],
+    );
+    if (chatRead.exitCode !== 0) {
+      console.error(
+        JSON.stringify(
+          {
+            status: "assertion_failed",
+            message: "paseo chat read failed during live parity verification",
+            summary,
+            stderr: chatRead.stderr,
+          },
+          null,
+          2,
+        ),
+      );
+      process.exit(1);
+    }
+    const liveMessages = extractTransportMessages(JSON.parse(chatRead.stdout));
+    const liveTransportIds = liveMessages
+      .map((message) => extractTransportMessageId(message))
+      .filter((messageId): messageId is string => Boolean(messageId));
+    if (JSON.stringify(liveTransportIds) !== JSON.stringify(mirroredTransportIds)) {
+      console.error(
+        JSON.stringify(
+          {
+            status: "assertion_failed",
+            message: "live paseo chat transcript does not match mailbox mirror transport order",
+            summary,
+            mirroredTransportIds,
+            liveTransportIds,
+          },
+          null,
+          2,
+        ),
+      );
+      process.exit(1);
+    }
+    liveChatParity = {
+      checked: true,
+      messageCount: liveTransportIds.length,
+      roomRef: result.run.coordinationChannel.locator,
+    };
   }
   const evidenceClassification = classifyLiveSmokeEvidence(evidencePacket);
 
@@ -527,22 +792,6 @@ async function main() {
     process.exit(1);
   }
 
-  if (orchestratorSources.fallbackRatio > 0.5) {
-    console.error(
-      JSON.stringify(
-        {
-          status: "assertion_failed",
-          message: "more than 50% of completed workers were dispatched via pluto_fallback",
-          summary,
-          evidence: { md: evidenceMdPath, json: evidenceJsonPath },
-        },
-        null,
-        2,
-      ),
-    );
-    process.exit(1);
-  }
-
   if ((result.legacyResult.status === "failed") || !result.legacyResult.artifact) {
     console.error(
       JSON.stringify(
@@ -560,9 +809,21 @@ async function main() {
     process.exit(1);
   }
   const finalArtifact = result.legacyResult.artifact;
+  summary = {
+    ...summary,
+    coordinationChannel: result.run.coordinationChannel,
+    mailboxJsonlPath,
+    mailboxMessageCount: deliverableMailboxEntries.length,
+    mirroredMailboxMessageCount: mailboxEntries.length,
+    deliveryEvents: {
+      delivered: deliveredEvents.length,
+      queued: queuedEvents.length,
+    },
+    liveChatParity,
+  };
 
   // Assertions on the artifact content.
-  const artifactMd = await readFile(result.artifactPath ?? `${result.runDir}/artifact.md`, "utf8");
+  const artifactMd = await readFile(join(WORKSPACE, "artifact.md"), "utf8");
   const requiredRoles = ["lead", ...expectedWorkerRoles];
   const missing = requiredRoles.filter((r) => !artifactMd.toLowerCase().includes(r));
   if (missing.length > 0) {
@@ -594,19 +855,67 @@ async function main() {
     process.exit(1);
   }
 
-  if (Object.values(orchestratorSources.byRole).some((value) => value !== "teamlead_direct")) {
-    console.error(
-      JSON.stringify(
-        {
-          status: "assertion_failed",
-          message: "manager-run harness emitted non-teamlead_direct worker_requested source",
-          summary,
-        },
-        null,
-        2,
-      ),
-    );
-    process.exit(1);
+  const dispatchEvents = runEvents.filter((event) =>
+    event.type === "spawn_request_received"
+    || event.type === "spawn_request_executed"
+    || event.type === "worker_complete_received"
+    || event.type === "final_reconciliation_received",
+  );
+  if (expectedDispatchSource === "teamlead_chat") {
+    const requiredDispatchTypes = ["spawn_request_received", "spawn_request_executed", "worker_complete_received", "final_reconciliation_received"] as const;
+    for (const requiredType of requiredDispatchTypes) {
+      if (!dispatchEvents.some((event) => event.type === requiredType)) {
+        console.error(
+          JSON.stringify(
+            {
+              status: "assertion_failed",
+              message: `events.jsonl is missing ${requiredType} evidence`,
+              summary,
+              eventsPath,
+            },
+            null,
+            2,
+          ),
+        );
+        process.exit(1);
+      }
+    }
+    if (dispatchEvents.some((event) => event.payload["orchestrationSource"] !== "teamlead_chat")) {
+      console.error(
+        JSON.stringify(
+          {
+            status: "assertion_failed",
+            message: "dispatch events are missing orchestrationSource: teamlead_chat",
+            summary,
+            eventsPath,
+            dispatchEvents: dispatchEvents.map((event) => ({ type: event.type, payload: event.payload })),
+          },
+          null,
+          2,
+        ),
+      );
+      process.exit(1);
+    }
+    for (const roleId of expectedWorkerRoles) {
+      if (!runEvents.some((event) =>
+        event.type === "spawn_request_executed"
+        && event.payload["targetRole"] === roleId,
+      )) {
+        console.error(
+          JSON.stringify(
+            {
+              status: "assertion_failed",
+              message: `events.jsonl is missing spawn_request_executed for ${roleId}`,
+              summary,
+              eventsPath,
+            },
+            null,
+            2,
+          ),
+        );
+        process.exit(1);
+      }
+    }
   }
 
   const leakedProtocol = finalArtifact.contributions.filter((c) =>

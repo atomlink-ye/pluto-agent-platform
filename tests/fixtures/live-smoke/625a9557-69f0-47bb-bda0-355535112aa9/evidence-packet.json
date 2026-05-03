@@ -1,0 +1,87 @@
+{
+  "schemaVersion": 0,
+  "kind": "evidence_packet",
+  "runId": "625a9557-69f0-47bb-bda0-355535112aa9",
+  "status": "succeeded",
+  "summary": "Completed.",
+  "failureReason": null,
+  "coordinationChannel": {
+    "kind": "shared_channel",
+    "locator": "cd88c973-a773-4ae2-88f5-060d9fa0ef99",
+    "path": "[REDACTED:path]"
+  },
+  "artifactRefs": [
+    {
+      "path": "[REDACTED:path]",
+      "label": "artifact"
+    },
+    {
+      "path": "[REDACTED:path]",
+      "label": "task_tree"
+    },
+    {
+      "path": "[REDACTED:path]",
+      "label": "status"
+    },
+    {
+      "path": "[REDACTED:path]",
+      "label": "final_report"
+    }
+  ],
+  "transitions": [
+    {
+      "from": "lead",
+      "to": "planner",
+      "observedAt": "2026-05-03T04:39:41.205Z",
+      "source": "task_list"
+    },
+    {
+      "from": "planner",
+      "to": "generator",
+      "observedAt": "2026-05-03T04:42:32.343Z",
+      "source": "task_list"
+    },
+    {
+      "from": "generator",
+      "to": "evaluator",
+      "observedAt": "2026-05-03T04:44:26.201Z",
+      "source": "task_list"
+    },
+    {
+      "from": "evaluator",
+      "to": "lead",
+      "observedAt": "2026-05-03T04:45:49.815Z",
+      "source": "mailbox_summary"
+    }
+  ],
+  "roleCitations": [
+    {
+      "role": "planner",
+      "summary": "Plan: check the target workspace, write the requested `artifact.md`, then verify the file contains one hello line each for lead, planner, generator, and evaluator.",
+      "quote": "Plan: check the target workspace, write the requested `artifact.md`, then verify the file contains one hello line each for lead, planner, generator, and evaluator.",
+      "artifactPath": "[REDACTED:path]"
+    },
+    {
+      "role": "generator",
+      "summary": "Creating the requested markdown artifact in the workspace now.",
+      "quote": "Creating the requested markdown artifact in the workspace now.",
+      "artifactPath": "[REDACTED:path]"
+    },
+    {
+      "role": "evaluator",
+      "summary": "Checking the artifact and verifying whether it matches the task.",
+      "quote": "Checking the artifact and verifying whether it matches the task.",
+      "artifactPath": "[REDACTED:path]"
+    }
+  ],
+  "lineage": {
+    "stdoutPath": "/workspace/agent-teams-v1_6-root/.worktrees/agent-teams-chat-mailbox-runtime-s6/.tmp/live-quickstart/.pluto/runs/625a9557-69f0-47bb-bda0-355535112aa9/stdout.log",
+    "transcriptPath": "/workspace/agent-teams-v1_6-root/.worktrees/agent-teams-chat-mailbox-runtime-s6/.tmp/live-quickstart/.pluto/runs/625a9557-69f0-47bb-bda0-355535112aa9/mailbox.jsonl",
+    "finalReportPath": "/workspace/agent-teams-v1_6-root/.worktrees/agent-teams-chat-mailbox-runtime-s6/.tmp/live-quickstart/.pluto/runs/625a9557-69f0-47bb-bda0-355535112aa9/final-report.md",
+    "mailboxLogPath": "/workspace/agent-teams-v1_6-root/.worktrees/agent-teams-chat-mailbox-runtime-s6/.tmp/live-quickstart/.pluto/runs/625a9557-69f0-47bb-bda0-355535112aa9/mailbox.jsonl",
+    "taskListPath": "/workspace/agent-teams-v1_6-root/.worktrees/agent-teams-chat-mailbox-runtime-s6/.tmp/live-quickstart/.pluto/runs/625a9557-69f0-47bb-bda0-355535112aa9/tasks.json",
+    "acceptanceOk": true,
+    "auditOk": true
+  },
+  "generatedAt": "2026-05-03T04:46:40.729Z"
+}

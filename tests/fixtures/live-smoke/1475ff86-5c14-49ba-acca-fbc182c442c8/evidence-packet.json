@@ -1,0 +1,87 @@
+{
+  "schemaVersion": 0,
+  "kind": "evidence_packet",
+  "runId": "1475ff86-5c14-49ba-acca-fbc182c442c8",
+  "status": "succeeded",
+  "summary": "`artifact.md` contains one hello line each from the lead, architect, coder, and qa.",
+  "failureReason": null,
+  "coordinationChannel": {
+    "kind": "shared_channel",
+    "locator": "586be459-4144-4b80-b78a-b350771eb121",
+    "path": "[REDACTED:path]"
+  },
+  "artifactRefs": [
+    {
+      "path": "[REDACTED:path]",
+      "label": "artifact"
+    },
+    {
+      "path": "[REDACTED:path]",
+      "label": "task_tree"
+    },
+    {
+      "path": "[REDACTED:path]",
+      "label": "status"
+    },
+    {
+      "path": "[REDACTED:path]",
+      "label": "final_report"
+    }
+  ],
+  "transitions": [
+    {
+      "from": "lead",
+      "to": "architect",
+      "observedAt": "2026-05-03T04:54:12.432Z",
+      "source": "task_list"
+    },
+    {
+      "from": "architect",
+      "to": "coder",
+      "observedAt": "2026-05-03T04:56:13.767Z",
+      "source": "task_list"
+    },
+    {
+      "from": "coder",
+      "to": "qa",
+      "observedAt": "2026-05-03T04:58:20.749Z",
+      "source": "task_list"
+    },
+    {
+      "from": "qa",
+      "to": "lead",
+      "observedAt": "2026-05-03T04:59:35.621Z",
+      "source": "mailbox_summary"
+    }
+  ],
+  "roleCitations": [
+    {
+      "role": "architect",
+      "summary": "Checking the workspace state, then I’ll write the required markdown artifact.I found the target artifact; now I’m checking whether it already has content before overwriting it.",
+      "quote": "Checking the workspace state, then I’ll write the required markdown artifact.I found the target artifact; now I’m checking whether it already has content before overwriting it.",
+      "artifactPath": "[REDACTED:path]"
+    },
+    {
+      "role": "coder",
+      "summary": "Inspecting the workspace and artifact target, then I’ll write the markdown file.",
+      "quote": "Inspecting the workspace and artifact target, then I’ll write the markdown file.",
+      "artifactPath": "[REDACTED:path]"
+    },
+    {
+      "role": "qa",
+      "summary": "Inspecting the artifact content against the spec now.",
+      "quote": "Inspecting the artifact content against the spec now.",
+      "artifactPath": "[REDACTED:path]"
+    }
+  ],
+  "lineage": {
+    "stdoutPath": "/workspace/agent-teams-v1_6-root/.worktrees/agent-teams-chat-mailbox-runtime-s6/.tmp/live-quickstart/.pluto/runs/1475ff86-5c14-49ba-acca-fbc182c442c8/stdout.log",
+    "transcriptPath": "/workspace/agent-teams-v1_6-root/.worktrees/agent-teams-chat-mailbox-runtime-s6/.tmp/live-quickstart/.pluto/runs/1475ff86-5c14-49ba-acca-fbc182c442c8/mailbox.jsonl",
+    "finalReportPath": "/workspace/agent-teams-v1_6-root/.worktrees/agent-teams-chat-mailbox-runtime-s6/.tmp/live-quickstart/.pluto/runs/1475ff86-5c14-49ba-acca-fbc182c442c8/final-report.md",
+    "mailboxLogPath": "/workspace/agent-teams-v1_6-root/.worktrees/agent-teams-chat-mailbox-runtime-s6/.tmp/live-quickstart/.pluto/runs/1475ff86-5c14-49ba-acca-fbc182c442c8/mailbox.jsonl",
+    "taskListPath": "/workspace/agent-teams-v1_6-root/.worktrees/agent-teams-chat-mailbox-runtime-s6/.tmp/live-quickstart/.pluto/runs/1475ff86-5c14-49ba-acca-fbc182c442c8/tasks.json",
+    "acceptanceOk": true,
+    "auditOk": true
+  },
+  "generatedAt": "2026-05-03T05:00:28.183Z"
+}

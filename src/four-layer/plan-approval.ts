@@ -3,6 +3,9 @@ import type {
   PlanApprovalRequestBody,
   PlanApprovalResponseBody,
 } from "../contracts/four-layer.js";
+import { isPlanApprovalRequest, isPlanApprovalResponse } from "./message-guards.js";
+
+export { isPlanApprovalRequest } from "./message-guards.js";
 
 export function createPlanApprovalRequest(input: {
   plan: string;
@@ -30,16 +33,9 @@ export function createPlanApprovalResponse(input: {
   };
 }
 
-export function isPlanApprovalRequest(message: MailboxMessage): message is MailboxMessage & { body: PlanApprovalRequestBody } {
-  return message.kind === "plan_approval_request" && typeof message.body === "object" && message.body !== null;
-}
-
 export function isTrustedPlanApprovalResponse(
   message: MailboxMessage,
   trustedSender: string,
 ): message is MailboxMessage & { body: PlanApprovalResponseBody } {
-  return message.kind === "plan_approval_response"
-    && message.from === trustedSender
-    && typeof message.body === "object"
-    && message.body !== null;
+  return isPlanApprovalResponse(message) && message.from === trustedSender;
 }
