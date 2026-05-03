@@ -8,11 +8,8 @@ import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { FakeAdapter } from "@/adapters/fake/index.js";
-import { FakeMailboxTransport } from "@/adapters/fake/fake-mailbox-transport.js";
-import type { MailboxEnvelope, MailboxMessage, TaskRecord, WorkerCompleteBody } from "@/contracts/four-layer.js";
-import type { AgentEvent, TeamConfig } from "@/contracts/types.js";
+import type { MailboxMessage, TaskRecord } from "@/contracts/four-layer.js";
 import { FileBackedTaskList } from "@/four-layer/index.js";
-import { runManagerHarness } from "@/orchestrator/manager-run-harness.js";
 import {
   materializeRuntimeHelperWorkspace,
   runtimeHelperContextPath,
@@ -21,10 +18,40 @@ import {
   type RuntimeHelperServerHandle,
 } from "@/orchestrator/runtime-helper.js";
 
+import {
+  createHarnessRun,
+  invokeRuntimeHelper,
+  invokeRuntimeHelperFailure,
+  invokeRuntimeHelperText,
+  readEvents,
+  readJsonLines,
+  readTasks,
+  taskByAssignee,
+  waitFor,
+  waitForEvent,
+  waitForTasks,
+  withEnv,
+} from "../helpers/harness-run-fixtures.js";
+import {
+  postFinalReconciliation,
+  postSpawnRequest,
+  postWorkerComplete,
+} from "../helpers/mailbox-fixtures.js";
+
 const exec = promisify(execFile);
-const repoRoot = process.cwd();
 const tempDirs: string[] = [];
 const activeServers: RuntimeHelperServerHandle[] = [];
+const runtimeHelperHarnessOptions = {
+  tempDirs,
+  autoDriveDispatch: false,
+  workspacePathResolver: (workspaceRoot: string, runId: string) => join(workspaceRoot, ".pluto-run-workspaces", runId),
+  waitForWorkspace: async ({ workspace }: { workspace: string }) => {
+    await waitFor(async () => {
+      await access(join(workspace, ".pluto-runtime", "pluto-mailbox"));
+      return true;
+    });
+  },
+};
 
 afterEach(async () => {
   await Promise.allSettled(activeServers.splice(0).map((server) => server.stop()));
@@ -625,7 +652,11 @@ describe.sequential("runtime helper MVP", () => {
 
   it("lets lead and workers author the mailbox chain through the runtime helper MVP", async () => {
     await withEnv({ PLUTO_DISPATCH_MODE: "teamlead_chat", PLUTO_RUNTIME_HELPER_MVP: "1" }, async () => {
-      const run = await createRuntimeHelperHarnessRun("helper-happy-path");
+      const run = await createHarnessRun({
+        name: "helper-happy-path",
+        workspacePrefix: "pluto-runtime-helper-harness-helper-happy-path-",
+        ...runtimeHelperHarnessOptions,
+      });
       const tasks = await waitForTasks(run.runDir, 3);
       const plannerTask = taskByAssignee(tasks, "planner");
       const generatorTask = taskByAssignee(tasks, "generator");
@@ -740,7 +771,10 @@ describe.sequential("runtime helper MVP", () => {
   it("satisfies helper waits directly and suppresses redundant lead-session noise while the lead stays busy", async () => {
     await withEnv({ PLUTO_DISPATCH_MODE: "teamlead_chat", PLUTO_RUNTIME_HELPER_MVP: "1" }, async () => {
       let adapter: FakeAdapter | undefined;
-      const run = await createRuntimeHelperHarnessRun("lead-wait-noise", {
+      const run = await createHarnessRun({
+        name: "lead-wait-noise",
+        workspacePrefix: "pluto-runtime-helper-harness-lead-wait-noise-",
+        ...runtimeHelperHarnessOptions,
         createAdapter: ({ team }) => {
           adapter = new FakeAdapter({ team });
           return adapter;
@@ -828,7 +862,11 @@ describe.sequential("runtime helper MVP", () => {
 
   it("disables synthetic worker completion in the opt-in harness path", async () => {
     await withEnv({ PLUTO_DISPATCH_MODE: "teamlead_chat", PLUTO_RUNTIME_HELPER_MVP: "1" }, async () => {
-      const run = await createRuntimeHelperHarnessRun("no-synthetic-complete");
+      const run = await createHarnessRun({
+        name: "no-synthetic-complete",
+        workspacePrefix: "pluto-runtime-helper-harness-no-synthetic-complete-",
+        ...runtimeHelperHarnessOptions,
+      });
       const tasks = await waitForTasks(run.runDir, 3);
       const plannerTask = taskByAssignee(tasks, "planner");
       const generatorTask = taskByAssignee(tasks, "generator");
@@ -858,259 +896,3 @@ describe.sequential("runtime helper MVP", () => {
     });
   });
 });
-
-class CapturingTransport extends FakeMailboxTransport {
-  roomRef: string | undefined;
-
-  override async createRoom(input: Parameters<FakeMailboxTransport["createRoom"]>[0]) {
-    const room = await super.createRoom(input);
-    this.roomRef = room;
-    return room;
-  }
-}
-
-async function createRuntimeHelperHarnessRun(
-  name: string,
-  options?: {
-    createAdapter?: (input: { team: TeamConfig }) => FakeAdapter;
-  },
-) {
-  const workspace = await mkdtemp(join(tmpdir(), `pluto-runtime-helper-harness-${name}-`));
-  const dataDir = join(workspace, ".pluto");
-  const runId = `run-${name}`;
-  let idSequence = 0;
-  tempDirs.push(workspace);
-
-  const transport = new CapturingTransport();
-  let adapter: FakeAdapter | undefined;
-  const resultPromise = runManagerHarness({
-    rootDir: repoRoot,
-    selection: { scenario: "hello-team", runProfile: "fake-smoke" },
-    workspaceOverride: workspace,
-    dataDir,
-    idGen: () => {
-      idSequence += 1;
-      return idSequence === 1 ? runId : `${runId}-id-${idSequence}`;
-    },
-    autoDriveDispatch: false,
-    createAdapter: ({ team }) => {
-      adapter = options?.createAdapter?.({ team }) ?? new FakeAdapter({ team });
-      return adapter;
-    },
-    createMailboxTransport: () => transport,
-  });
-
-  const runDir = join(dataDir, "runs", runId);
-  await waitFor(async () => {
-    await access(join(runDir, "tasks.json"));
-    return Boolean(transport.roomRef);
-  });
-
-  const workspaceDir = join(workspace, ".pluto-run-workspaces", runId);
-  await waitFor(async () => {
-    await access(join(workspaceDir, ".pluto-runtime", "pluto-mailbox"));
-    return true;
-  });
-
-  return {
-    adapter: adapter!,
-    resultPromise,
-    roomRef: transport.roomRef!,
-    runDir,
-    runId,
-    transport,
-    workspace: workspaceDir,
-    workspaceRoot: workspace,
-  };
-}
-
-async function invokeRuntimeHelper<T>(workspace: string, roleId: string, args: string[]): Promise<T> {
-  const helperPath = join(workspace, ".pluto-runtime", "pluto-mailbox");
-  const { stdout } = await exec(helperPath, ["--role", roleId, ...args], { cwd: workspace, timeout: 15_000 });
-  return JSON.parse(stdout) as T;
-}
-
-async function invokeRuntimeHelperText(workspace: string, roleId: string, args: string[]): Promise<string> {
-  const helperPath = join(workspace, ".pluto-runtime", "pluto-mailbox");
-  const { stdout } = await exec(helperPath, ["--role", roleId, ...args], { cwd: workspace, timeout: 15_000 });
-  return stdout;
-}
-
-async function invokeRuntimeHelperFailure(
-  workspace: string,
-  roleId: string,
-  args: string[],
-  timeout = 15_000,
-): Promise<{ stderr: string; killed: boolean }> {
-  const helperPath = join(workspace, ".pluto-runtime", "pluto-mailbox");
-  try {
-    await exec(helperPath, ["--role", roleId, ...args], { cwd: workspace, timeout });
-    throw new Error("expected helper command to fail");
-  } catch (error) {
-    const failure = error as { stderr?: string; killed?: boolean };
-    return {
-      stderr: failure.stderr ?? "",
-      killed: failure.killed === true,
-    };
-  }
-}
-
-async function postSpawnRequest(
-  run: Awaited<ReturnType<typeof createRuntimeHelperHarnessRun>>,
-  input: { from: string; targetRole: string; taskId: string },
-) {
-  const message = createMailboxMessage({
-    id: `${input.from}-${input.targetRole}-${input.taskId}`,
-    to: "lead",
-    from: input.from,
-    kind: "spawn_request",
-    body: {
-      schemaVersion: "v1",
-      targetRole: input.targetRole,
-      taskId: input.taskId,
-      rationale: `dispatch ${input.targetRole}`,
-    },
-  });
-  await run.transport.post({ room: run.roomRef, envelope: buildEnvelope(run.runId, message) });
-}
-
-async function postWorkerComplete(
-  run: Awaited<ReturnType<typeof createRuntimeHelperHarnessRun>>,
-  input: { from: string; taskId: string; status: WorkerCompleteBody["status"]; summary: string },
-) {
-  const message = createMailboxMessage({
-    id: `${input.from}-complete-${input.taskId}`,
-    to: "lead",
-    from: input.from,
-    kind: "worker_complete",
-    body: {
-      schemaVersion: "v1",
-      taskId: input.taskId,
-      status: input.status,
-      summary: input.summary,
-    },
-  });
-  await run.transport.post({ room: run.roomRef, envelope: buildEnvelope(run.runId, message) });
-}
-
-async function postFinalReconciliation(
-  run: Awaited<ReturnType<typeof createRuntimeHelperHarnessRun>>,
-  completedTaskIds: string[],
-) {
-  const message = createMailboxMessage({
-    id: `lead-final-${completedTaskIds.length}`,
-    to: "lead",
-    from: "lead",
-    kind: "final_reconciliation",
-    body: {
-      schemaVersion: "v1",
-      summary: "manual finalization",
-      completedTaskIds,
-    },
-  });
-  await run.transport.post({ room: run.roomRef, envelope: buildEnvelope(run.runId, message) });
-}
-
-async function waitForTasks(runDir: string, expectedCount: number): Promise<TaskRecord[]> {
-  await waitFor(async () => (await readTasks(runDir)).length === expectedCount);
-  return await readTasks(runDir);
-}
-
-async function waitForEvent(runDir: string, predicate: (event: AgentEvent) => boolean, timeoutMs = 5_000): Promise<AgentEvent> {
-  await waitFor(async () => (await readEvents(runDir)).some(predicate), timeoutMs);
-  return (await readEvents(runDir)).find(predicate)!;
-}
-
-async function readEvents(runDir: string): Promise<AgentEvent[]> {
-  return await readJsonLines<AgentEvent>(join(runDir, "events.jsonl"));
-}
-
-async function readTasks(runDir: string): Promise<TaskRecord[]> {
-  const raw = await readFile(join(runDir, "tasks.json"), "utf8");
-  return (JSON.parse(raw) as { tasks?: TaskRecord[] }).tasks ?? [];
-}
-
-async function readJsonLines<T>(path: string): Promise<T[]> {
-  const raw = await readFile(path, "utf8");
-  return raw
-    .split("\n")
-    .map((line) => line.trim())
-    .filter((line) => line.length > 0)
-    .map((line) => JSON.parse(line) as T);
-}
-
-function taskByAssignee(tasks: TaskRecord[], assigneeId: string): TaskRecord {
-  const task = tasks.find((entry) => entry.assigneeId === assigneeId);
-  if (!task) {
-    throw new Error(`task not found for ${assigneeId}`);
-  }
-  return task;
-}
-
-function createMailboxMessage(input: {
-  id: string;
-  to: string;
-  from: string;
-  kind: MailboxMessage["kind"];
-  body: MailboxMessage["body"];
-}): MailboxMessage {
-  return {
-    id: input.id,
-    to: input.to,
-    from: input.from,
-    createdAt: new Date().toISOString(),
-    kind: input.kind,
-    body: input.body,
-  };
-}
-
-function buildEnvelope(runId: string, body: MailboxMessage): MailboxEnvelope {
-  return {
-    schemaVersion: "v1",
-    fromRole: body.from,
-    toRole: body.to,
-    runId,
-    ...(typeof body.body === "object" && body.body !== null && "taskId" in body.body && typeof body.body.taskId === "string"
-      ? { taskId: body.body.taskId }
-      : {}),
-    body,
-  };
-}
-
-async function waitFor(predicate: () => boolean | Promise<boolean>, timeoutMs = 5_000): Promise<void> {
-  const startedAt = Date.now();
-  while (true) {
-    let ready = false;
-    try {
-      ready = await predicate();
-    } catch {
-      ready = false;
-    }
-    if (ready) {
-      return;
-    }
-    if (Date.now() - startedAt > timeoutMs) {
-      throw new Error("timed out waiting for condition");
-    }
-    await new Promise((resolve) => setTimeout(resolve, 25));
-  }
-}
-
-async function withEnv<T>(entries: Record<string, string>, fn: () => Promise<T>): Promise<T> {
-  const original = new Map<string, string | undefined>();
-  for (const [key, value] of Object.entries(entries)) {
-    original.set(key, process.env[key]);
-    process.env[key] = value;
-  }
-  try {
-    return await fn();
-  } finally {
-    for (const [key, value] of original.entries()) {
-      if (value === undefined) {
-        delete process.env[key];
-      } else {
-        process.env[key] = value;
-      }
-    }
-  }
-}

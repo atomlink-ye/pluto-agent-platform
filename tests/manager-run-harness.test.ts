@@ -9,6 +9,8 @@ import type { PaseoTeamAdapter } from "@/contracts/adapter.js";
 import type { CoordinationTranscriptRefV0, TeamPlaybookV0 } from "@/contracts/types.js";
 import { runManagerHarness } from "@/orchestrator/manager-run-harness.js";
 
+import { createHarnessRun } from "./helpers/harness-run-fixtures.js";
+
 const repoRoot = process.cwd();
 const tempDirs: string[] = [];
 
@@ -18,24 +20,19 @@ afterEach(async () => {
 
 describe("manager run harness", () => {
   it("runs the checked-in four-layer scenario end-to-end with the fake adapter", async () => {
-    const workspace = await mkdtemp(join(tmpdir(), "pluto-four-layer-run-"));
-    const dataDir = join(workspace, ".pluto");
-    tempDirs.push(workspace);
-
-    const result = await runManagerHarness({
-      rootDir: repoRoot,
-      selection: { scenario: "hello-team", runProfile: "fake-smoke" },
-      workspaceOverride: workspace,
-      dataDir,
-      createAdapter: ({ team }) => new FakeAdapter({ team }),
+    const run = await createHarnessRun({
+      name: "four-layer-run",
+      tempDirs,
+      workspacePrefix: "pluto-four-layer-run-",
     });
+    const result = await run.resultPromise;
 
     expect(result.run.status).toBe("succeeded");
     await expect(access(join(result.runDir, "mailbox.jsonl"))).resolves.toBeUndefined();
     await expect(access(join(result.runDir, "tasks.json"))).resolves.toBeUndefined();
     const mailboxLog = await readFile(join(result.runDir, "mailbox.jsonl"), "utf8");
     const tasks = await readFile(join(result.runDir, "tasks.json"), "utf8");
-    const artifact = await readFile(join(workspace, "artifact.md"), "utf8");
+    const artifact = await readFile(join(run.workspace, "artifact.md"), "utf8");
     expect(mailboxLog).toContain('"summary":"FINAL"');
     expect(mailboxLog).toContain('"summary":"RUN_START"');
     expect(mailboxLog).not.toContain("/mailbox.jsonl");
@@ -48,10 +45,6 @@ describe("manager run harness", () => {
   });
 
   it("passes mailbox metadata into adapter startRun and createLeadSession", async () => {
-    const workspace = await mkdtemp(join(tmpdir(), "pluto-four-layer-metadata-"));
-    const dataDir = join(workspace, ".pluto");
-    tempDirs.push(workspace);
-
     let capturedStartRun: { playbook?: TeamPlaybookV0; transcript?: CoordinationTranscriptRefV0 } | undefined;
     let capturedCreateLeadSession: { playbook?: TeamPlaybookV0; transcript?: CoordinationTranscriptRefV0 } | undefined;
 
@@ -67,13 +60,13 @@ describe("manager run harness", () => {
       }
     }
 
-    const result = await runManagerHarness({
-      rootDir: repoRoot,
-      selection: { scenario: "hello-team", runProfile: "fake-smoke" },
-      workspaceOverride: workspace,
-      dataDir,
+    const run = await createHarnessRun({
+      name: "four-layer-metadata",
+      tempDirs,
+      workspacePrefix: "pluto-four-layer-metadata-",
       createAdapter: ({ team }) => new CapturingFakeAdapter({ team }),
     });
+    const result = await run.resultPromise;
 
     expect(result.run.status).toBe("succeeded");
     expect(capturedStartRun?.playbook?.id).toBe("research-review");
@@ -84,17 +77,12 @@ describe("manager run harness", () => {
   });
 
   it("writes final report from mailbox/task-list state", async () => {
-    const workspace = await mkdtemp(join(tmpdir(), "pluto-four-layer-report-"));
-    const dataDir = join(workspace, ".pluto");
-    tempDirs.push(workspace);
-
-    const result = await runManagerHarness({
-      rootDir: repoRoot,
-      selection: { scenario: "hello-team", runProfile: "fake-smoke" },
-      workspaceOverride: workspace,
-      dataDir,
-      createAdapter: ({ team }) => new FakeAdapter({ team }),
+    const run = await createHarnessRun({
+      name: "four-layer-report",
+      tempDirs,
+      workspacePrefix: "pluto-four-layer-report-",
     });
+    const result = await run.resultPromise;
 
     expect(result.run.status).toBe("succeeded");
     const finalReport = await readFile(result.finalReportPath, "utf8");
@@ -104,50 +92,41 @@ describe("manager run harness", () => {
   });
 
   it("can materialize a run-local workspace subdirectory under the provided workspace root", async () => {
-    const workspaceRoot = await mkdtemp(join(tmpdir(), "pluto-four-layer-isolated-workspace-"));
-    const dataDir = join(workspaceRoot, ".pluto");
-    tempDirs.push(workspaceRoot);
-
-    const result = await runManagerHarness({
-      rootDir: repoRoot,
-      selection: { scenario: "hello-team", runProfile: "fake-smoke" },
-      workspaceOverride: workspaceRoot,
+    const run = await createHarnessRun({
+      name: "four-layer-isolated-workspace",
+      tempDirs,
+      workspacePrefix: "pluto-four-layer-isolated-workspace-",
       workspaceSubdirPerRun: true,
-      dataDir,
-      createAdapter: ({ team }) => new FakeAdapter({ team }),
     });
+    const result = await run.resultPromise;
 
-    const expectedWorkspaceDir = join(workspaceRoot, ".pluto-run-workspaces", result.run.runId);
+    const expectedWorkspaceDir = join(run.workspaceRoot, ".pluto-run-workspaces", result.run.runId);
     expect(result.workspaceDir).toBe(expectedWorkspaceDir);
     expect((await readFile(join(result.workspaceDir, "artifact.md"), "utf8")).toLowerCase()).toContain("lead");
   });
 
   it("preserves a substantive workspace artifact when the lead summary is much shorter", async () => {
-    const workspace = await mkdtemp(join(tmpdir(), "pluto-four-layer-artifact-preserve-"));
-    const dataDir = join(workspace, ".pluto");
-    tempDirs.push(workspace);
-
-    await writeFile(join(workspace, "artifact.md"), [
-      "# Symphony Repo Report",
-      "",
-      "## Architecture",
-      "- Runtime entry point: `src/index.ts`.",
-      "- Orchestration harness: `src/orchestrator/manager-run-harness.ts`.",
-      "",
-      "## Extension Points",
-      "- Adapter seam: `src/contracts/adapter.ts`.",
-      "- Fake runtime: `src/adapters/fake/fake-adapter.ts`.",
-      "",
-      "## Pluto Guidance",
-      "- Borrow the mailbox/task-list split; avoid replacing substantive artifacts with terse completion summaries.",
-      "",
-    ].join("\n"), "utf8");
-
-    const result = await runManagerHarness({
-      rootDir: repoRoot,
-      selection: { scenario: "hello-team", runProfile: "fake-smoke" },
-      workspaceOverride: workspace,
-      dataDir,
+    const run = await createHarnessRun({
+      name: "four-layer-artifact-preserve",
+      tempDirs,
+      workspacePrefix: "pluto-four-layer-artifact-preserve-",
+      prepareWorkspace: async (workspace) => {
+        await writeFile(join(workspace, "artifact.md"), [
+          "# Symphony Repo Report",
+          "",
+          "## Architecture",
+          "- Runtime entry point: `src/index.ts`.",
+          "- Orchestration harness: `src/orchestrator/manager-run-harness.ts`.",
+          "",
+          "## Extension Points",
+          "- Adapter seam: `src/contracts/adapter.ts`.",
+          "- Fake runtime: `src/adapters/fake/fake-adapter.ts`.",
+          "",
+          "## Pluto Guidance",
+          "- Borrow the mailbox/task-list split; avoid replacing substantive artifacts with terse completion summaries.",
+          "",
+        ].join("\n"), "utf8");
+      },
       createAdapter: ({ team }) => new FakeAdapter({
         team,
         summaryBuilder: () => [
@@ -158,9 +137,10 @@ describe("manager run harness", () => {
         ].join("\n"),
       }),
     });
+    const result = await run.resultPromise;
 
     expect(result.run.status).toBe("succeeded");
-    const artifact = await readFile(join(workspace, "artifact.md"), "utf8");
+    const artifact = await readFile(join(run.workspace, "artifact.md"), "utf8");
     expect(artifact).toContain("# Symphony Repo Report");
     expect(artifact).toContain("## Architecture");
     expect(artifact).toContain("Citations:");
@@ -175,15 +155,10 @@ describe("manager run harness", () => {
   });
 
   it("backfills completion message citations when the lead summary omits them", async () => {
-    const workspace = await mkdtemp(join(tmpdir(), "pluto-four-layer-citation-backfill-"));
-    const dataDir = join(workspace, ".pluto");
-    tempDirs.push(workspace);
-
-    const result = await runManagerHarness({
-      rootDir: repoRoot,
-      selection: { scenario: "hello-team", runProfile: "fake-smoke" },
-      workspaceOverride: workspace,
-      dataDir,
+    const run = await createHarnessRun({
+      name: "four-layer-citation-backfill",
+      tempDirs,
+      workspacePrefix: "pluto-four-layer-citation-backfill-",
       createAdapter: ({ team }) => new FakeAdapter({
         team,
         summaryBuilder: () => [
@@ -197,9 +172,10 @@ describe("manager run harness", () => {
         ].join("\n"),
       }),
     });
+    const result = await run.resultPromise;
 
     expect(result.run.status).toBe("succeeded");
-    const artifact = await readFile(join(workspace, "artifact.md"), "utf8");
+    const artifact = await readFile(join(run.workspace, "artifact.md"), "utf8");
     expect(artifact).toContain("Completion Citations:");
     expect(artifact).toContain("- planner: `");
     expect(artifact).toContain("- generator: `");

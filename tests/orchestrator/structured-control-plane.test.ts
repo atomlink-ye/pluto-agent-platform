@@ -1,25 +1,28 @@
-import { access, mkdtemp, readFile, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { rm } from "node:fs/promises";
 
 import { afterEach, describe, expect, it } from "vitest";
 
-import { FakeAdapter } from "@/adapters/fake/index.js";
-import { FakeMailboxTransport } from "@/adapters/fake/fake-mailbox-transport.js";
-import type {
-  EvaluatorVerdictBody,
-  FinalReconciliationBody,
-  MailboxEnvelope,
-  MailboxMessage,
-  RevisionRequestBody,
-  ShutdownRequestBody,
-  ShutdownResponseBody,
-  TaskRecord,
-} from "@/contracts/four-layer.js";
-import type { AgentEvent } from "@/contracts/types.js";
-import { runManagerHarness } from "@/orchestrator/manager-run-harness.js";
+import type { TaskRecord } from "@/contracts/four-layer.js";
 
-const repoRoot = process.cwd();
+import {
+  createHarnessRun,
+  pause,
+  readEvents,
+  readTasks,
+  taskByAssignee,
+  waitForEvent,
+  waitForTasks,
+  withEnv,
+} from "../helpers/harness-run-fixtures.js";
+import {
+  postEvaluatorVerdict,
+  postFinalReconciliation,
+  postRevisionRequest,
+  postShutdownRequest,
+  postShutdownResponse,
+  postSpawnRequest,
+} from "../helpers/mailbox-fixtures.js";
+
 const tempDirs: string[] = [];
 
 afterEach(async () => {
@@ -332,49 +335,13 @@ describe.sequential("structured control-plane", () => {
   });
 });
 
-class CapturingTransport extends FakeMailboxTransport {
-  roomRef: string | undefined;
-
-  override async createRoom(input: Parameters<FakeMailboxTransport["createRoom"]>[0]) {
-    const room = await super.createRoom(input);
-    this.roomRef = room;
-    return room;
-  }
-}
-
-async function createStructuredControlPlaneRun(name: string) {
-  const workspace = await mkdtemp(join(tmpdir(), `pluto-structured-${name}-`));
-  const dataDir = join(workspace, ".pluto");
-  const runId = `run-${name}`;
-  let idSequence = 0;
-  let adapter!: FakeAdapter;
-  tempDirs.push(workspace);
-
-  const transport = new CapturingTransport();
-  const resultPromise = runManagerHarness({
-    rootDir: repoRoot,
-    selection: { scenario: "hello-team", runProfile: "fake-smoke" },
-    workspaceOverride: workspace,
-    dataDir,
-    idGen: () => {
-      idSequence += 1;
-      return idSequence === 1 ? runId : `${runId}-id-${idSequence}`;
-    },
+function createStructuredControlPlaneRun(name: string) {
+  return createHarnessRun({
+    name,
+    tempDirs,
+    workspacePrefix: `pluto-structured-${name}-`,
     autoDriveDispatch: false,
-    createAdapter: ({ team }) => {
-      adapter = new FakeAdapter({ team });
-      return adapter;
-    },
-    createMailboxTransport: () => transport,
   });
-
-  const runDir = join(dataDir, "runs", runId);
-  await waitFor(async () => {
-    await access(join(runDir, "tasks.json"));
-    return Boolean(transport.roomRef);
-  });
-
-  return { adapter, dataDir, resultPromise, roomRef: transport.roomRef!, runDir, runId, transport, workspace };
 }
 
 async function driveTask(
@@ -386,228 +353,4 @@ async function driveTask(
     event.type === "worker_complete_received"
     && event.payload["taskId"] === task.id,
   );
-}
-
-async function postSpawnRequest(
-  run: Awaited<ReturnType<typeof createStructuredControlPlaneRun>>,
-  input: { from: string; targetRole: string; taskId: string },
-) {
-  const message = createMailboxMessage({
-    id: `${input.from}-${input.targetRole}-${input.taskId}`,
-    to: "lead",
-    from: input.from,
-    kind: "spawn_request",
-    body: {
-      schemaVersion: "v1",
-      targetRole: input.targetRole,
-      taskId: input.taskId,
-      rationale: `dispatch ${input.targetRole}`,
-    },
-  });
-  await run.transport.post({ room: run.roomRef, envelope: buildEnvelope(run.runId, message) });
-}
-
-async function postEvaluatorVerdict(
-  run: Awaited<ReturnType<typeof createStructuredControlPlaneRun>>,
-  input: { id: string; from: string } & Omit<EvaluatorVerdictBody, "schemaVersion">,
-) {
-  const message = createMailboxMessage({
-    id: input.id,
-    to: "lead",
-    from: input.from,
-    kind: "evaluator_verdict",
-    body: {
-      schemaVersion: "v1",
-      taskId: input.taskId,
-      verdict: input.verdict,
-      ...(input.rationale ? { rationale: input.rationale } : {}),
-      ...(input.failedRubricRef ? { failedRubricRef: input.failedRubricRef } : {}),
-    },
-  });
-  await run.transport.post({ room: run.roomRef, envelope: buildEnvelope(run.runId, message) });
-}
-
-async function postRevisionRequest(
-  run: Awaited<ReturnType<typeof createStructuredControlPlaneRun>>,
-  input: { id: string; from: string } & Omit<RevisionRequestBody, "schemaVersion">,
-) {
-  const message = createMailboxMessage({
-    id: input.id,
-    to: "lead",
-    from: input.from,
-    kind: "revision_request",
-    body: {
-      schemaVersion: "v1",
-      failedTaskId: input.failedTaskId,
-      failedVerdictMessageId: input.failedVerdictMessageId,
-      targetRole: input.targetRole,
-      instructions: input.instructions,
-    },
-  });
-  await run.transport.post({ room: run.roomRef, envelope: buildEnvelope(run.runId, message) });
-}
-
-async function postShutdownRequest(
-  run: Awaited<ReturnType<typeof createStructuredControlPlaneRun>>,
-  input: { id: string; from: string } & Omit<ShutdownRequestBody, "schemaVersion">,
-) {
-  const message = createMailboxMessage({
-    id: input.id,
-    to: "lead",
-    from: input.from,
-    kind: "shutdown_request",
-    body: {
-      schemaVersion: "v1",
-      reason: input.reason,
-      ...(input.targetRole ? { targetRole: input.targetRole } : {}),
-      ...(input.timeoutMs !== undefined ? { timeoutMs: input.timeoutMs } : {}),
-    },
-  });
-  await run.transport.post({ room: run.roomRef, envelope: buildEnvelope(run.runId, message) });
-}
-
-async function postShutdownResponse(
-  run: Awaited<ReturnType<typeof createStructuredControlPlaneRun>>,
-  input: { id: string; from: string; fromTaskId?: string },
-) {
-  const body: ShutdownResponseBody = {
-    schemaVersion: "v1",
-    acknowledged: true,
-    ...(input.fromTaskId ? { fromTaskId: input.fromTaskId } : {}),
-  };
-  const message = createMailboxMessage({
-    id: input.id,
-    to: "lead",
-    from: input.from,
-    kind: "shutdown_response",
-    body,
-  });
-  await run.transport.post({ room: run.roomRef, envelope: buildEnvelope(run.runId, message) });
-}
-
-async function postFinalReconciliation(
-  run: Awaited<ReturnType<typeof createStructuredControlPlaneRun>>,
-  completedTaskIds: string[],
-) {
-  const body: FinalReconciliationBody = {
-    schemaVersion: "v1",
-    summary: "manual finalization",
-    completedTaskIds,
-  };
-  const message = createMailboxMessage({
-    id: `lead-final-${completedTaskIds.length}`,
-    to: "lead",
-    from: "lead",
-    kind: "final_reconciliation",
-    body,
-  });
-  await run.transport.post({ room: run.roomRef, envelope: buildEnvelope(run.runId, message) });
-}
-
-async function waitForTasks(runDir: string, expectedCount: number): Promise<TaskRecord[]> {
-  await waitFor(async () => (await readTasks(runDir)).length === expectedCount);
-  return await readTasks(runDir);
-}
-
-async function waitForEvent(runDir: string, predicate: (event: AgentEvent) => boolean, timeoutMs = 5_000): Promise<AgentEvent> {
-  await waitFor(async () => (await readEvents(runDir)).some(predicate), timeoutMs);
-  return (await readEvents(runDir)).find(predicate)!;
-}
-
-async function readEvents(runDir: string): Promise<AgentEvent[]> {
-  return await readJsonLines<AgentEvent>(join(runDir, "events.jsonl"));
-}
-
-async function readTasks(runDir: string): Promise<TaskRecord[]> {
-  const raw = await readFile(join(runDir, "tasks.json"), "utf8");
-  return (JSON.parse(raw) as { tasks?: TaskRecord[] }).tasks ?? [];
-}
-
-async function readJsonLines<T>(path: string): Promise<T[]> {
-  const raw = await readFile(path, "utf8");
-  return raw
-    .split("\n")
-    .map((line) => line.trim())
-    .filter((line) => line.length > 0)
-    .map((line) => JSON.parse(line) as T);
-}
-
-function taskByAssignee(tasks: TaskRecord[], assigneeId: string): TaskRecord {
-  const task = tasks.find((entry) => entry.assigneeId === assigneeId);
-  if (!task) {
-    throw new Error(`task not found for ${assigneeId}`);
-  }
-  return task;
-}
-
-function createMailboxMessage(input: {
-  id: string;
-  to: string;
-  from: string;
-  kind: MailboxMessage["kind"];
-  body: MailboxMessage["body"];
-}): MailboxMessage {
-  return {
-    id: input.id,
-    to: input.to,
-    from: input.from,
-    createdAt: new Date().toISOString(),
-    kind: input.kind,
-    body: input.body,
-  };
-}
-
-function buildEnvelope(runId: string, body: MailboxMessage): MailboxEnvelope {
-  return {
-    schemaVersion: "v1",
-    fromRole: body.from,
-    toRole: body.to,
-    runId,
-    ...(typeof body.body === "object" && body.body !== null && "taskId" in body.body && typeof body.body.taskId === "string"
-      ? { taskId: body.body.taskId }
-      : {}),
-    body,
-  };
-}
-
-async function pause(ms: number): Promise<void> {
-  await new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-async function waitFor(predicate: () => boolean | Promise<boolean>, timeoutMs = 5_000): Promise<void> {
-  const startedAt = Date.now();
-  while (true) {
-    let ready = false;
-    try {
-      ready = await predicate();
-    } catch {
-      ready = false;
-    }
-    if (ready) {
-      return;
-    }
-    if (Date.now() - startedAt > timeoutMs) {
-      throw new Error("timed out waiting for condition");
-    }
-    await pause(25);
-  }
-}
-
-async function withEnv<T>(entries: Record<string, string>, fn: () => Promise<T>): Promise<T> {
-  const original = new Map<string, string | undefined>();
-  for (const [key, value] of Object.entries(entries)) {
-    original.set(key, process.env[key]);
-    process.env[key] = value;
-  }
-  try {
-    return await fn();
-  } finally {
-    for (const [key, value] of original.entries()) {
-      if (value === undefined) {
-        delete process.env[key];
-      } else {
-        process.env[key] = value;
-      }
-    }
-  }
 }

@@ -1,10 +1,11 @@
 import { describe, expect, it } from "vitest";
 
 import { PaseoOpenCodeAdapter } from "@/adapters/paseo-opencode/paseo-opencode-adapter.js";
-import type { ProcessRunner } from "@/adapters/paseo-opencode/process-runner.js";
 import { DEFAULT_TEAM, getRole } from "@/orchestrator/team-config.js";
 import { DEFAULT_TEAM_PLAYBOOK_V0 } from "@/orchestrator/team-playbook.js";
 import type { TeamTask } from "@/contracts/types.js";
+
+import { makeProcessRunner } from "./helpers/process-runner.js";
 
 const baseTask: TeamTask = {
   id: "task-live-1",
@@ -142,51 +143,6 @@ describe("PaseoOpenCodeAdapter — log text extraction", () => {
 });
 
 describe("PaseoOpenCodeAdapter — protocol with mocked runner", () => {
-  function makeRunner(impl: {
-    run?: (args: string[]) => { stdout?: string; stderr?: string; exitCode?: number | null };
-    onArgs?: (cmd: string, args: string[]) => void;
-    extra?: (cmd: string, args: string[]) => { stdout?: string; stderr?: string; exitCode?: number | null } | undefined;
-    follow?: (cmd: string, args: string[], opts: { onLine: (line: string) => void }) => void;
-  }): ProcessRunner {
-    return {
-      async exec(_cmd, args) {
-        impl.onArgs?.(_cmd, args);
-        const sub = args[0];
-        if (sub === "run") {
-          const r = impl.run?.(args) ?? {};
-          return {
-            stdout: r.stdout ?? `{"agentId":"agent-${args[args.length - 2] ?? "x"}"}`,
-            stderr: r.stderr ?? "",
-            exitCode: r.exitCode ?? 0,
-          };
-        }
-        if (sub === "wait") {
-          return { stdout: '{"status":"idle"}', stderr: "", exitCode: 0 };
-        }
-        if (sub === "send") {
-          return { stdout: '{"sent":true}', stderr: "", exitCode: 0 };
-        }
-        if (sub === "logs") {
-          const r = impl.extra?.(_cmd, args);
-          return {
-            stdout: r?.stdout ?? "[User] task\nworker output\n[Thought] done",
-            stderr: r?.stderr ?? "",
-            exitCode: r?.exitCode ?? 0,
-          };
-        }
-        if (sub === "delete") {
-          return { stdout: "DELETED", stderr: "", exitCode: 0 };
-        }
-        return { stdout: "", stderr: `unknown subcommand:${sub}`, exitCode: 1 };
-      },
-      follow(_cmd, _args, _opts) {
-        impl.onArgs?.(_cmd, _args);
-        impl.follow?.(_cmd, _args, _opts);
-        return { dispose: async () => undefined };
-      },
-    };
-  }
-
   it("defaults mode to orchestrator when no PASEO_MODE env or option is set", () => {
     const previousMode = process.env["PASEO_MODE"];
     delete process.env["PASEO_MODE"];
@@ -233,7 +189,7 @@ describe("PaseoOpenCodeAdapter — protocol with mocked runner", () => {
   it("includes systemPrompt in lead_started event payload", async () => {
     const adapter = new PaseoOpenCodeAdapter({
       workspaceCwd: "/tmp/pluto-live",
-      runner: makeRunner({ run: () => ({ stdout: '{"agentId":"lead-prompt-test"}' }) }),
+      runner: makeProcessRunner({ run: () => ({ stdout: '{"agentId":"lead-prompt-test"}' }) }),
     });
 
     await adapter.startRun({ runId: "r-prompt", task: baseTask, team: DEFAULT_TEAM });
@@ -254,7 +210,7 @@ describe("PaseoOpenCodeAdapter — protocol with mocked runner", () => {
     const prompts: string[] = [];
     const adapter = new PaseoOpenCodeAdapter({
       workspaceCwd: "/tmp/pluto-live",
-      runner: makeRunner({
+      runner: makeProcessRunner({
         run: (args) => {
           prompts.push(args[args.length - 1] ?? "");
           return { stdout: '{"agentId":"lead-helper-prompt-test"}' };
@@ -286,7 +242,7 @@ describe("PaseoOpenCodeAdapter — protocol with mocked runner", () => {
     const adapter = new PaseoOpenCodeAdapter({
       host: "",
       workspaceCwd: "/tmp/pluto-live",
-      runner: makeRunner({ onArgs: (_c, a) => captured.push(a) }),
+      runner: makeProcessRunner({ onArgs: (_c, a) => captured.push(a) }),
       idGen: () => "fixed-id",
     });
     await adapter.startRun({ runId: "r1-orch", task: baseTask, team: DEFAULT_TEAM });
@@ -307,7 +263,7 @@ describe("PaseoOpenCodeAdapter — protocol with mocked runner", () => {
       host: "",
       mode: "build",
       workspaceCwd: "/tmp/pluto-live",
-      runner: makeRunner({ onArgs: (_c, a) => captured.push(a) }),
+      runner: makeProcessRunner({ onArgs: (_c, a) => captured.push(a) }),
       idGen: () => "fixed-id",
     });
     await adapter.startRun({ runId: "r1", task: baseTask, team: DEFAULT_TEAM });
@@ -334,7 +290,7 @@ describe("PaseoOpenCodeAdapter — protocol with mocked runner", () => {
     const prompts: string[] = [];
     const adapter = new PaseoOpenCodeAdapter({
       workspaceCwd: "/tmp/pluto-live",
-      runner: makeRunner({
+      runner: makeProcessRunner({
         run: (args) => {
           prompts.push(args[args.length - 1] ?? "");
           return { stdout: '{"agentId":"lead-agent"}' };
@@ -389,7 +345,7 @@ describe("PaseoOpenCodeAdapter — protocol with mocked runner", () => {
   it("does not parse followed lead logs into worker-request bridge events", async () => {
     const adapter = new PaseoOpenCodeAdapter({
       workspaceCwd: "/tmp/pluto-live",
-      runner: makeRunner({}),
+      runner: makeProcessRunner({}),
     });
 
     await adapter.startRun({ runId: "r1-no-bridge", task: baseTask, team: DEFAULT_TEAM });
@@ -408,7 +364,7 @@ describe("PaseoOpenCodeAdapter — protocol with mocked runner", () => {
     const adapter = new PaseoOpenCodeAdapter({
       host: "http://127.0.0.1:6767",
       workspaceCwd: "/tmp/pluto-live",
-      runner: makeRunner({
+      runner: makeProcessRunner({
         onArgs: (_c, a) => captured.push(a),
         run: (args) => ({ stdout: `{"agentId":"agent-${args.includes("Worker") ? "worker" : "lead"}"}` }),
       }),
@@ -441,7 +397,7 @@ describe("PaseoOpenCodeAdapter — protocol with mocked runner", () => {
     const captured: string[][] = [];
     const adapter = new PaseoOpenCodeAdapter({
       workspaceCwd: "/tmp/pluto-live",
-      runner: makeRunner({ onArgs: (_c, a) => captured.push(a) }),
+      runner: makeProcessRunner({ onArgs: (_c, a) => captured.push(a) }),
     });
 
     await adapter.startRun({ runId: "r-send-order", task: baseTask, team: DEFAULT_TEAM });
@@ -482,7 +438,7 @@ describe("PaseoOpenCodeAdapter — protocol with mocked runner", () => {
     const adapter = new PaseoOpenCodeAdapter({
       provider: "opencode/minimax-m2.5-free",
       workspaceCwd: "/tmp/pluto-live",
-      runner: makeRunner({ onArgs: (_c, a) => captured.push(a) }),
+      runner: makeProcessRunner({ onArgs: (_c, a) => captured.push(a) }),
     });
     await adapter.startRun({ runId: "r1-legacy-provider", task: baseTask, team: DEFAULT_TEAM });
     await adapter.createLeadSession({
@@ -502,7 +458,7 @@ describe("PaseoOpenCodeAdapter — protocol with mocked runner", () => {
   it("emits worker_started + worker_completed and parses worker output from logs", async () => {
     const adapter = new PaseoOpenCodeAdapter({
       workspaceCwd: "/tmp/pluto-live",
-      runner: makeRunner({
+      runner: makeProcessRunner({
         extra: (_c, args) => {
           // logs response per worker: include a [User] then assistant text.
           if (args[0] === "logs") {
@@ -532,7 +488,7 @@ describe("PaseoOpenCodeAdapter — protocol with mocked runner", () => {
     };
     const adapter = new PaseoOpenCodeAdapter({
       workspaceCwd: "/tmp/pluto-live",
-      runner: makeRunner({
+      runner: makeProcessRunner({
         run: (args) => {
           runPrompts.push(args[args.length - 1] ?? "");
           return { stdout: '{"agentId":"worker-1"}' };
@@ -703,7 +659,7 @@ describe("PaseoOpenCodeAdapter — protocol with mocked runner", () => {
   it("emits lead_message(kind=summary) on SUMMARIZE", async () => {
     const adapter = new PaseoOpenCodeAdapter({
       workspaceCwd: "/tmp/pluto-live",
-      runner: makeRunner({
+      runner: makeProcessRunner({
         extra: (_c, args) => {
           if (args[0] === "logs") {
             return {
@@ -737,7 +693,7 @@ describe("PaseoOpenCodeAdapter — protocol with mocked runner", () => {
   it("rejects sendMessage to a non-lead session", async () => {
     const adapter = new PaseoOpenCodeAdapter({
       workspaceCwd: "/tmp/pluto-live",
-      runner: makeRunner({}),
+      runner: makeProcessRunner({}),
     });
     await adapter.startRun({ runId: "r4", task: baseTask, team: DEFAULT_TEAM });
     await expect(
