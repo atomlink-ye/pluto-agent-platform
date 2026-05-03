@@ -55,7 +55,6 @@ Each plan is a markdown file. Use this template:
 
 ## Active Plans
 
-- `active/agent-teams-chat-mailbox-runtime.md` — Stage C inbox delivery loop and plan-approval transport wiring.
 - `active/full-product-shape-hardening.md` — post-PRODUCT_COMPLETE hardening and cleanup.
 
 ## Completed Plans
@@ -65,6 +64,7 @@ Each plan is a markdown file. Use this template:
 - `completed/wave-b-review-publish-identity-security-storage.md`
 - `completed/wave-cd-schedule-observability-compliance-bootstrap.md`
 - `completed/product-complete-final-check.md`
+- `completed/agent-teams-chat-mailbox-runtime.md` — Agent Teams chat-backed mailbox runtime (S1-S6 + integration `pluto/agent-teams-chat-mailbox-runtime-integrated` HEAD `72bcef2`); ready for user merge.
 
 Completed plans are stored in `docs/plans/completed/` with verification/evidence notes and remaining follow-up.
 
