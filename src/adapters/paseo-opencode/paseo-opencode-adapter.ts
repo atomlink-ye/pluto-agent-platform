@@ -1,7 +1,4 @@
 import { randomUUID } from "node:crypto";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import type {
   AgentEvent,
@@ -14,7 +11,6 @@ import type {
   TeamTask,
 } from "../../contracts/types.js";
 import type { PaseoTeamAdapter } from "../../contracts/adapter.js";
-import { MAILBOX_RUNTIME_COLLAR } from "../../four-layer/render.js";
 import {
   runtimeHelperContextPath,
   PLUTO_RUNTIME_HELPER_CONTEXT_ENV,
@@ -29,6 +25,20 @@ import {
 } from "../../runtime/callback-normalizer.js";
 import { buildPortableRuntimeResultValueRefV0 } from "../../runtime/result-contract.js";
 import { DEFAULT_RUNNER, type ProcessRunner } from "./process-runner.js";
+import {
+  addHostArg,
+  buildRunArgs,
+  deleteAgent,
+  findListedSession,
+  listSessions,
+  normalizePaseoHost,
+  parseAgentId,
+  readAgentLogs,
+  sendPromptFileMessage,
+  waitForIdle,
+} from "./paseo-cli-client.js";
+import { extractAssistantTextFromLogs } from "./paseo-log-text.js";
+import { buildLeadPrompt, buildWorkerPrompt } from "./paseo-prompts.js";
 
 /**
  * Live adapter that drives Paseo CLI agents whose model runtime is OpenCode.
@@ -127,6 +137,7 @@ export function applyRunProfileMode(adapter: PaseoOpenCodeAdapter, dispatchMode?
 
 export class PaseoOpenCodeAdapter implements PaseoTeamAdapter {
   private readonly bin: string;
+  protected findListedSession = findListedSession;
   private readonly provider: string;
   private readonly model: string;
   private readonly host?: string;
@@ -202,7 +213,13 @@ export class PaseoOpenCodeAdapter implements PaseoTeamAdapter {
     transcript?: CoordinationTranscriptRefV0;
   }): Promise<AgentSession> {
     const run = this.expectRun(input.runId);
-    const prompt = this.buildLeadPrompt(input.task, input.role, run.team, input.playbook ?? run.playbook, input.transcript ?? run.transcript);
+    const prompt = buildLeadPrompt({
+      task: input.task,
+      role: input.role,
+      team: run.team,
+      playbook: input.playbook ?? run.playbook,
+      transcript: input.transcript ?? run.transcript,
+    });
     const args = this.runArgs({
       title: `Pluto MVP-alpha Lead [${input.runId}]`,
       labels: [`parent_run=${input.runId}`, `role=${input.role.id}`],
@@ -216,7 +233,7 @@ export class PaseoOpenCodeAdapter implements PaseoTeamAdapter {
         `paseo_lead_spawn_failed: exit=${result.exitCode} stderr=${result.stderr.slice(0, 400)}`,
       );
     }
-    const agentId = this.parseAgentId(result.stdout);
+    const agentId = parseAgentId(result.stdout);
     if (!agentId) {
       throw new Error(
         `paseo_lead_agent_id_missing: stdout=${result.stdout.slice(0, 400)}`,
@@ -265,7 +282,12 @@ export class PaseoOpenCodeAdapter implements PaseoTeamAdapter {
     instructions: string;
   }): Promise<AgentSession> {
     const run = this.expectRun(input.runId);
-    const prompt = this.buildWorkerPrompt(run.task, input.role, input.instructions, run.transcript);
+    const prompt = buildWorkerPrompt({
+      task: run.task,
+      role: input.role,
+      instructions: input.instructions,
+      transcript: run.transcript,
+    });
     const attempt = (run.workerAttempts.get(input.role.id) ?? 0) + 1;
     run.workerAttempts.set(input.role.id, attempt);
     const args = this.runArgs({
@@ -281,7 +303,7 @@ export class PaseoOpenCodeAdapter implements PaseoTeamAdapter {
         `paseo_worker_spawn_failed:${input.role.id} exit=${result.exitCode} stderr=${result.stderr.slice(0, 400)}`,
       );
     }
-    const agentId = this.parseAgentId(result.stdout);
+    const agentId = parseAgentId(result.stdout);
     if (!agentId) {
       throw new Error(
         `paseo_worker_agent_id_missing:${input.role.id} stdout=${result.stdout.slice(0, 400)}`,
@@ -295,7 +317,7 @@ export class PaseoOpenCodeAdapter implements PaseoTeamAdapter {
       type: "worker_started",
       roleId: input.role.id,
       sessionId: agentId,
-      payload: { paseoAgentId: agentId, instructions: input.instructions, attempt },
+      payload: { paseAgentId: agentId, instructions: input.instructions, attempt },
       callback: this.callbackIdentity({
         source: "paseo_opencode",
         batchId: workerBatchId,
@@ -305,11 +327,14 @@ export class PaseoOpenCodeAdapter implements PaseoTeamAdapter {
       }),
     });
 
-    const wait = await this.runner.exec(
-      this.bin,
-      this.hostArgs(["wait", agentId, "--timeout", String(this.waitTimeoutSec), "--json"]),
-      { cwd: this.runCwd(run) },
-    );
+    const wait = await waitForIdle({
+      runner: this.runner,
+      bin: this.bin,
+      host: this.host,
+      sessionId: agentId,
+      timeoutSec: this.waitTimeoutSec,
+      cwd: this.runCwd(run),
+    });
     if (wait.exitCode !== 0) {
       throw new Error(
         `paseo_worker_wait_failed:${input.role.id} exit=${wait.exitCode} stderr=${wait.stderr.slice(0, 400)}`,
@@ -321,7 +346,7 @@ export class PaseoOpenCodeAdapter implements PaseoTeamAdapter {
       type: "worker_completed",
       roleId: input.role.id,
       sessionId: agentId,
-      payload: { paseoAgentId: agentId, output, attempt },
+      payload: { paseAgentId: agentId, output, attempt },
       rawPayloadKeys: ["output"],
       callback: this.callbackIdentity({
         source: "paseo_opencode",
@@ -332,7 +357,7 @@ export class PaseoOpenCodeAdapter implements PaseoTeamAdapter {
       }),
     });
 
-    return { sessionId: agentId, role: input.role, external: { paseoAgentId: agentId } };
+    return { sessionId: agentId, role: input.role, external: { paseAgentId: agentId } };
   }
 
   private runtimeHelperEnv(workspaceDir: string, runId: string, roleId: string): NodeJS.ProcessEnv {
@@ -382,7 +407,7 @@ export class PaseoOpenCodeAdapter implements PaseoTeamAdapter {
     const wireMessage = input.message.replace(/\r?\n+/g, " | ");
     const result = await this.runner.exec(
       this.bin,
-      this.hostArgs(["send", input.sessionId, wireMessage]),
+      addHostArg(["send", input.sessionId, wireMessage], this.host),
       { cwd: this.runCwd(run) },
     );
     if (result.exitCode !== 0) {
@@ -393,11 +418,14 @@ export class PaseoOpenCodeAdapter implements PaseoTeamAdapter {
     if (input.message.includes("SUMMARIZE")) {
       // Belt-and-suspenders: also explicitly wait, in case `send` returned
       // before the streaming completion landed.
-      await this.runner.exec(
-        this.bin,
-        this.hostArgs(["wait", input.sessionId, "--timeout", String(this.waitTimeoutSec), "--json"]),
-        { cwd: this.runCwd(run) },
-      );
+      await waitForIdle({
+        runner: this.runner,
+        bin: this.bin,
+        host: this.host,
+        sessionId: input.sessionId,
+        timeoutSec: this.waitTimeoutSec,
+        cwd: this.runCwd(run),
+      }).catch(() => undefined);
       const markdown = await this.fetchAgentText(input.sessionId, run, wireMessage);
       const summaryBatchId = this.nextBatchId(run, "lead-summary");
       this.appendEvent(input.runId, {
@@ -420,7 +448,7 @@ export class PaseoOpenCodeAdapter implements PaseoTeamAdapter {
   async sendSessionMessage(input: { runId: string; sessionId: string; message: string; wait?: boolean }): Promise<void> {
     const run = this.expectRun(input.runId);
     this.expectKnownSession(run, input.sessionId);
-    await this.sendPromptFileMessage(run, input.sessionId, input.message, input.wait === true);
+    await this.sendPromptFileMessageCore(run, input.sessionId, input.message, input.wait === true);
   }
 
   async sendRoleMessage(input: { runId: string; roleId: string; message: string; wait?: boolean }): Promise<void> {
@@ -442,7 +470,7 @@ export class PaseoOpenCodeAdapter implements PaseoTeamAdapter {
     this.expectKnownSession(run, input.sessionId);
     const result = await this.runner.exec(
       this.bin,
-      this.hostArgs(["ls", "--json"]),
+      addHostArg(["ls", "--json"], this.host),
       { cwd: this.runCwd(run) },
     );
     if (result.exitCode !== 0) {
@@ -450,7 +478,7 @@ export class PaseoOpenCodeAdapter implements PaseoTeamAdapter {
     }
     const match = this.findListedSession(result.stdout, input.sessionId);
     if (!match) {
-      // Session is known to the adapter (we created it) but paseo ls hasn't
+      // Session is known to the adapter (we created it) but Paseo ls hasn't
       // surfaced it yet — typical race between createWorkerSession and the
       // first idle check. Treat as not-idle so the inbox loop will queue
       // the message and retry on the next iteration; do NOT throw or the
@@ -489,9 +517,13 @@ export class PaseoOpenCodeAdapter implements PaseoTeamAdapter {
         (x): x is string => Boolean(x),
       );
       for (const id of ids) {
-        await this.runner
-          .exec(this.bin, this.hostArgs(["delete", id]), { cwd: this.runCwd(run) })
-          .catch(() => undefined);
+        await deleteAgent({
+          runner: this.runner,
+          bin: this.bin,
+          host: this.host,
+          agentId: id,
+          cwd: this.runCwd(run),
+        });
       }
     }
   }
@@ -503,52 +535,19 @@ export class PaseoOpenCodeAdapter implements PaseoTeamAdapter {
   }
 
   private runArgs(opts: { title: string; labels?: string[] }): string[] {
-    const args = [
-      "run",
-      "--detach",
-      "--json",
-      "--provider",
-      this.provider,
-      "--model",
-      this.model,
-      "--mode",
-      this.mode,
-      "--title",
-      opts.title,
-    ];
-    for (const label of opts.labels ?? []) {
-      args.push("--label", label);
-    }
-    if (this.thinking) args.push("--thinking", this.thinking);
-    if (this.workspaceCwd) args.push("--cwd", this.workspaceCwd);
-    return this.hostArgs(args);
+    const args = buildRunArgs({
+      provider: this.provider,
+      model: this.model,
+      mode: this.mode,
+      thinking: this.thinking,
+      workspaceCwd: this.workspaceCwd,
+      title: opts.title,
+      labels: opts.labels,
+    });
+    return addHostArg(args, this.host);
   }
 
-  private hostArgs(args: string[]): string[] {
-    return this.host ? [...args, "--host", this.host] : args;
-  }
-
-  private findListedSession(stdout: string, sessionId: string): Record<string, unknown> | null {
-    const parsed = JSON.parse(stdout) as unknown;
-    const entries = Array.isArray(parsed)
-      ? parsed
-      : (typeof parsed === "object" && parsed !== null && Array.isArray((parsed as Record<string, unknown>)["agents"])
-        ? (parsed as Record<string, unknown>)["agents"] as unknown[]
-        : []);
-    for (const entry of entries) {
-      if (typeof entry !== "object" || entry === null) {
-        continue;
-      }
-      const record = entry as Record<string, unknown>;
-      const listedId = typeof record["agentId"] === "string"
-        ? record["agentId"]
-        : (typeof record["id"] === "string" ? record["id"] : null);
-      if (listedId === sessionId) {
-        return record;
-      }
-    }
-    return null;
-  }
+  static normalizePaseoHost = normalizePaseoHost;
 
   private expectKnownSession(run: RunState, sessionId: string): void {
     if (run.leadAgentId === sessionId) return;
@@ -556,51 +555,21 @@ export class PaseoOpenCodeAdapter implements PaseoTeamAdapter {
     throw new Error(`paseo_adapter_unknown_session:${sessionId}`);
   }
 
-  private async sendPromptFileMessage(run: RunState, sessionId: string, message: string, wait: boolean): Promise<void> {
-    const tempDir = await mkdtemp(join(tmpdir(), "pluto-paseo-send-"));
-    const promptFile = join(tempDir, "prompt.txt");
-    try {
-      await writeFile(promptFile, message, "utf8");
-      const sendArgs = ["send", sessionId];
-      if (!wait) sendArgs.push("--no-wait");
-      sendArgs.push("--prompt-file", promptFile);
-      const result = await this.runner.exec(
-        this.bin,
-        this.hostArgs(sendArgs),
-        { cwd: this.runCwd(run) },
-      );
-      if (result.exitCode !== 0) {
-        throw new Error(
-          `paseo_send_failed: exit=${result.exitCode} stderr=${result.stderr.slice(0, 400)}`,
-        );
-      }
-    } finally {
-      await rm(tempDir, { recursive: true, force: true }).catch(() => undefined);
-    }
-  }
-
-  static normalizePaseoHost(host: string | undefined): string | undefined {
-    const trimmed = host?.trim();
-    if (!trimmed) return undefined;
-    return trimmed.replace(/^https?:\/\//i, "");
-  }
-
-  private parseAgentId(stdout: string): string | undefined {
-    const trimmed = stdout.trim();
-    if (!trimmed) return undefined;
-    try {
-      const parsed = JSON.parse(trimmed);
-      if (typeof parsed === "string") return parsed;
-      if (parsed && typeof parsed === "object") {
-        if (typeof parsed.agentId === "string") return parsed.agentId;
-        if (typeof parsed.id === "string") return parsed.id;
-        if (typeof parsed.Id === "string") return parsed.Id;
-      }
-    } catch {
-      /* fall through */
-    }
-    const m = trimmed.match(/"(?:agentId|id|Id)"\s*:\s*"([^"]+)"/);
-    return m ? m[1] : undefined;
+  private async sendPromptFileMessageCore(
+    run: RunState,
+    sessionId: string,
+    message: string,
+    wait: boolean,
+  ): Promise<void> {
+    return sendPromptFileMessage({
+      runner: this.runner,
+      bin: this.bin,
+      host: this.host,
+      sessionId,
+      message,
+      wait,
+      cwd: this.runCwd(run),
+    });
   }
 
   /**
@@ -618,192 +587,20 @@ export class PaseoOpenCodeAdapter implements PaseoTeamAdapter {
     run: RunState,
     echoedPrompt?: string,
   ): Promise<string> {
-    const result = await this.runner.exec(
-      this.bin,
-      this.hostArgs(["logs", agentId, "--filter", "text", "--tail", String(this.logsTail)]),
-      { cwd: this.runCwd(run) },
-    );
-    if (result.exitCode !== 0) {
-      throw new Error(
-        `paseo_logs_failed:${agentId} exit=${result.exitCode} stderr=${result.stderr.slice(0, 400)}`,
-      );
-    }
-    return PaseoOpenCodeAdapter.extractAssistantTextFromLogs(result.stdout, echoedPrompt);
+    const rawLogs = await readAgentLogs({
+      runner: this.runner,
+      bin: this.bin,
+      host: this.host,
+      agentId,
+      logsTail: this.logsTail,
+      cwd: this.runCwd(run),
+    });
+    return extractAssistantTextFromLogs(rawLogs, echoedPrompt);
   }
 
+  // Expose static method for backward compatibility
   static extractAssistantTextFromLogs(rawLogs: string, echoedPrompt?: string): string {
-    const lines = rawLogs.split(/\r?\n/);
-    // Find the index of the last [User] line; assistant text is after it.
-    let lastUserIdx = -1;
-    for (let i = lines.length - 1; i >= 0; i--) {
-      if (lines[i]?.startsWith("[User]")) {
-        lastUserIdx = i;
-        break;
-      }
-    }
-    const slice = lastUserIdx >= 0 ? lines.slice(lastUserIdx + 1) : lines;
-    const kept: string[] = [];
-    for (const line of slice) {
-      if (/^\[[A-Za-z][^\]]*\]/.test(line)) {
-        if (kept.length > 0) break;
-        continue;
-      }
-      kept.push(line);
-    }
-    const stripped = this.stripEchoedPromptPrefix(kept, echoedPrompt);
-    // Trim trailing blank lines without collapsing meaningful blanks inside.
-    while (stripped.length > 0 && stripped[stripped.length - 1]!.trim().length === 0) {
-      stripped.pop();
-    }
-    return stripped.join("\n").trimStart();
-  }
-
-  private static stripEchoedPromptPrefix(lines: string[], echoedPrompt?: string): string[] {
-    const firstContentIdx = lines.findIndex((line) => line.trim().length > 0);
-    const normalizedLines = firstContentIdx >= 0 ? lines.slice(firstContentIdx) : [];
-
-    // Real paseo/OpenCode logs sometimes put the first user-prompt line on the
-    // `[User] ...` marker itself and then echo the rest of the worker prompt as
-    // plain text. Strip this protocol header even when it is not an exact full
-    // prompt match; otherwise worker contributions leak "Instructions from the
-    // Team Lead" into summaries and artifacts.
-    const protocolEndIdx = normalizedLines.findIndex((line) =>
-      line.startsWith("Reply with your contribution only"),
-    );
-    if (
-      protocolEndIdx >= 0 &&
-      normalizedLines
-        .slice(0, protocolEndIdx + 1)
-        .some((line) => line === "Instructions from the Team Lead:")
-    ) {
-      let next = protocolEndIdx + 1;
-      while (next < normalizedLines.length && normalizedLines[next]!.trim() === "") next++;
-      return normalizedLines.slice(next);
-    }
-
-    if (!echoedPrompt) return [...normalizedLines];
-    const promptLines = echoedPrompt.split(/\r?\n/);
-    const compactPromptHead = echoedPrompt.split(" | ")[0];
-    const instructionIdx = promptLines.findIndex((line) => line === "Instructions from the Team Lead:");
-    const instructionSuffix = instructionIdx >= 0 ? promptLines.slice(instructionIdx) : [];
-    const candidates = [
-      promptLines,
-      instructionSuffix,
-      compactPromptHead ? [compactPromptHead] : [],
-    ].filter((candidate) => candidate.length > 0);
-
-    for (const candidate of candidates) {
-      if (candidate.length > normalizedLines.length) continue;
-      let matches = true;
-      for (let i = 0; i < candidate.length; i++) {
-        if ((normalizedLines[i] ?? "") !== candidate[i]) {
-          matches = false;
-          break;
-        }
-      }
-      if (matches) {
-        let next = candidate.length;
-        while (next < normalizedLines.length && normalizedLines[next]!.trim() === "") next++;
-        return normalizedLines.slice(next);
-      }
-    }
-    return [...normalizedLines];
-  }
-
-  private buildLeadPrompt(
-    task: TeamTask,
-    role: AgentRoleConfig,
-    team: TeamConfig,
-    playbook?: TeamPlaybookV0,
-    transcript?: CoordinationTranscriptRefV0,
-  ): string {
-    const workerRoles = team.roles.filter((r) => r.kind === "worker");
-    const playbookBlock = playbook ? JSON.stringify(playbook, null, 2) : "No playbook supplied; use legacy worker role order only.";
-    const playbookStageLines = playbook?.stages.map((stage) =>
-      `- ${stage.id} | ${stage.title} | role=${stage.roleId} | dependsOn=${stage.dependsOn.length > 0 ? stage.dependsOn.join(", ") : "none"}`,
-    ) ?? [];
-    const helperPromptActive = role.systemPrompt.includes(".pluto-runtime/pluto-mailbox");
-    const helperAbsolutePath = join(task.workspacePath, ".pluto-runtime", "pluto-mailbox");
-    const lines = [
-      role.systemPrompt,
-      "",
-      "AGENT TEAMS V1.6 — read carefully:",
-      "1. You are the team lead for a mailbox-and-task-list runtime.",
-      "2. The mailbox mirror and shared task list are Pluto-owned, read-only coordination artifacts for this run. Never edit, rewrite, or recreate mailbox.jsonl, tasks.json, or synthetic coordination entries yourself.",
-      "3. Follow the authored playbook order below when you summarize the run.",
-      helperPromptActive
-        ? "4. Use the Pluto runtime helper from the authored system prompt to inspect tasks, dispatch teammates, wait on completion, and finalize the run."
-        : "4. Pluto will deliver teammate outputs through the shared mailbox and will ask you for the final summary with a SUMMARIZE message.",
-      "5. Your final markdown must cite the teammate completion message ids Pluto provides.",
-      "6. Do not emit legacy marker prefixes or delegation markers.",
-      ...(helperPromptActive
-        ? [
-            `Runtime helper absolute path for this run: ${helperAbsolutePath}`,
-            "If your current working directory is outside the run workspace, call that absolute helper path instead of guessing a relative ./.pluto-runtime path.",
-          ]
-        : ["After all teammate tasks complete, wait for Pluto's SUMMARIZE message."]),
-      "",
-      "Runtime: agent-teams-v1_6",
-      `Selected playbook id: ${playbook?.id ?? "legacy-worker-order"}`,
-      `Selected playbook title: ${playbook?.title ?? "Legacy worker order only"}`,
-      `Selected playbook orchestration source: ${playbook?.orchestrationSource ?? "legacy_marker_fallback"}`,
-      ...(playbookStageLines.length > 0
-        ? ["Selected playbook stages:", ...playbookStageLines]
-        : ["Selected playbook stages: legacy worker role order only."]),
-      "",
-      "Selected playbook JSON:",
-      playbookBlock,
-      "",
-      `Mailbox kind: ${transcript?.kind ?? "shared_channel"}`,
-      `Coordination handle: ${transcript?.roomRef ?? `mailbox:${task.id}`}`,
-      MAILBOX_RUNTIME_COLLAR,
-      "",
-      `Task title: ${task.title}`,
-      `Goal: ${task.prompt}`,
-      `Workspace path: ${task.workspacePath}`,
-    ];
-    if (task.artifactPath) {
-      lines.push(`Artifact path the team should converge on: ${task.artifactPath}`);
-    }
-    return lines.join("\n");
-  }
-
-  private buildWorkerPrompt(
-    task: TeamTask,
-    role: AgentRoleConfig,
-    instructions: string,
-    transcript?: CoordinationTranscriptRefV0,
-  ): string {
-    const helperPromptActive = role.systemPrompt.includes(".pluto-runtime/pluto-mailbox");
-    const helperAbsolutePath = join(task.workspacePath, ".pluto-runtime", "pluto-mailbox");
-    const lines = [
-      role.systemPrompt,
-      "",
-      `Task title: ${task.title}`,
-      `Goal: ${task.prompt}`,
-      `Workspace path: ${task.workspacePath}`,
-      `Mailbox kind: ${transcript?.kind ?? "shared_channel"}`,
-      `Mailbox reference: ${transcript?.roomRef ?? "not-provided"}`,
-    ];
-    if (task.artifactPath) {
-      lines.push(`Artifact path the team should converge on: ${task.artifactPath}`);
-    }
-    if (helperPromptActive) {
-      lines.push(`Runtime helper absolute path for this run: ${helperAbsolutePath}`);
-      lines.push("If your current working directory is outside the run workspace, call that absolute helper path instead of guessing a relative ./.pluto-runtime path.");
-    }
-    lines.push(
-      "",
-      "Instructions from the Team Lead:",
-      instructions,
-      "",
-      "Pluto owns mailbox.jsonl and tasks.json as read-only coordination artifacts. Never edit them directly.",
-      "When you need to send a typed mailbox envelope back to the lead, use the coordination mechanism described earlier in your prompt instead of editing runtime-owned artifacts or inventing ad-hoc control prose.",
-      "Work in the workspace directly. If the lead asks you to create or update files, make those changes before replying.",
-      "Do not only describe intended edits when the task calls for an artifact change.",
-      "Reply with your contribution only. Keep it concise (under 15 lines).",
-    );
-    return lines.join("\n");
+    return extractAssistantTextFromLogs(rawLogs, echoedPrompt);
   }
 
   private appendEvent(
