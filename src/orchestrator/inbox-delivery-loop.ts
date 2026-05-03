@@ -36,6 +36,13 @@ export interface InboxDeliveryLoopOptions {
     roleId: string;
     sessionId: string;
   }) => Promise<void> | void;
+  interceptDelivery?: (input: {
+    message: MailboxMessage;
+    transportMessageId: string;
+    roleId: string;
+    sessionId: string;
+    attemptedAt: string;
+  }) => Promise<boolean | Record<string, unknown>>;
   resolveOrchestrationSource?: (message: MailboxMessage) => DispatchOrchestrationSource | undefined;
   markMessageRead?: (message: MailboxMessage) => Promise<void> | void;
 }
@@ -153,6 +160,11 @@ export function startInboxDeliveryLoop(options: InboxDeliveryLoopOptions): Inbox
       return;
     }
 
+    const intercepted = await maybeInterceptDelivery(received, roleId, sessionId, attemptedAt);
+    if (intercepted) {
+      return;
+    }
+
     const existingQueue = queuedBySession.get(sessionId);
     if (existingQueue && existingQueue.length > 0) {
       if (stopping) {
@@ -195,6 +207,12 @@ export function startInboxDeliveryLoop(options: InboxDeliveryLoopOptions): Inbox
           queued.shift();
           continue;
         }
+        const intercepted = await maybeInterceptDelivery(received, roleId, sessionId, attemptedAt);
+        if (intercepted) {
+          queued.shift();
+          madeProgress = true;
+          continue;
+        }
         const delivered = await deliverMessage(received, roleId, sessionId, attemptedAt);
         queued.shift();
         madeProgress = true;
@@ -226,6 +244,56 @@ export function startInboxDeliveryLoop(options: InboxDeliveryLoopOptions): Inbox
       sessionId,
     );
     await markMessageRead(received);
+  }
+
+  async function maybeInterceptDelivery(
+    received: ReceivedTransportMessage,
+    roleId: string,
+    sessionId: string,
+    attemptedAt: string,
+  ): Promise<boolean> {
+    try {
+      const intercepted = await options.interceptDelivery?.({
+        message: received.envelope.body,
+        transportMessageId: received.transportMessageId,
+        roleId,
+        sessionId,
+        attemptedAt,
+      });
+      if (!intercepted) {
+        return false;
+      }
+      const extraPayload = intercepted === true ? {} : intercepted;
+      await options.emit(
+        "mailbox_message_delivered",
+        withOrchestrationSource(received.envelope.body, {
+          transportMessageId: received.transportMessageId,
+          sessionId,
+          roleId,
+          deliveredAt: clock().toISOString(),
+          deliveryMode: "intercepted",
+          ...extraPayload,
+        }),
+        roleId,
+        sessionId,
+      );
+      await markMessageRead(received);
+      return true;
+    } catch (error) {
+      await options.emit(
+        "mailbox_message_failed",
+        withOrchestrationSource(received.envelope.body, {
+          transportMessageId: received.transportMessageId,
+          sessionId,
+          roleId,
+          attemptedAt,
+          reason: error instanceof Error ? error.message : String(error),
+        }),
+        roleId,
+        sessionId,
+      );
+      return true;
+    }
   }
 
   async function deliverMessage(

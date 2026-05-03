@@ -119,6 +119,7 @@ describe.sequential("teamlead-driven dispatch", () => {
       expect(events.some((event) => event.type === "spawn_request_received")).toBe(false);
     });
   });
+
 });
 
 class CapturingTransport extends FakeMailboxTransport {
@@ -130,6 +131,8 @@ class CapturingTransport extends FakeMailboxTransport {
     return room;
   }
 }
+
+let spawnRequestSequence = 0;
 
 async function createManualDispatchRun(name: string) {
   const workspace = await mkdtemp(join(tmpdir(), `pluto-teamlead-${name}-`));
@@ -187,7 +190,7 @@ async function postSpawnRequest(
   input: { from: string; targetRole: string; taskId: string },
 ) {
   const message = createMailboxMessage({
-    id: `${input.from}-${input.targetRole}-${input.taskId}`,
+    id: `${input.from}-${input.targetRole}-${input.taskId}-${++spawnRequestSequence}`,
     to: "lead",
     from: input.from,
     kind: "spawn_request",

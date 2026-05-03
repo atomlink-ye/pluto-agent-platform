@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   FOUR_LAYER_KNOWLEDGE_MAX_REF_BYTES,
   FourLayerLoaderError,
+  compileRunPackage,
   loadFourLayerWorkspace,
   renderRolePrompt,
   resolveFourLayerSelection,
@@ -158,6 +159,80 @@ describe("four-layer loader and render", () => {
 
     expect(evaluatorPrompt).toContain("## Rubric");
     expect(evaluatorPrompt.indexOf("## Rubric")).toBeLessThan(evaluatorPrompt.indexOf("## Task"));
+  });
+
+  it("renders runtime-helper guidance in the opt-in MVP path", async () => {
+    await seedValidWorkspace(rootDir);
+    const workspace = await loadFourLayerWorkspace(rootDir);
+    const resolved = await resolveFourLayerSelection(workspace, { scenario: "financial-review" });
+
+    const leadPrompt = renderRolePrompt(resolved, "team_lead", { runtimeHelperMvp: true });
+    const plannerPrompt = renderRolePrompt(resolved, "planner", { runtimeHelperMvp: true });
+    const evaluatorPrompt = renderRolePrompt(resolved, "evaluator", { runtimeHelperMvp: true });
+
+    expect(leadPrompt).toContain("## Coordination via Pluto runtime helper");
+    expect(leadPrompt).toContain("./.pluto-runtime/pluto-mailbox tasks");
+    expect(leadPrompt).toContain("add `--role <your-role-id>`");
+    expect(leadPrompt).toContain("spawn --task <taskId> --role <roleId>");
+    expect(leadPrompt).toContain("finalize --summary <summary>");
+    expect(leadPrompt).not.toContain("## Coordination via SendMessage and TaskTools");
+
+    expect(plannerPrompt).toContain("## Pluto runtime helper");
+    expect(plannerPrompt).toContain("complete --task <taskId> --summary <one-line-summary>");
+    expect(evaluatorPrompt).toContain("verdict --task <taskId> --verdict <pass|fail>");
+  });
+
+  it("compiles an inspectable normalized run package", async () => {
+    await seedValidWorkspace(rootDir);
+    const compiled = await compileRunPackage({
+      rootDir,
+      runId: "inspect-test",
+      workspaceOverride: join(rootDir, "workspace-override"),
+      selection: {
+        scenario: "financial-review",
+        runProfile: "local-dev",
+        runtimeTask: "Review the override task.",
+      },
+      runtimeHelperMvp: true,
+    });
+
+    expect(compiled.package).toMatchObject({
+      schemaVersion: 0,
+      kind: "run_package",
+      runId: "inspect-test",
+      selection: {
+        scenario: "financial-review",
+        playbook: "research-review",
+        runProfile: "local-dev",
+        runtimeTask: "Review the override task.",
+      },
+      task: "Review the override task.",
+      dispatchMode: "teamlead_chat",
+      team: {
+        id: "research-review",
+        leadRoleId: "team_lead",
+      },
+      adapterPlaybook: {
+        id: "research-review",
+        finalCitationMetadata: {
+          requiredStageIds: ["planner-stage", "evaluator-stage"],
+          requireFinalReconciliation: true,
+        },
+      },
+      workspace: {
+        cwd: "/tmp/pluto",
+        materializedCwd: join(rootDir, "workspace-override"),
+      },
+    });
+    expect(compiled.package.sources.agents.map((source) => source.name)).toEqual(["team_lead", "planner", "evaluator"]);
+    expect(compiled.package.roles.map((role) => [role.name, role.kind])).toEqual([
+      ["team_lead", "team_lead"],
+      ["planner", "worker"],
+      ["evaluator", "worker"],
+    ]);
+    expect(compiled.package.prompts.team_lead).toContain("Run ID: inspect-test");
+    expect(compiled.package.prompts.team_lead).toContain("./.pluto-runtime/pluto-mailbox");
+    expect(compiled.package.prompts.planner).toContain("Review the override task.");
   });
 
   it("fails closed when a knowledge ref exceeds the cap", async () => {

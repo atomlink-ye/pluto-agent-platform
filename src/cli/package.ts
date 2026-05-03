@@ -2,10 +2,7 @@
 import { resolve } from "node:path";
 import process from "node:process";
 
-import { FakeAdapter } from "../adapters/fake/index.js";
-import { PaseoOpenCodeAdapter } from "../adapters/paseo-opencode/index.js";
-import { runManagerHarness } from "../orchestrator/manager-run-harness.js";
-import { resolveRuntimeHelperMvpEnabled } from "../orchestrator/runtime-helper.js";
+import { compileRunPackage } from "../four-layer/index.js";
 
 interface CliFlags {
   root: string;
@@ -14,14 +11,13 @@ interface CliFlags {
   playbook?: string;
   task?: string;
   workspace?: string;
-  adapter: "fake" | "paseo-opencode";
-  dataDir?: string;
+  runId: string;
 }
 
 function parseFlags(argv: string[]): CliFlags {
   const flags: Partial<CliFlags> = {
     root: process.cwd(),
-    adapter: "fake",
+    runId: "inspect-run",
   };
 
   for (let index = 0; index < argv.length; index += 1) {
@@ -54,15 +50,8 @@ function parseFlags(argv: string[]): CliFlags {
         flags.workspace = value;
         index += 1;
         break;
-      case "--adapter":
-        if (value !== "fake" && value !== "paseo-opencode") {
-          throw new Error(`unknown_adapter:${value}`);
-        }
-        flags.adapter = value;
-        index += 1;
-        break;
-      case "--data-dir":
-        flags.dataDir = value;
+      case "--run-id":
+        flags.runId = value;
         index += 1;
         break;
       default:
@@ -80,11 +69,9 @@ function parseFlags(argv: string[]): CliFlags {
 
 async function main() {
   const flags = parseFlags(process.argv.slice(2));
-  const workspaceSubdirPerRun = Boolean(flags.workspace)
-    && flags.adapter === "paseo-opencode"
-    && resolveRuntimeHelperMvpEnabled();
-  const result = await runManagerHarness({
+  const compiled = await compileRunPackage({
     rootDir: resolve(flags.root),
+    runId: flags.runId,
     selection: {
       scenario: flags.scenario,
       ...(flags.runProfile ? { runProfile: flags.runProfile } : {}),
@@ -92,29 +79,9 @@ async function main() {
       ...(flags.task ? { runtimeTask: flags.task } : {}),
     },
     ...(flags.workspace ? { workspaceOverride: resolve(flags.workspace) } : {}),
-    ...(workspaceSubdirPerRun ? { workspaceSubdirPerRun: true } : {}),
-    ...(flags.dataDir ? { dataDir: flags.dataDir } : {}),
-    createAdapter: ({ team, workspaceCwd }) => flags.adapter === "fake"
-      ? new FakeAdapter({ team })
-      : new PaseoOpenCodeAdapter({ workspaceCwd, deleteAgentsOnEnd: false }),
   });
 
-  console.log(JSON.stringify({
-    runId: result.run.runId,
-    status: result.run.status,
-    scenario: result.run.scenario,
-    playbook: result.run.playbook,
-    runProfile: result.run.runProfile,
-    workspaceDir: result.workspaceDir,
-    runDir: result.runDir,
-    artifactPath: result.artifactPath,
-    evidencePacketPath: result.canonicalEvidencePath,
-    evidencePath: result.legacyEvidencePath,
-  }, null, 2));
-
-  if (result.run.status !== "succeeded") {
-    process.exitCode = result.legacyResult.blockerReason === "chat_transport_unavailable" ? 2 : 1;
-  }
+  console.log(JSON.stringify(compiled.package, null, 2));
 }
 
 main().catch((error) => {

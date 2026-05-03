@@ -98,6 +98,61 @@ describe("inbox delivery loop", () => {
     expect(events.find((event) => event.type === "mailbox_message_delivered")?.payload["transportMessageId"]).toBeTruthy();
   });
 
+  it("can satisfy delivery through interception without sending into the session", async () => {
+    const transport = new FakeMailboxTransport();
+    const room = await transport.createRoom({ runId: "run-intercept", name: "intercept" });
+    const adapter = new LoopTestAdapter();
+    adapter.idleBySession.set("lead-session", false);
+    const events: AgentEvent[] = [];
+    const readMessageIds: string[] = [];
+    const mailboxMessage = createMailboxMessage({
+      to: "lead",
+      from: "planner",
+      kind: "worker_complete",
+      body: { schemaVersion: "v1", taskId: "task-1", status: "succeeded" },
+    });
+    const loop = startInboxDeliveryLoop({
+      runId: "run-intercept",
+      room,
+      transport,
+      adapter,
+      resolveSessionId: () => "lead-session",
+      emit: async (type: AgentEventType, payload = {}, roleId?: string, sessionId?: string) => {
+        const event: AgentEvent = {
+          id: `${events.length + 1}`,
+          runId: "run-intercept",
+          ts: new Date().toISOString(),
+          type,
+          ...(roleId ? { roleId: roleId as AgentEvent["roleId"] } : {}),
+          ...(sessionId ? { sessionId } : {}),
+          payload,
+        };
+        events.push(event);
+        return event;
+      },
+      interceptDelivery: async ({ roleId, message }) => roleId === "lead" && message.kind === "worker_complete"
+        ? { deliveryMode: "runtime_helper_wait", semanticHandling: "lead_worker_complete" }
+        : false,
+      markMessageRead: async (message) => {
+        readMessageIds.push(message.id);
+      },
+      waitTimeoutMs: 5,
+    });
+
+    await transport.post({
+      room,
+      envelope: buildEnvelope("run-intercept", mailboxMessage),
+    });
+
+    await waitFor(() => events.some((event) => event.type === "mailbox_message_delivered"));
+    await loop.stop();
+
+    expect(adapter.sent).toHaveLength(0);
+    expect(readMessageIds).toEqual([mailboxMessage.id]);
+    expect(events.some((event) => event.type === "mailbox_message_queued")).toBe(false);
+    expect(events.find((event) => event.type === "mailbox_message_delivered")?.payload["deliveryMode"]).toBe("runtime_helper_wait");
+  });
+
   it("queues a busy target and drains after a later idle check", async () => {
     const transport = new FakeMailboxTransport();
     const room = await transport.createRoom({ runId: "run-queue", name: "queue" });
@@ -146,6 +201,59 @@ describe("inbox delivery loop", () => {
     expect(events.map((event) => event.type)).toContain("mailbox_message_queued");
     expect(events.map((event) => event.type)).toContain("mailbox_message_delivered");
     expect(readMessageIds).toEqual([mailboxMessage.id]);
+  });
+
+  it("re-checks interception for queued messages before later direct send", async () => {
+    const transport = new FakeMailboxTransport();
+    const room = await transport.createRoom({ runId: "run-hybrid", name: "hybrid" });
+    const adapter = new LoopTestAdapter();
+    adapter.idleBySession.set("lead-session", false);
+    const events: AgentEvent[] = [];
+    let allowIntercept = false;
+    const mailboxMessage = createMailboxMessage({
+      to: "lead",
+      from: "planner",
+      kind: "worker_complete",
+      body: { schemaVersion: "v1", taskId: "task-1", status: "succeeded" },
+    });
+    const loop = startInboxDeliveryLoop({
+      runId: "run-hybrid",
+      room,
+      transport,
+      adapter,
+      resolveSessionId: () => "lead-session",
+      emit: async (type: AgentEventType, payload = {}, roleId?: string, sessionId?: string) => {
+        const event: AgentEvent = {
+          id: `${events.length + 1}`,
+          runId: "run-hybrid",
+          ts: new Date().toISOString(),
+          type,
+          ...(roleId ? { roleId: roleId as AgentEvent["roleId"] } : {}),
+          ...(sessionId ? { sessionId } : {}),
+          payload,
+        };
+        events.push(event);
+        return event;
+      },
+      interceptDelivery: async ({ roleId, message }) => allowIntercept && roleId === "lead" && message.kind === "worker_complete"
+        ? { deliveryMode: "runtime_helper_wait", semanticHandling: "lead_worker_complete" }
+        : false,
+      waitTimeoutMs: 5,
+    });
+
+    await transport.post({
+      room,
+      envelope: buildEnvelope("run-hybrid", mailboxMessage),
+    });
+
+    await waitFor(() => events.some((event) => event.type === "mailbox_message_queued"));
+    allowIntercept = true;
+    adapter.idleBySession.set("lead-session", true);
+    await waitFor(() => events.filter((event) => event.type === "mailbox_message_delivered").length > 0);
+    await loop.stop();
+
+    expect(adapter.sent).toHaveLength(0);
+    expect(events.find((event) => event.type === "mailbox_message_delivered")?.payload["deliveryMode"]).toBe("runtime_helper_wait");
   });
 
   it("records failed delivery when the target session cannot be resolved", async () => {

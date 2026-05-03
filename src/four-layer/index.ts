@@ -8,3 +8,4 @@ export * from "./task-list.js";
 export * from "./hooks.js";
 export * from "./plan-approval.js";
 export * from "./message-guards.js";
+export * from "./run-package.js";

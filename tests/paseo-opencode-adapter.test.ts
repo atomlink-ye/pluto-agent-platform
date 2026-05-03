@@ -250,6 +250,37 @@ describe("PaseoOpenCodeAdapter — protocol with mocked runner", () => {
     expect(leadStarted!.payload["systemPrompt"]).toContain("AGENT TEAMS V1.6");
   });
 
+  it("adds an absolute helper path and removes stale SUMMARIZE guidance for helper-authored lead prompts", async () => {
+    const prompts: string[] = [];
+    const adapter = new PaseoOpenCodeAdapter({
+      workspaceCwd: "/tmp/pluto-live",
+      runner: makeRunner({
+        run: (args) => {
+          prompts.push(args[args.length - 1] ?? "");
+          return { stdout: '{"agentId":"lead-helper-prompt-test"}' };
+        },
+      }),
+    });
+
+    await adapter.startRun({ runId: "r-helper-prompt", task: baseTask, team: DEFAULT_TEAM });
+    await adapter.createLeadSession({
+      runId: "r-helper-prompt",
+      task: baseTask,
+      role: {
+        ...getRole(DEFAULT_TEAM, DEFAULT_TEAM.leadRoleId),
+        systemPrompt: [
+          "You are the Team Lead.",
+          "## Coordination via Pluto runtime helper",
+          "- Runtime helper path for this run: `./.pluto-runtime/pluto-mailbox`.",
+          "- Start by running `./.pluto-runtime/pluto-mailbox tasks`.",
+        ].join("\n"),
+      },
+    });
+
+    expect(prompts[0]).toContain("Runtime helper absolute path for this run: /tmp/pluto-live/.pluto-runtime/pluto-mailbox");
+    expect(prompts[0]).not.toContain("wait for Pluto's SUMMARIZE message");
+  });
+
   it("uses orchestrator mode in paseo run args by default", async () => {
     const captured: string[][] = [];
     const adapter = new PaseoOpenCodeAdapter({
@@ -404,6 +435,40 @@ describe("PaseoOpenCodeAdapter — protocol with mocked runner", () => {
       expect(hostIdx).toBeGreaterThanOrEqual(0);
       expect(args[hostIdx + 1]).toBe("127.0.0.1:6767");
     }
+  });
+
+  it("orders paseo send arguments as <id> before --prompt-file for session messages", async () => {
+    const captured: string[][] = [];
+    const adapter = new PaseoOpenCodeAdapter({
+      workspaceCwd: "/tmp/pluto-live",
+      runner: makeRunner({ onArgs: (_c, a) => captured.push(a) }),
+    });
+
+    await adapter.startRun({ runId: "r-send-order", task: baseTask, team: DEFAULT_TEAM });
+    await adapter.createLeadSession({
+      runId: "r-send-order",
+      task: baseTask,
+      role: getRole(DEFAULT_TEAM, DEFAULT_TEAM.leadRoleId),
+    });
+    const planner = await adapter.createWorkerSession({
+      runId: "r-send-order",
+      role: getRole(DEFAULT_TEAM, "planner"),
+      instructions: "Plan",
+    });
+
+    await adapter.sendSessionMessage({
+      runId: "r-send-order",
+      sessionId: planner.sessionId,
+      message: "Follow up",
+      wait: false,
+    });
+
+    const sendArgs = captured.find((args) => args[0] === "send");
+    expect(sendArgs).toBeDefined();
+    expect(sendArgs?.[1]).toBe(planner.sessionId);
+    expect(sendArgs).toContain("--no-wait");
+    expect(sendArgs).toContain("--prompt-file");
+    expect(sendArgs!.indexOf(planner.sessionId)).toBeLessThan(sendArgs!.indexOf("--prompt-file"));
   });
 
   it("normalizes PASEO_HOST URL values for the paseo --host CLI argument", () => {

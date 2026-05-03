@@ -1,4 +1,4 @@
-import { access, mkdtemp, readFile, rm } from "node:fs/promises";
+import { access, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -37,7 +37,7 @@ describe("manager run harness", () => {
     const tasks = await readFile(join(result.runDir, "tasks.json"), "utf8");
     const artifact = await readFile(join(workspace, "artifact.md"), "utf8");
     expect(mailboxLog).toContain('"summary":"FINAL"');
-    expect(mailboxLog).toContain("Coordination handle");
+    expect(mailboxLog).toContain('"summary":"RUN_START"');
     expect(mailboxLog).not.toContain("/mailbox.jsonl");
     expect(mailboxLog).not.toContain("/tasks.json");
     expect(tasks).toContain('"status": "completed"');
@@ -101,6 +101,109 @@ describe("manager run harness", () => {
     expect(finalReport).toContain("## Required Role Citations");
     expect(finalReport).toContain("planner:");
     expect(finalReport).not.toContain("Synthesized from routing decisions");
+  });
+
+  it("can materialize a run-local workspace subdirectory under the provided workspace root", async () => {
+    const workspaceRoot = await mkdtemp(join(tmpdir(), "pluto-four-layer-isolated-workspace-"));
+    const dataDir = join(workspaceRoot, ".pluto");
+    tempDirs.push(workspaceRoot);
+
+    const result = await runManagerHarness({
+      rootDir: repoRoot,
+      selection: { scenario: "hello-team", runProfile: "fake-smoke" },
+      workspaceOverride: workspaceRoot,
+      workspaceSubdirPerRun: true,
+      dataDir,
+      createAdapter: ({ team }) => new FakeAdapter({ team }),
+    });
+
+    const expectedWorkspaceDir = join(workspaceRoot, ".pluto-run-workspaces", result.run.runId);
+    expect(result.workspaceDir).toBe(expectedWorkspaceDir);
+    expect((await readFile(join(result.workspaceDir, "artifact.md"), "utf8")).toLowerCase()).toContain("lead");
+  });
+
+  it("preserves a substantive workspace artifact when the lead summary is much shorter", async () => {
+    const workspace = await mkdtemp(join(tmpdir(), "pluto-four-layer-artifact-preserve-"));
+    const dataDir = join(workspace, ".pluto");
+    tempDirs.push(workspace);
+
+    await writeFile(join(workspace, "artifact.md"), [
+      "# Symphony Repo Report",
+      "",
+      "## Architecture",
+      "- Runtime entry point: `src/index.ts`.",
+      "- Orchestration harness: `src/orchestrator/manager-run-harness.ts`.",
+      "",
+      "## Extension Points",
+      "- Adapter seam: `src/contracts/adapter.ts`.",
+      "- Fake runtime: `src/adapters/fake/fake-adapter.ts`.",
+      "",
+      "## Pluto Guidance",
+      "- Borrow the mailbox/task-list split; avoid replacing substantive artifacts with terse completion summaries.",
+      "",
+    ].join("\n"), "utf8");
+
+    const result = await runManagerHarness({
+      rootDir: repoRoot,
+      selection: { scenario: "hello-team", runProfile: "fake-smoke" },
+      workspaceOverride: workspace,
+      dataDir,
+      createAdapter: ({ team }) => new FakeAdapter({
+        team,
+        summaryBuilder: () => [
+          "Done. `artifact.md` contains the concise repo report.",
+          "",
+          "Verdict: pass.",
+          "",
+        ].join("\n"),
+      }),
+    });
+
+    expect(result.run.status).toBe("succeeded");
+    const artifact = await readFile(join(workspace, "artifact.md"), "utf8");
+    expect(artifact).toContain("# Symphony Repo Report");
+    expect(artifact).toContain("## Architecture");
+    expect(artifact).toContain("Citations:");
+    expect(artifact).toContain("Verdict: pass.");
+    expect(artifact).toContain("- planner: `");
+    expect(artifact).toContain("- generator: `");
+    expect(artifact).toContain("- evaluator: `");
+    expect(artifact).toContain("- Lead: coordinated the run and is represented in the final artifact.");
+
+    const persistedArtifact = await readFile(result.artifactPath ?? "", "utf8");
+    expect(persistedArtifact).toContain("# Symphony Repo Report");
+  });
+
+  it("backfills completion message citations when the lead summary omits them", async () => {
+    const workspace = await mkdtemp(join(tmpdir(), "pluto-four-layer-citation-backfill-"));
+    const dataDir = join(workspace, ".pluto");
+    tempDirs.push(workspace);
+
+    const result = await runManagerHarness({
+      rootDir: repoRoot,
+      selection: { scenario: "hello-team", runProfile: "fake-smoke" },
+      workspaceOverride: workspace,
+      dataDir,
+      createAdapter: ({ team }) => new FakeAdapter({
+        team,
+        summaryBuilder: () => [
+          "# Hello Team Summary",
+          "",
+          "- Lead: Hello from the lead!",
+          "- Planner: Hello from the planner!",
+          "- Generator: Hello from the generator!",
+          "- Evaluator: Hello from the evaluator!",
+          "",
+        ].join("\n"),
+      }),
+    });
+
+    expect(result.run.status).toBe("succeeded");
+    const artifact = await readFile(join(workspace, "artifact.md"), "utf8");
+    expect(artifact).toContain("Completion Citations:");
+    expect(artifact).toContain("- planner: `");
+    expect(artifact).toContain("- generator: `");
+    expect(artifact).toContain("- evaluator: `");
   });
 
   it("fails closed for unsupported run-profile policy", async () => {
