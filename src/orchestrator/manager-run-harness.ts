@@ -1,13 +1,45 @@
 import { randomUUID } from "node:crypto";
 import { exec as execCallback } from "node:child_process";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
-import { dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { join, relative, resolve } from "node:path";
 import { promisify } from "node:util";
 
 import type { PaseoTeamAdapter } from "../contracts/adapter.js";
 import { FakeMailboxTransport } from "../adapters/fake/fake-mailbox-transport.js";
 import { PaseoChatTransport, PaseoChatUnavailableError } from "../adapters/paseo-opencode/paseo-chat-transport.js";
 import { PaseoOpenCodeAdapter } from "../adapters/paseo-opencode/paseo-opencode-adapter.js";
+import {
+  type CommandExecutionResult,
+  finishManagerHarnessFailure,
+  type ManagerRunHarnessResult,
+} from "./harness/failure.js";
+import {
+  buildPlaybookMetadata,
+  materializeRunWorkspace,
+  validateRunProfileRuntimeSupport,
+  verifyRequiredReads,
+} from "./harness/preflight.js";
+import {
+  buildFallbackSummary,
+  buildSummaryRequest,
+  ensureArtifactMentions,
+  ensureCompletionMessageCitations,
+  firstNonEmptyLine,
+  renderFinalReport,
+  renderStatusDoc,
+  renderTaskTree,
+  selectFinalArtifactMarkdown,
+} from "./harness/reporting.js";
+import {
+  bestEffortCleanup,
+  buildCompletionMessageBody,
+  executeAcceptanceCommand,
+  extractStructuredWorkerMessage,
+  findWorkerCompletedEvent,
+  readWorkspaceArtifact,
+  resolveDispatchMode,
+  resolveRunStatus,
+} from "./harness/utilities.js";
 import type {
   AgentEvent,
   AgentEventType,
@@ -16,7 +48,6 @@ import type {
   CoordinationTranscriptRefV0,
   FinalArtifact,
   TeamConfig,
-  TeamRunPlaybookMetadataV0,
   TeamRunResult,
   TeamTask,
   WorkerContribution,
@@ -27,7 +58,6 @@ import type {
   EvidenceAuditEvent,
   EvidenceAuditEventKind,
   EvidenceAuditHookBoundary,
-  EvidenceCommandResult,
   FinalReconciliationBody,
   MailboxEnvelope,
   EvidenceRoleCitation,
@@ -36,7 +66,6 @@ import type {
   MailboxMessageKind,
   Run,
   RunArtifactRef,
-  RunProfile,
   RunProfileAcceptanceCommand,
   RunStatus,
   SpawnRequestBody,
@@ -83,6 +112,8 @@ const exec = promisify(execCallback);
 const DEFAULT_LEAD_TIMEOUT_SECONDS = 600;
 const CLEANUP_TIMEOUT_MS = 5_000;
 
+export type { ManagerRunHarnessResult } from "./harness/failure.js";
+
 export interface ManagerRunHarnessSelection {
   scenario: string;
   runProfile?: string;
@@ -111,23 +142,6 @@ export interface ManagerRunHarnessOptions {
   idGen?: () => string;
   clock?: () => Date;
   onPhase?: (phase: string, details: Record<string, unknown>) => Promise<void> | void;
-}
-
-export interface ManagerRunHarnessResult {
-  run: Run;
-  legacyResult: TeamRunResult;
-  runDir: string;
-  workspaceDir: string;
-  artifactPath: string | null;
-  canonicalEvidencePath: string;
-  legacyEvidencePath: string;
-  stdoutPath: string;
-  finalReportPath: string;
-}
-
-interface CommandExecutionResult extends EvidenceCommandResult {
-  stdout: string;
-  stderr: string;
 }
 
 interface DispatchPlanEntry {
@@ -190,7 +204,7 @@ export async function runManagerHarness(options: ManagerRunHarnessOptions): Prom
     runProfile: resolved.runProfile?.value.name ?? "(none)",
     status: "pending",
     task: taskText,
-    workspace: runProfile ? materializedWorkspace(runProfile.workspace, rootDir, workspaceDir, runId) : { cwd: workspaceDir },
+    workspace: runProfile ? materializeRunWorkspace(runProfile.workspace, rootDir, workspaceDir, runId) : { cwd: workspaceDir },
     coordinationChannel: {
       kind: "shared_channel",
       locator: mailboxRef.roomRef,
@@ -459,7 +473,7 @@ export async function runManagerHarness(options: ManagerRunHarnessOptions): Prom
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     blockerReason = classifyBlocker({ errorMessage: message, source: "orchestrator" }).reason;
-    return finishFailure({
+    return finishManagerHarnessFailure({
       run,
       runDir,
       workspaceDir,
@@ -550,7 +564,7 @@ export async function runManagerHarness(options: ManagerRunHarnessOptions): Prom
         issues.push(error.message);
         await emit("blocker", error.toBlockerPayload());
         await emit("run_failed", { message: error.message });
-        return finishFailure({
+        return finishManagerHarnessFailure({
           run,
           runDir,
           workspaceDir,
@@ -1865,7 +1879,7 @@ export async function runManagerHarness(options: ManagerRunHarnessOptions): Prom
         await emit("blocker", error.toBlockerPayload());
         await emit("run_failed", { message: error.message });
       }
-      return finishFailure({
+      return finishManagerHarnessFailure({
         run,
         runDir,
         workspaceDir,
@@ -1892,7 +1906,7 @@ export async function runManagerHarness(options: ManagerRunHarnessOptions): Prom
       await emit("blocker", { reason: blockerReason, message });
       await emit("run_failed", { message });
     }
-    return finishFailure({
+    return finishManagerHarnessFailure({
       run,
       runDir,
       workspaceDir,
@@ -1917,174 +1931,6 @@ export async function runManagerHarness(options: ManagerRunHarnessOptions): Prom
     await bestEffortCleanup(() => auditMailboxTransportParity(), CLEANUP_TIMEOUT_MS);
     await bestEffortCleanup(() => adapter?.endRun({ runId }), CLEANUP_TIMEOUT_MS);
   }
-}
-
-function finishFailure(input: {
-  run: Run;
-  runDir: string;
-  workspaceDir: string;
-  artifactPath: string | null;
-  collected: AgentEvent[];
-  task: TeamTask;
-  issues: string[];
-  blockerReason: BlockerReasonV0 | null;
-  clock: () => Date;
-  store: RunStore;
-  mailboxRef: CoordinationTranscriptRefV0;
-  commandResults: CommandExecutionResult[];
-  transitions: EvidenceTransition[];
-  roleCitations: EvidenceRoleCitation[];
-  auditEvents: EvidenceAuditEvent[];
-  acceptance: AcceptanceCheckResult;
-  audit: AuditMiddlewareResult;
-}): Promise<ManagerRunHarnessResult> {
-  return (async () => {
-    input.run.status = "failed";
-    input.run.finishedAt = input.clock().toISOString();
-    const legacyResult: TeamRunResult = {
-      runId: input.run.runId,
-      status: "failed",
-      events: input.collected,
-      blockerReason: input.blockerReason,
-      failure: { message: input.issues.join("; ") || "manager run failed" },
-    };
-    const stdoutPath = join(input.runDir, "stdout.log");
-    await mkdir(dirname(stdoutPath), { recursive: true });
-    await writeFile(stdoutPath, input.issues.join("\n") + "\n", "utf8");
-    const legacyEvidence = generateEvidencePacket({
-      task: input.task,
-      result: legacyResult,
-      events: input.collected,
-      startedAt: new Date(input.run.startedAt ?? input.clock().toISOString()),
-      finishedAt: new Date(input.run.finishedAt),
-      blockerReason: input.blockerReason,
-      transcriptRef: input.mailboxRef,
-    });
-    await writeEvidence(input.runDir, legacyEvidence);
-    const canonicalEvidence = await writeEvidencePacket(input.runDir, aggregateEvidencePacket({
-      run: input.run,
-      failureReason: input.issues.join("; "),
-      issues: input.issues,
-      commandResults: input.commandResults,
-      transitions: input.transitions,
-      roleCitations: input.roleCitations,
-      auditEvents: input.auditEvents,
-      stdoutPath,
-      transcriptPath: input.mailboxRef.path,
-      mailboxLogPath: input.mailboxRef.path,
-      taskListPath: join(input.runDir, "tasks.json"),
-      acceptance: input.acceptance,
-      audit: input.audit,
-    }));
-    return {
-      run: input.run,
-      legacyResult,
-      runDir: input.runDir,
-      workspaceDir: input.workspaceDir,
-      artifactPath: input.artifactPath,
-      canonicalEvidencePath: canonicalEvidence.jsonPath,
-      legacyEvidencePath: join(input.runDir, "evidence.json"),
-      stdoutPath,
-      finalReportPath: join(input.runDir, "final-report.md"),
-    };
-  })();
-}
-
-function interpolatePath(value: string, rootDir: string, runId: string, cwd: string): string {
-  return value.replaceAll("${repo_root}", rootDir).replaceAll("${run_id}", runId).replaceAll("${cwd}", cwd);
-}
-
-function materializedWorkspace(workspace: NonNullable<Run["workspace"]>, rootDir: string, workspaceDir: string, runId: string): NonNullable<Run["workspace"]> {
-  return {
-    cwd: interpolatePath(workspace.cwd, rootDir, runId, workspaceDir),
-    ...(workspace.worktree
-      ? {
-          worktree: {
-            branch: interpolatePath(workspace.worktree.branch, rootDir, runId, workspaceDir),
-            path: interpolatePath(workspace.worktree.path, rootDir, runId, workspaceDir),
-            ...(workspace.worktree.baseRef ? { baseRef: workspace.worktree.baseRef } : {}),
-          },
-        }
-      : {}),
-  };
-}
-
-function buildPlaybookMetadata(playbook: { name: string; description?: string }): TeamRunPlaybookMetadataV0 {
-  return {
-    id: playbook.name,
-    title: playbook.description ?? playbook.name,
-    schemaVersion: 0,
-    orchestrationSource: "teamlead_direct",
-  };
-}
-
-async function verifyRequiredReads(rootDir: string, requiredReads: ReadonlyArray<{ kind: string; path?: string; documentId?: string; optional?: boolean }>) {
-  for (const entry of requiredReads) {
-    if (entry.kind === "repo" && entry.path) {
-      const filePath = resolve(rootDir, entry.path);
-      const relativePath = relative(rootDir, filePath);
-      if (relativePath.startsWith("..") || isAbsolute(relativePath)) {
-        throw new Error(`invalid_required_read_path:repo:${entry.path}`);
-      }
-      await readFile(filePath, "utf8");
-      continue;
-    }
-    if (entry.optional) continue;
-    throw new Error(`unsupported_required_read:${entry.kind}:${entry.documentId ?? entry.path ?? "unknown"}`);
-  }
-}
-
-function validateRunProfileRuntimeSupport(runProfile: RunProfile | undefined) {
-  if (!runProfile) return;
-  if (runProfile.approvalGates?.preLaunch?.enabled === true) {
-    throw new Error("unsupported_approval_gate:preLaunch.enabled");
-  }
-  if (runProfile.workspace.worktree) {
-    throw new Error("unsupported_worktree_materialization:workspace.worktree");
-  }
-  const maxActiveChildren = runProfile.concurrency?.maxActiveChildren;
-  if (maxActiveChildren !== undefined && maxActiveChildren !== 1) {
-    throw new Error(`unsupported_concurrency:maxActiveChildren:${maxActiveChildren}`);
-  }
-  for (const entry of runProfile.requiredReads ?? []) {
-    if (entry.kind !== "repo") {
-      throw new Error(`unsupported_required_read:${entry.kind}:${entry.documentId ?? entry.path ?? "unknown"}`);
-    }
-  }
-}
-
-async function executeAcceptanceCommand(
-  command: RunProfileAcceptanceCommand,
-  commandCwd: string,
-  runDir: string,
-  index: number,
-  clock: () => Date,
-): Promise<CommandExecutionResult> {
-  const spec = typeof command === "string" ? { cmd: command, blockerOk: false } : { cmd: command.cmd, blockerOk: command.blockerOk ?? false };
-  const startedAt = clock().toISOString();
-  try {
-    const { stdout, stderr } = await exec(spec.cmd, { cwd: commandCwd, env: process.env, maxBuffer: 1024 * 1024 });
-    const stdoutPath = join(runDir, `command-${index}.stdout.log`);
-    const stderrPath = join(runDir, `command-${index}.stderr.log`);
-    await writeFile(stdoutPath, stdout, "utf8");
-    await writeFile(stderrPath, stderr, "utf8");
-    return { cmd: spec.cmd, exitCode: 0, summary: "ok", stdout, stderr, stdoutPath, stderrPath, blockerOk: spec.blockerOk, startedAt, finishedAt: clock().toISOString() };
-  } catch (error) {
-    const stdout = typeof error === "object" && error !== null && "stdout" in error ? String((error as { stdout?: string }).stdout ?? "") : "";
-    const stderr = typeof error === "object" && error !== null && "stderr" in error ? String((error as { stderr?: string }).stderr ?? "") : "";
-    const exitCode = typeof error === "object" && error !== null && "code" in error ? Number((error as { code?: number }).code ?? 1) : 1;
-    const stdoutPath = join(runDir, `command-${index}.stdout.log`);
-    const stderrPath = join(runDir, `command-${index}.stderr.log`);
-    await writeFile(stdoutPath, stdout, "utf8");
-    await writeFile(stderrPath, stderr, "utf8");
-    return { cmd: spec.cmd, exitCode, summary: spec.blockerOk ? "blocker_ok" : "failed", stdout, stderr, stdoutPath, stderrPath, blockerOk: spec.blockerOk, startedAt, finishedAt: clock().toISOString() };
-  }
-}
-
-function resolveRunStatus(issues: string[], auditOk: boolean): RunStatus {
-  if (!auditOk) return "failed_audit";
-  if (issues.length > 0) return "failed";
-  return "succeeded";
 }
 
 class MailboxMirrorWriteError extends Error {
@@ -2134,263 +1980,4 @@ function hasEnvelopeRejectionDrain(
   transport: MailboxTransport,
 ): transport is MailboxTransport & { drainEnvelopeRejections: () => Array<Record<string, unknown>> } {
   return typeof (transport as { drainEnvelopeRejections?: unknown }).drainEnvelopeRejections === "function";
-}
-
-function buildSummaryRequest(
-  taskText: string,
-  contributions: ReadonlyArray<WorkerContribution>,
-  completionMessages: ReadonlyArray<MailboxMessage>,
-  coordinationHandle: string,
-): string {
-  return [
-    "SUMMARIZE",
-    `Task: ${taskText}`,
-    `Coordination handle: ${coordinationHandle}`,
-    "Completion messages:",
-    ...completionMessages.map((message) => `- ${message.from}: ${message.id}`),
-    "Contributions:",
-    ...contributions.map((contribution) => `- ${contribution.roleId}: ${firstNonEmptyLine(contribution.output)}`),
-  ].join("\n");
-}
-
-function buildFallbackSummary(taskText: string, contributions: ReadonlyArray<WorkerContribution>): string {
-  return [
-    `# ${taskText}`,
-    "",
-    ...contributions.flatMap((contribution) => [`## ${contribution.roleId}`, contribution.output, ""]),
-  ].join("\n");
-}
-
-function buildCompletionMessageBody(taskId: string, output: string): string {
-  return [`Task ${taskId} complete.`, `Summary: ${firstNonEmptyLine(output) || "completed"}`].join("\n");
-}
-
-function findWorkerCompletedEvent(events: ReadonlyArray<AgentEvent>, roleId: string): AgentEvent | undefined {
-  return [...events].reverse().find((event) => event.type === "worker_completed" && event.roleId === roleId);
-}
-
-function extractStructuredWorkerMessage(
-  output: string,
-  taskId: string,
-): { kind: "evaluator_verdict"; body: EvaluatorVerdictBody; summary: string } | null {
-  const typedEnvelopeMatch = /evaluator_verdict\s*[\r\n]+body:\s*\{([\s\S]*?)\}/i.exec(output);
-  if (typedEnvelopeMatch) {
-    const bodyBlock = typedEnvelopeMatch[1] ?? "";
-    const taskIdMatch = /taskId:\s*"([^"]+)"/i.exec(bodyBlock);
-    const verdictMatch = /verdict:\s*"(pass|fail)"/i.exec(bodyBlock);
-    if (taskIdMatch?.[1] && verdictMatch?.[1]) {
-      const rationaleMatch = /rationale:\s*"([\s\S]*?)"/i.exec(bodyBlock);
-      const failedRubricRefMatch = /failedRubricRef:\s*"([^"]+)"/i.exec(bodyBlock);
-      const verdictBody: EvaluatorVerdictBody = {
-        schemaVersion: "v1",
-        taskId: taskIdMatch[1] || taskId,
-        verdict: verdictMatch[1] as EvaluatorVerdictBody["verdict"],
-        ...(rationaleMatch?.[1] ? { rationale: rationaleMatch[1] } : {}),
-        ...(failedRubricRefMatch?.[1] ? { failedRubricRef: failedRubricRefMatch[1] } : {}),
-      };
-      return {
-        kind: "evaluator_verdict",
-        body: verdictBody,
-        summary: `VERDICT ${verdictBody.taskId} ${verdictBody.verdict.toUpperCase()}`,
-      };
-    }
-  }
-
-  const candidates = [
-    ...Array.from(output.matchAll(/```json\s*([\s\S]*?)```/gi), (match) => match[1]?.trim() ?? ""),
-    ...output.split(/\r?\n/).map((line) => line.trim()).filter((line) => line.length > 0),
-  ];
-  for (const candidate of [...candidates].reverse()) {
-    if (!candidate.startsWith("{")) {
-      continue;
-    }
-    try {
-      const parsed = JSON.parse(candidate) as Record<string, unknown>;
-      const kind = parsed["kind"] === "evaluator_verdict"
-        ? "evaluator_verdict"
-        : (parsed["type"] === "evaluator_verdict" ? "evaluator_verdict" : null);
-      const body = typeof parsed["body"] === "object" && parsed["body"] !== null
-        ? parsed["body"] as Record<string, unknown>
-        : null;
-      if (!kind || !body || body["schemaVersion"] !== "v1") {
-        continue;
-      }
-      if ((body["verdict"] !== "pass" && body["verdict"] !== "fail") || typeof body["taskId"] !== "string") {
-        continue;
-      }
-      const verdictBody: EvaluatorVerdictBody = {
-        schemaVersion: "v1",
-        taskId: String(body["taskId"] || taskId),
-        verdict: body["verdict"],
-        ...(typeof body["rationale"] === "string" ? { rationale: body["rationale"] } : {}),
-        ...(typeof body["failedRubricRef"] === "string" ? { failedRubricRef: body["failedRubricRef"] } : {}),
-      };
-      return {
-        kind,
-        body: verdictBody,
-        summary: `VERDICT ${verdictBody.taskId} ${verdictBody.verdict.toUpperCase()}`,
-      };
-    } catch {
-      continue;
-    }
-  }
-  return null;
-}
-
-function resolveDispatchMode(value: string | undefined): DispatchOrchestrationSource {
-  return value === "static_loop" ? "static_loop" : "teamlead_chat";
-}
-
-function ensureArtifactMentions(markdown: string, requiredRoles: ReadonlyArray<string>): string {
-  const normalized = markdown.trim();
-  const missingRoles = requiredRoles.filter((role) => !normalized.toLowerCase().includes(role.toLowerCase()));
-  if (missingRoles.length === 0) {
-    return markdown;
-  }
-  const leadSupplement = missingRoles.map((role) => `- ${capitalizeRole(role)}: coordinated the run and is represented in the final artifact.`).join("\n");
-  return [normalized, leadSupplement].filter((section) => section.length > 0).join("\n\n") + "\n";
-}
-
-function ensureCompletionMessageCitations(markdown: string, completionMessages: ReadonlyArray<MailboxMessage>): string {
-  const normalized = markdown.trim();
-  const missingCitations = completionMessages.filter((message) => !normalized.includes(message.id));
-  if (missingCitations.length === 0) {
-    return markdown;
-  }
-  return [
-    normalized,
-    [
-      "Completion Citations:",
-      ...missingCitations.map((message) => `- ${message.from}: \`${message.id}\``),
-    ].join("\n"),
-  ].filter((section) => section.length > 0).join("\n\n") + "\n";
-}
-
-function selectFinalArtifactMarkdown(
-  leadMarkdown: string,
-  workspaceArtifactMarkdown: string | null,
-  completionMessages: ReadonlyArray<MailboxMessage>,
-): string {
-  if (!workspaceArtifactMarkdown || !shouldPreferWorkspaceArtifact(workspaceArtifactMarkdown, leadMarkdown)) {
-    return leadMarkdown;
-  }
-
-  const normalizedWorkspaceArtifact = workspaceArtifactMarkdown.trim();
-  const missingCitations = completionMessages.filter((message) => !normalizedWorkspaceArtifact.includes(message.id));
-  const verdictLine = extractVerdictLine(leadMarkdown);
-  const metadataSections: string[] = [];
-
-  if (missingCitations.length > 0) {
-    metadataSections.push([
-      "Citations:",
-      ...missingCitations.map((message) => `- ${message.from}: \`${message.id}\``),
-    ].join("\n"));
-  }
-
-  if (verdictLine && !normalizedWorkspaceArtifact.toLowerCase().includes(verdictLine.toLowerCase())) {
-    metadataSections.push(verdictLine);
-  }
-
-  return [normalizedWorkspaceArtifact, ...metadataSections].filter((section) => section.length > 0).join("\n\n") + "\n";
-}
-
-function shouldPreferWorkspaceArtifact(workspaceArtifactMarkdown: string, leadMarkdown: string): boolean {
-  const workspaceLength = workspaceArtifactMarkdown.trim().length;
-  const leadLength = leadMarkdown.trim().length;
-  const workspaceLineCount = countNonEmptyLines(workspaceArtifactMarkdown);
-  const leadLineCount = countNonEmptyLines(leadMarkdown);
-  const workspaceLooksSubstantive = workspaceLength >= 200 || workspaceLineCount >= 8;
-  const leadIsMuchShorter = workspaceLength >= Math.max(leadLength * 2, leadLength + 120)
-    && workspaceLineCount >= leadLineCount + 3;
-  return workspaceLooksSubstantive && leadIsMuchShorter;
-}
-
-function extractVerdictLine(markdown: string): string | null {
-  const match = markdown.match(/^Verdict:\s*.+$/im);
-  return match?.[0]?.trim() ?? null;
-}
-
-function countNonEmptyLines(value: string): number {
-  return value.split(/\r?\n/).filter((line) => line.trim().length > 0).length;
-}
-
-async function readWorkspaceArtifact(filePath: string): Promise<string | null> {
-  try {
-    return await readFile(filePath, "utf8");
-  } catch {
-    return null;
-  }
-}
-
-function capitalizeRole(role: string): string {
-  return role.slice(0, 1).toUpperCase() + role.slice(1);
-}
-
-async function bestEffortCleanup(
-  operation: () => Promise<unknown> | undefined,
-  timeoutMs: number,
-): Promise<void> {
-  const pending = operation();
-  if (!pending) {
-    return;
-  }
-  await Promise.race([
-    pending.catch(() => undefined),
-    new Promise<void>((resolve) => {
-      setTimeout(resolve, timeoutMs);
-    }),
-  ]);
-}
-
-function renderTaskTree(playbookName: string, roles: string[]): string {
-  return [`# Task Tree — ${playbookName}`, "", ...roles.map((role, index) => `${index + 1}. ${role}`), ""].join("\n");
-}
-
-function renderStatusDoc(runId: string, scenarioName: string, playbookName: string, runProfileName: string, workspaceDir: string, artifactPath: string): string {
-  return [
-    `# Status — ${runId}`,
-    "",
-    `- Scenario: ${scenarioName}`,
-    `- Playbook: ${playbookName}`,
-    `- Run profile: ${runProfileName}`,
-    `- Workspace: ${workspaceDir}`,
-    `- Artifact: ${artifactPath}`,
-    "",
-  ].join("\n");
-}
-
-function renderFinalReport(
-  summary: string,
-  transitions: ReadonlyArray<EvidenceTransition>,
-  completionMessages: ReadonlyArray<MailboxMessage>,
-  workspaceDir: string,
-): string {
-  return [
-    "# Final Report",
-    "",
-    "## Implementation Summary",
-    firstNonEmptyLine(summary) || "Completed.",
-    "",
-    "## Workflow Steps Executed",
-    ...transitions.map((transition) => `- ${transition.from} -> ${transition.to}`),
-    "",
-    "## Required Role Citations",
-    ...completionMessages.map((message) => `- ${message.from}: ${message.id}`),
-    "",
-    "## Deviations",
-    "- none observed",
-    "",
-    "## Workspace",
-    `- ${workspaceDir}`,
-    "",
-  ].join("\n");
-}
-
-function firstNonEmptyLine(value: string): string {
-  for (const raw of value.split(/\r?\n/)) {
-    const line = raw.trim();
-    if (line.length === 0) continue;
-    return line.replace(/^#+\s*/, "");
-  }
-  return "";
 }
