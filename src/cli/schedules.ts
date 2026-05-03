@@ -1,10 +1,10 @@
 #!/usr/bin/env node
 import process from "node:process";
-import { resolve } from "node:path";
 
 import { GovernanceStore } from "../governance/governance-store.js";
 import { projectScheduleDetail, projectScheduleHistory, listScheduleProjections } from "../schedule/projections.js";
 import { ScheduleStore } from "../schedule/schedule-store.js";
+import { parseSubcommandArgs, resolvePlutoDataDir } from "./shared/flags.js";
 
 function usage(): never {
   console.error(`Usage:
@@ -19,40 +19,11 @@ function fail(message: string): never {
   process.exit(1);
 }
 
-function parseArgs(argv: string[]): {
-  subcommand: string;
-  positional: string[];
-  flags: Record<string, string | boolean>;
-} {
-  const subcommand = argv[0] ?? "";
-  const positional: string[] = [];
-  const flags: Record<string, string | boolean> = {};
-
-  for (let i = 1; i < argv.length; i++) {
-    const arg = argv[i]!;
-    if (arg.startsWith("--")) {
-      const key = arg.slice(2);
-      const next = argv[i + 1];
-      if (next && !next.startsWith("--")) {
-        flags[key] = next;
-        i++;
-      } else {
-        flags[key] = true;
-      }
-      continue;
-    }
-
-    positional.push(arg);
-  }
-
-  return { subcommand, positional, flags };
-}
-
 async function main() {
-  const dataDir = resolve(process.env["PLUTO_DATA_DIR"] ?? ".pluto");
+  const dataDir = resolvePlutoDataDir();
   const governanceStore = new GovernanceStore({ dataDir });
   const scheduleStore = new ScheduleStore({ dataDir });
-  const { subcommand, positional, flags } = parseArgs(process.argv.slice(2));
+  const { subcommand, positional, flags } = parseSubcommandArgs(process.argv.slice(2));
   const jsonMode = flags["json"] === true;
 
   if (!subcommand) usage();

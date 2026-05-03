@@ -4,6 +4,8 @@ import process from "node:process";
 
 import { FakeAdapter } from "../adapters/fake/index.js";
 import { PaseoOpenCodeAdapter } from "../adapters/paseo-opencode/index.js";
+import { parseKeyValueFlags } from "./shared/flags.js";
+import { buildRunSelection } from "./shared/run-selection.js";
 import { runManagerHarness } from "../orchestrator/manager-run-harness.js";
 import { resolveRuntimeHelperMvpEnabled } from "../orchestrator/runtime-helper.js";
 
@@ -19,63 +21,31 @@ interface CliFlags {
 }
 
 function parseFlags(argv: string[]): CliFlags {
-  const flags: Partial<CliFlags> = {
-    root: process.cwd(),
-    adapter: "fake",
-  };
-
-  for (let index = 0; index < argv.length; index += 1) {
-    const key = argv[index];
-    const value = argv[index + 1];
-    switch (key) {
-      case "--":
-        break;
-      case "--root":
-        flags.root = value;
-        index += 1;
-        break;
-      case "--scenario":
-        flags.scenario = value;
-        index += 1;
-        break;
-      case "--run-profile":
-        flags.runProfile = value;
-        index += 1;
-        break;
-      case "--playbook":
-        flags.playbook = value;
-        index += 1;
-        break;
-      case "--task":
-        flags.task = value;
-        index += 1;
-        break;
-      case "--workspace":
-        flags.workspace = value;
-        index += 1;
-        break;
-      case "--adapter":
-        if (value !== "fake" && value !== "paseo-opencode") {
-          throw new Error(`unknown_adapter:${value}`);
-        }
-        flags.adapter = value;
-        index += 1;
-        break;
-      case "--data-dir":
-        flags.dataDir = value;
-        index += 1;
-        break;
-      default:
-        if (key?.startsWith("--")) {
-          throw new Error(`unknown_flag:${key}`);
-        }
-    }
-  }
-
-  if (!flags.scenario) {
-    throw new Error("missing_required_flag: --scenario is required");
-  }
-  return flags as CliFlags;
+  return parseKeyValueFlags(argv, {
+    defaults: {
+      root: process.cwd(),
+      adapter: "fake",
+    },
+    flags: {
+      "--root": { key: "root" },
+      "--scenario": { key: "scenario" },
+      "--run-profile": { key: "runProfile" },
+      "--playbook": { key: "playbook" },
+      "--task": { key: "task" },
+      "--workspace": { key: "workspace" },
+      "--adapter": {
+        key: "adapter",
+        parse: (value) => {
+          if (value !== "fake" && value !== "paseo-opencode") {
+            throw new Error(`unknown_adapter:${value}`);
+          }
+          return value;
+        },
+      },
+      "--data-dir": { key: "dataDir" },
+    },
+    required: ["scenario"],
+  });
 }
 
 async function main() {
@@ -85,12 +55,7 @@ async function main() {
     && resolveRuntimeHelperMvpEnabled();
   const result = await runManagerHarness({
     rootDir: resolve(flags.root),
-    selection: {
-      scenario: flags.scenario,
-      ...(flags.runProfile ? { runProfile: flags.runProfile } : {}),
-      ...(flags.playbook ? { playbook: flags.playbook } : {}),
-      ...(flags.task ? { runtimeTask: flags.task } : {}),
-    },
+    selection: buildRunSelection(flags),
     ...(flags.workspace ? { workspaceOverride: resolve(flags.workspace) } : {}),
     ...(workspaceSubdirPerRun ? { workspaceSubdirPerRun: true } : {}),
     ...(flags.dataDir ? { dataDir: flags.dataDir } : {}),
