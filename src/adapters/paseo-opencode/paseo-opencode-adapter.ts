@@ -11,6 +11,7 @@ import type {
   TeamTask,
 } from "../../contracts/types.js";
 import type { PaseoTeamAdapter } from "../../contracts/adapter.js";
+import { MAILBOX_RUNTIME_COLLAR } from "../../four-layer/render.js";
 import { redactObject } from "../../orchestrator/redactor.js";
 import {
   buildAdapterCallbackIdentity,
@@ -623,8 +624,8 @@ export class PaseoOpenCodeAdapter implements PaseoTeamAdapter {
       playbookBlock,
       "",
       `Mailbox kind: ${transcript?.kind ?? "shared_channel"}`,
-      `Mailbox path: ${transcript?.path ?? "not-provided"}`,
-      `Mailbox reference: ${transcript?.roomRef ?? "not-provided"}`,
+      `Coordination handle: ${transcript?.roomRef ?? `mailbox:${task.id}`}`,
+      MAILBOX_RUNTIME_COLLAR,
       "",
       `Task title: ${task.title}`,
       `Goal: ${task.prompt}`,

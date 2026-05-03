@@ -1,6 +1,8 @@
 import type { Agent, Scenario } from "../contracts/four-layer.js";
 import type { ResolvedFourLayerSelection } from "./loader.js";
 
+export const MAILBOX_RUNTIME_COLLAR = "Mailbox files (mailbox.jsonl, per-role inbox files) and tasks.json are runtime-owned audit mirrors. Do not edit them directly. Use the provided message/coordination mechanism described in your task; the runtime mirrors your messages and task-list operations into these files for evidence.";
+
 export interface RenderRolePromptOptions {
   runtimeTask?: string;
   runId?: string;
@@ -13,7 +15,7 @@ export function renderRolePrompt(
 ): string {
   const agent = getRoleAgent(selection, roleName);
   const overlay = selection.overlays[roleName];
-  const sections = [agent.value.system.trim()];
+  const sections = [agent.value.system.trim(), MAILBOX_RUNTIME_COLLAR];
 
   if (roleName === selection.playbook.value.teamLead) {
     sections.push(renderAvailableRoles(selection, options.runId));

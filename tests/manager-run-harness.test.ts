@@ -36,6 +36,9 @@ describe("manager run harness", () => {
     const mailboxLog = await readFile(join(result.runDir, "mailbox.jsonl"), "utf8");
     const tasks = await readFile(join(result.runDir, "tasks.json"), "utf8");
     expect(mailboxLog).toContain('"summary":"FINAL"');
+    expect(mailboxLog).toContain("Coordination handle");
+    expect(mailboxLog).not.toContain("/mailbox.jsonl");
+    expect(mailboxLog).not.toContain("/tasks.json");
     expect(tasks).toContain('"status": "completed"');
   });
 

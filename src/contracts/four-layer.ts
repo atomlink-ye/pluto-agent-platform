@@ -51,6 +51,17 @@ export const REQUIRED_READ_KINDS = ["repo", "external_document"] as const;
 
 export const COORDINATION_CHANNEL_KINDS = ["shared_channel", "transcript"] as const;
 
+export const EVIDENCE_AUDIT_EVENT_KINDS = [
+  "mailbox_external_write_detected",
+  "tasklist_external_write_detected",
+] as const;
+
+export const EVIDENCE_AUDIT_HOOK_BOUNDARIES = [
+  "teammate_idle",
+  "task_completed",
+  "run_end",
+] as const;
+
 export type FourLayerAuthoredObjectKind = typeof FOUR_LAYER_AUTHORED_OBJECT_KINDS[number];
 export type FourLayerRuntimeObjectKind = typeof FOUR_LAYER_RUNTIME_OBJECT_KINDS[number];
 export type FourLayerObjectKind = typeof FOUR_LAYER_OBJECT_KINDS[number];
@@ -60,6 +71,8 @@ export type MailboxMessageKind = typeof MAILBOX_MESSAGE_KINDS[number];
 export type TaskListStatus = typeof TASK_LIST_STATUSES[number];
 export type RequiredReadKind = typeof REQUIRED_READ_KINDS[number];
 export type CoordinationChannelKind = typeof COORDINATION_CHANNEL_KINDS[number];
+export type EvidenceAuditEventKind = typeof EVIDENCE_AUDIT_EVENT_KINDS[number];
+export type EvidenceAuditHookBoundary = typeof EVIDENCE_AUDIT_HOOK_BOUNDARIES[number];
 
 export interface FourLayerSchemaHeader<TKind extends FourLayerObjectKind> {
   schemaVersion: typeof FOUR_LAYER_SCHEMA_VERSION;
@@ -291,6 +304,16 @@ export interface EvidenceLineage {
   auditOk?: boolean;
 }
 
+export interface EvidenceAuditEvent {
+  kind: EvidenceAuditEventKind;
+  filePath: string;
+  lastKnownSha256: string;
+  observedSha256: string;
+  lastKnownLineCount: number;
+  observedLineCount: number;
+  hookBoundary: EvidenceAuditHookBoundary;
+}
+
 export interface EvidencePacket extends FourLayerSchemaHeader<"evidence_packet"> {
   runId: string;
   status: RunStatus;
@@ -302,6 +325,7 @@ export interface EvidencePacket extends FourLayerSchemaHeader<"evidence_packet">
   commandResults?: EvidenceCommandResult[];
   transitions?: EvidenceTransition[];
   roleCitations?: EvidenceRoleCitation[];
+  auditEvents?: EvidenceAuditEvent[];
   lineage?: EvidenceLineage;
   generatedAt: string;
 }

@@ -190,6 +190,8 @@ export type AgentEventType =
   | "artifact_created"
   | "blocker"
   | "retry"
+  | "mailbox_external_write_detected"
+  | "tasklist_external_write_detected"
   | "run_completed"
   | "run_failed";
 

@@ -14,8 +14,9 @@ Pluto renders them into runtime inputs, validates contracted outputs, and emits 
 audit-grade evidence packet.
 
 The v1.6 runtime is **Claude Code Agent Teams aligned**: mailbox + shared task list +
-active hooks + plan-approval round-trip, with **paseo chat as mailbox transport** and
-Pluto mirroring mailbox/task-list state into run-local files for durable evidence.
+active hooks + plan-approval round-trip, with **paseo chat as the target mailbox
+transport after `agent-teams-chat-mailbox-runtime` Stage B** and Pluto mirroring
+mailbox/task-list state into run-local files for durable evidence.
 
 ## 2. The four layers
 
@@ -145,8 +146,9 @@ Pluto's runtime responsibility is bounded but active:
 2. Materialize the run workspace plus four-layer runtime state.
 3. Create the **file-backed mailbox mirror** (`mailbox.jsonl`) and **shared task list**
    (`tasks.json`).
-4. Bind the live adapter so **paseo chat** carries mailbox traffic while Pluto mirrors it
-   into the run directory as the durable evidence source.
+4. Bind the live adapter so **paseo chat** becomes the mailbox transport target after
+   `agent-teams-chat-mailbox-runtime` Stage B, while Pluto mirrors runtime traffic into
+   the run directory as the durable evidence source.
 5. Launch the team lead and teammates with mailbox/task-list references, not per-role
    spawn-command templates.
 6. Let the team lead coordinate by creating tasks and sending mailbox messages.
@@ -168,9 +170,10 @@ Pluto's runtime responsibility is bounded but active:
 
 ### 5.2 Mailbox transport
 
-Paseo chat is the transport surface. Pluto reads/writes through the adapter, persists the
-authoritative mirrored log to the run directory, and does not rely on synthetic routing
-or fallback dispatch language.
+Target after `agent-teams-chat-mailbox-runtime` Stage B: paseo chat is the transport
+surface. Pluto reads and writes through the adapter, persists the authoritative mirrored
+log to the run directory, and does not rely on synthetic routing or fallback dispatch
+language.
 
 ## 6. What this supersedes
 

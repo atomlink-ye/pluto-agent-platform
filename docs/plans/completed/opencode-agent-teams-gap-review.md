@@ -152,7 +152,7 @@ Remaining critical gaps after this seam:
 | Task | Acceptance Test | Files |
 |------|-----------------|-------|
 | Add `createRoom()` to `PaseoTeamAdapter` interface | Interface updated | `src/contracts/adapter.ts` |
-| Implement `PaseoRoomAdapter` using `paseo chat` | Adapter creates room; returns room ID | New: `src/adapters/paseo-room/index.ts` |
+| Implement `PaseoRoomAdapter` using planned `paseo chat` transport | Adapter creates room; returns room ID | New: `src/adapters/paseo-room/index.ts` |
 | Pass room ID to TeamLead; TeamLead posts to room | Lead messages appear in room | `src/adapters/paseo-opencode/paseo-opencode-adapter.ts` |
 | Persist room transcript to evidence | Evidence includes room transcript path | `src/orchestrator/evidence.ts` |
 | Add smoke assertion: room created | Smoke fails if no room created | `docker/live-smoke.ts` |
@@ -185,7 +185,7 @@ Remaining critical gaps after this seam:
 
 ### Strategic Questions
 
-1. **Does current Paseo expose a first-class orchestrator/team spawning primitive beyond `paseo chat` and `paseo run/send`?**
+1. **Planned transport question: does current Paseo expose a first-class orchestrator or team spawning primitive beyond `paseo chat` and `paseo run/send`?**
    - Updated finding: even without a separate primitive, a TeamLead agent launched through `paseo run` can itself run `paseo run` to spawn child agents when its runtime grants shell/Paseo CLI capability. This capability is not tied to a mode named `orchestrator`; modes are provider-specific permission/behavior presets.
    - Room-based bridge remains useful as a fallback only, not the preferred path.
 
@@ -304,7 +304,7 @@ Purpose: make TeamLead, not Pluto, the direct owner of teammate spawning and coo
 Acceptance:
 
 - TeamLead is launched in a runtime configuration with proven shell/Paseo CLI capability. Do not infer this from mode names alone; OpenCode/Claude/Codex modes are provider-specific permission or behavior presets.
-- TeamLead prompt includes the selected playbook plus explicit authority to run `paseo run`, `paseo wait`, `paseo logs`, and `paseo chat`.
+- Target (after `agent-teams-chat-mailbox-runtime` Stage B): TeamLead prompt includes the selected playbook plus explicit authority to run `paseo run`, `paseo wait`, `paseo logs`, and `paseo chat`.
 - A smoke test proves TeamLead can spawn at least one child teammate via `paseo run` and report its agent id/output.
 - Pluto does not call `createWorkerSession` in the TeamLead-direct path except as a documented fallback for runtime configurations without shell/Paseo CLI access.
 
@@ -321,7 +321,7 @@ Purpose: create a shared substrate that can prove TeamLead decisions.
 Acceptance:
 
 - Every team-led run creates or selects a coordination channel.
-- Prefer `paseo chat` rooms when available.
+- Preferred target: use `paseo chat` rooms when available.
 - Provide a file-backed transcript fallback if needed.
 - Transcript includes task ID, playbook ID, TeamLead messages, stage requests, stage outputs, evaluator verdicts, and final reconciliation.
 - Evidence includes transcript path or durable transcript refs.
