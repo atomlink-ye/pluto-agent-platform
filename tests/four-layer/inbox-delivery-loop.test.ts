@@ -260,6 +260,45 @@ describe("inbox delivery loop", () => {
     expect(events.some((event) => event.type === "mailbox_message_delivered")).toBe(true);
     expect(events.some((event) => event.type === "mailbox_message_failed" && event.payload["reason"] === "run_ended")).toBe(false);
   });
+
+  it("keeps draining shutdown passes until a very late arrival is seen", async () => {
+    const lateMessage = createMailboxMessage({ to: "planner", from: "lead", body: "very late arrival" });
+    const transport = new MultiPassFinalPassTransport(() => ({
+      room: "shutdown-room-delayed",
+      envelope: buildEnvelope("run-shutdown-delayed", lateMessage),
+    }));
+    const adapter = new LoopTestAdapter();
+    adapter.idleBySession.set("planner-session", true);
+    const events: AgentEvent[] = [];
+    const loop = startInboxDeliveryLoop({
+      runId: "run-shutdown-delayed",
+      room: "shutdown-room-delayed",
+      transport,
+      adapter,
+      resolveSessionId: () => "planner-session",
+      emit: async (type: AgentEventType, payload = {}, roleId?: string, sessionId?: string) => {
+        const event: AgentEvent = {
+          id: `${events.length + 1}`,
+          runId: "run-shutdown-delayed",
+          ts: new Date().toISOString(),
+          type,
+          ...(roleId ? { roleId: roleId as AgentEvent["roleId"] } : {}),
+          ...(sessionId ? { sessionId } : {}),
+          payload,
+        };
+        events.push(event);
+        return event;
+      },
+      waitTimeoutMs: 50,
+    });
+
+    await loop.stop();
+
+    expect(transport.zeroTimeoutWaitCalls).toBeGreaterThanOrEqual(2);
+    expect(adapter.sent).toHaveLength(1);
+    expect(adapter.sent[0]?.message).toBe("very late arrival");
+    expect(events.some((event) => event.type === "mailbox_message_delivered")).toBe(true);
+  });
 });
 
 class CountingTransport extends FakeMailboxTransport {
@@ -286,6 +325,26 @@ class FinalPassPostTransport extends FakeMailboxTransport {
     if (input.timeoutMs === 0 && !this.fired) {
       this.fired = true;
       await this.post(this.buildLatePost());
+    }
+    return await super.wait(input);
+  }
+}
+
+class MultiPassFinalPassTransport extends FakeMailboxTransport {
+  zeroTimeoutWaitCalls = 0;
+  private fired = false;
+
+  constructor(private readonly buildLatePost: () => Parameters<FakeMailboxTransport["post"]>[0]) {
+    super();
+  }
+
+  override async wait(input: { room: RoomRef; timeoutMs: number; since?: Parameters<FakeMailboxTransport["wait"]>[0]["since"] }) {
+    if (input.timeoutMs === 0) {
+      this.zeroTimeoutWaitCalls += 1;
+      if (this.zeroTimeoutWaitCalls === 2 && !this.fired) {
+        this.fired = true;
+        await this.post(this.buildLatePost());
+      }
     }
     return await super.wait(input);
   }

@@ -123,17 +123,13 @@ export async function resolveFourLayerSelection(
 ): Promise<ResolvedFourLayerSelection> {
   const scenario = requireFromMap(workspace.scenarios, selection.scenario, "scenario");
   const playbookName = selection.playbook ?? scenario.value.playbook;
-  if (selection.playbook && selection.playbook !== scenario.value.playbook) {
-    throw new FourLayerLoaderError(`scenario_playbook_mismatch:${scenario.value.name}`, [
-      `scenario ${scenario.value.name} references playbook ${scenario.value.playbook}, not ${selection.playbook}`,
-    ]);
-  }
+  const playbookOverridden = Boolean(selection.playbook && selection.playbook !== scenario.value.playbook);
 
   const playbook = requireFromMap(workspace.playbooks, playbookName, "playbook");
   const teamLead = requireFromMap(workspace.agents, playbook.value.teamLead, "agent");
   const members = playbook.value.members.map((memberName) => requireFromMap(workspace.agents, memberName, "agent"));
   const overlayNames = new Set([playbook.value.teamLead, ...playbook.value.members]);
-  const overlays = await resolveScenarioOverlays(workspace.rootDir, scenario, overlayNames, members);
+  const overlays = await resolveScenarioOverlays(workspace.rootDir, scenario, overlayNames, members, playbookOverridden);
 
   const runProfile = selection.runProfile
     ? requireFromMap(workspace.runProfiles, selection.runProfile, "run_profile")
@@ -316,7 +312,8 @@ export function validateRunProfile(value: unknown): FourLayerValidationResult<Ru
     if (!isRecord(runtime)) {
       errors.push("runtime must be an object");
     } else {
-      optionalString(runtime, "paseo_mode", errors, "runtime.paseo_mode");
+      optionalString(runtime, "dispatchMode", errors, "runtime.dispatchMode");
+      optionalString(runtime, "dispatch_mode", errors, "runtime.dispatch_mode");
       optionalInteger(runtime, "lead_timeout_seconds", errors, "runtime.lead_timeout_seconds", 1);
     }
   }
@@ -598,8 +595,8 @@ function normalizeRunProfile(record: MutableRecord): RunProfile {
     ...(runtime
       ? {
           runtime: {
-            ...(typeof runtime["paseo_mode"] === "string" || typeof runtime["paseoMode"] === "string"
-              ? { paseo_mode: String(runtime["paseo_mode"] ?? runtime["paseoMode"]) }
+            ...(typeof runtime["dispatchMode"] === "string" || typeof runtime["dispatch_mode"] === "string"
+              ? { dispatchMode: String(runtime["dispatchMode"] ?? runtime["dispatch_mode"]) }
               : {}),
             ...((typeof runtime["lead_timeout_seconds"] === "number" || typeof runtime["leadTimeoutSeconds"] === "number")
               ? { lead_timeout_seconds: Number(runtime["lead_timeout_seconds"] ?? runtime["leadTimeoutSeconds"]) }
@@ -684,6 +681,7 @@ async function resolveScenarioOverlays(
   scenario: LoadedFourLayerObject<Scenario>,
   allowedRoles: Set<string>,
   members: LoadedFourLayerObject<Agent>[],
+  ignoreUnknownRoles: boolean,
 ): Promise<Record<string, ResolvedScenarioOverlay>> {
   const overlays = scenario.value.overlays ?? {};
   const memberNames = new Set(members.map((member) => member.value.name));
@@ -691,6 +689,9 @@ async function resolveScenarioOverlays(
 
   for (const [roleName, overlay] of Object.entries(overlays)) {
     if (!allowedRoles.has(roleName)) {
+      if (ignoreUnknownRoles) {
+        continue;
+      }
       throw new FourLayerLoaderError(`unknown_overlay_role:${scenario.value.name}`, [
         `scenario ${scenario.value.name} overlay targets unknown role ${roleName}`,
       ]);

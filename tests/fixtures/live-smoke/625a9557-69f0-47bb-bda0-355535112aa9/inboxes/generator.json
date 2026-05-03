@@ -1,0 +1,17 @@
+[
+  {
+    "id": "074abe7d-1833-483a-a46b-7d4a3423951a",
+    "to": "generator",
+    "from": "lead",
+    "createdAt": "2026-05-03T04:42:23.604Z",
+    "kind": "text",
+    "body": "Task task-2\nRole: generator\nGoal: Produce a markdown file that says hello from the lead, planner, generator, and evaluator (one line each).",
+    "summary": "TASK task-2",
+    "replyTo": "task-2",
+    "transportMessageId": "a22d6020-351f-4b3b-8cec-5532c2ba2407",
+    "transportTimestamp": "2026-05-03T04:42:27.743Z",
+    "transportStatus": "ok",
+    "deliveryStatus": "pending",
+    "readAt": "2026-05-03T04:43:05.780Z"
+  }
+]

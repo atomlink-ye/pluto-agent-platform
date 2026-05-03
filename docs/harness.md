@@ -59,3 +59,9 @@
 - `pnpm smoke:local`
 - `pnpm smoke:live`
 - `pnpm verify`
+
+## Gate artifacts
+
+- Use `node scripts/gate.mjs <gate-name> -- <command>` for acceptance and regression gate captures.
+- Each gate artifact should include the wrapper's timing header (`started`, `command`, `duration`, `exit`) ahead of the underlying command output.
+- `PLUTO_PLAYBOOK` may override the scenario default playbook for smoke coverage; when it does, scenario overlays for roles that are no longer in the selected playbook are skipped instead of failing the load.

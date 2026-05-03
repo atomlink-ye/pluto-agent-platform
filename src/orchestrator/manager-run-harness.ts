@@ -1742,6 +1742,29 @@ function extractStructuredWorkerMessage(
   output: string,
   taskId: string,
 ): { kind: "evaluator_verdict"; body: EvaluatorVerdictBody; summary: string } | null {
+  const typedEnvelopeMatch = /evaluator_verdict\s*[\r\n]+body:\s*\{([\s\S]*?)\}/i.exec(output);
+  if (typedEnvelopeMatch) {
+    const bodyBlock = typedEnvelopeMatch[1] ?? "";
+    const taskIdMatch = /taskId:\s*"([^"]+)"/i.exec(bodyBlock);
+    const verdictMatch = /verdict:\s*"(pass|fail)"/i.exec(bodyBlock);
+    if (taskIdMatch?.[1] && verdictMatch?.[1]) {
+      const rationaleMatch = /rationale:\s*"([\s\S]*?)"/i.exec(bodyBlock);
+      const failedRubricRefMatch = /failedRubricRef:\s*"([^"]+)"/i.exec(bodyBlock);
+      const verdictBody: EvaluatorVerdictBody = {
+        schemaVersion: "v1",
+        taskId: taskIdMatch[1] || taskId,
+        verdict: verdictMatch[1] as EvaluatorVerdictBody["verdict"],
+        ...(rationaleMatch?.[1] ? { rationale: rationaleMatch[1] } : {}),
+        ...(failedRubricRefMatch?.[1] ? { failedRubricRef: failedRubricRefMatch[1] } : {}),
+      };
+      return {
+        kind: "evaluator_verdict",
+        body: verdictBody,
+        summary: `VERDICT ${verdictBody.taskId} ${verdictBody.verdict.toUpperCase()}`,
+      };
+    }
+  }
+
   const candidates = [
     ...Array.from(output.matchAll(/```json\s*([\s\S]*?)```/gi), (match) => match[1]?.trim() ?? ""),
     ...output.split(/\r?\n/).map((line) => line.trim()).filter((line) => line.length > 0),

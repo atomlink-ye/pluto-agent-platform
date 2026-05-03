@@ -30,6 +30,20 @@ pnpm smoke:local
 PASEO_HOST=localhost:6767 pnpm smoke:live
 ```
 
+## Gate wrapper
+
+- Use `node scripts/gate.mjs <gate-name> -- <command>` for recorded verification gates.
+- The wrapper writes timing headers directly into the gate artifact stream:
+
+```text
+# started: 2026-05-03T11:45:06Z
+# command: pnpm test
+# duration: 127.95s
+# exit: 0
+```
+
+- Slice-end artifacts should preserve those headers verbatim so later reviews can reconstruct the timeline without parsing agent logs.
+
 ## Live-smoke knobs
 
 See `docs/harness.md` for the canonical live-smoke knob table.
@@ -43,3 +57,9 @@ pnpm vitest --run tests/orchestrator/teamlead-driven-dispatch.test.ts tests/orch
 ```
 
 - `docker/live-smoke.ts` now asserts the chat-driven dispatch path by checking `spawn_request_received`, `spawn_request_executed`, `worker_complete_received`, and `final_reconciliation_received` plus `orchestrationSource: "teamlead_chat"` in `events.jsonl`.
+
+## Live-smoke fixture replay
+
+- When a live `pnpm smoke:live` run hits a parser/format/handler issue, capture the run directory under `tests/fixtures/live-smoke/<runId>/` instead of rerunning live.
+- Use `tests/fixtures/live-smoke/_helpers.ts` to load fixture `events.jsonl`, `mailbox.jsonl`, and adjacent JSON artifacts in replay tests.
+- Keep replay tests short and focused: load the fixture, inject the failing worker output into the fake adapter path, and assert the repaired control-plane behavior.

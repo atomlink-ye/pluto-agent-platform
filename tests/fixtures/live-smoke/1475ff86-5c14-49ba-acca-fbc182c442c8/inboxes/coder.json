@@ -1,0 +1,17 @@
+[
+  {
+    "id": "f564f76e-fa6b-43da-9581-d47a2bbc3a20",
+    "to": "coder",
+    "from": "lead",
+    "createdAt": "2026-05-03T04:56:05.180Z",
+    "kind": "text",
+    "body": "Task task-2\nRole: coder\nGoal: Produce a markdown file that says hello from the lead, architect, coder, and qa (one line each).",
+    "summary": "TASK task-2",
+    "replyTo": "task-2",
+    "transportMessageId": "dc724c18-a96f-45e0-b4a8-dbd96fa33288",
+    "transportTimestamp": "2026-05-03T04:56:09.816Z",
+    "transportStatus": "ok",
+    "deliveryStatus": "pending",
+    "readAt": "2026-05-03T04:56:54.506Z"
+  }
+]

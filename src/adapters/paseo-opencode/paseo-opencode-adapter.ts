@@ -71,7 +71,7 @@ export interface PaseoOpenCodeAdapterOptions {
   /**
    * Paseo agent mode. Defaults to $PASEO_MODE env, then "orchestrator" for the
    * lead path (falling back to "build" if orchestrator is unavailable), or
-   * RunProfile.runtime.paseo_mode if set.
+   * RunProfile.runtime.dispatchMode if set.
    */
   mode?: string;
   /** Per-agent wait timeout in seconds. */
@@ -113,9 +113,9 @@ function resolvePaseoMode(explicitMode?: string): string {
   return "orchestrator";
 }
 
-export function applyRunProfileMode(adapter: PaseoOpenCodeAdapter, paseoMode?: string): void {
-  if (!paseoMode) return;
-  (adapter as unknown as { mode: string }).mode = paseoMode;
+export function applyRunProfileMode(adapter: PaseoOpenCodeAdapter, dispatchMode?: string): void {
+  if (!dispatchMode) return;
+  (adapter as unknown as { mode: string }).mode = dispatchMode;
 }
 
 export class PaseoOpenCodeAdapter implements PaseoTeamAdapter {

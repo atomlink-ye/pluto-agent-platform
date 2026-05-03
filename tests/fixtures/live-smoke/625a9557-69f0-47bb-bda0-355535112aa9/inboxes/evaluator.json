@@ -1,0 +1,17 @@
+[
+  {
+    "id": "1a9dc788-51d5-4649-89be-8148b52701a9",
+    "to": "evaluator",
+    "from": "lead",
+    "createdAt": "2026-05-03T04:44:17.809Z",
+    "kind": "text",
+    "body": "Task task-3\nRole: evaluator\nGoal: Produce a markdown file that says hello from the lead, planner, generator, and evaluator (one line each).",
+    "summary": "TASK task-3",
+    "replyTo": "task-3",
+    "transportMessageId": "3777b6e3-5b34-4d54-ae44-f2f1a083eb51",
+    "transportTimestamp": "2026-05-03T04:44:21.434Z",
+    "transportStatus": "ok",
+    "deliveryStatus": "pending",
+    "readAt": "2026-05-03T04:45:02.528Z"
+  }
+]

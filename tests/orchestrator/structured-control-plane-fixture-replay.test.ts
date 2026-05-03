@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -8,10 +8,11 @@ import { FakeAdapter } from "@/adapters/fake/index.js";
 import type { AgentEvent } from "@/contracts/types.js";
 import type { MailboxMessage } from "@/contracts/four-layer.js";
 import { runManagerHarness } from "@/orchestrator/manager-run-harness.js";
+import { loadLiveSmokeFixture, readJsonLines } from "../fixtures/live-smoke/_helpers.js";
 
 const repoRoot = process.cwd();
 const fixtureRunId = "86557df1-0b4a-4bd4-8a75-027a4dcd5d38";
-const fixtureDir = join(repoRoot, "tests", "fixtures", "live-smoke", fixtureRunId);
+const liveTypedEnvelopeFixtureRunId = "625a9557-69f0-47bb-bda0-355535112aa9";
 const tempDirs: string[] = [];
 
 afterEach(async () => {
@@ -20,8 +21,9 @@ afterEach(async () => {
 
 describe("structured control-plane fixture replay", () => {
   it("replays the fenced-json evaluator verdict fixture through the harness", async () => {
-    const fixtureEvents = await readJsonLines<AgentEvent>(join(fixtureDir, "events.jsonl"));
-    const fixtureMailbox = await readJsonLines<MailboxMessage>(join(fixtureDir, "mailbox.jsonl"));
+    const fixture = await loadLiveSmokeFixture<AgentEvent, MailboxMessage>(fixtureRunId);
+    const fixtureEvents = fixture.events;
+    const fixtureMailbox = fixture.mailboxEntries;
     const evaluatorOutput = fixtureEvents.find((event) =>
       event.type === "worker_completed" && event.roleId === "evaluator",
     )?.payload["output"];
@@ -60,16 +62,48 @@ describe("structured control-plane fixture replay", () => {
       expect(replayMailbox.some((message) => message.kind === "evaluator_verdict")).toBe(true);
     });
   });
-});
 
-async function readJsonLines<T>(path: string): Promise<T[]> {
-  const raw = await readFile(path, "utf8");
-  return raw
-    .split("\n")
-    .map((line) => line.trim())
-    .filter((line) => line.length > 0)
-    .map((line) => JSON.parse(line) as T);
-}
+  it("replays the live typed-envelope evaluator verdict fixture through the harness", async () => {
+    const fixture = await loadLiveSmokeFixture<AgentEvent, MailboxMessage>(liveTypedEnvelopeFixtureRunId);
+    const evaluatorOutput = fixture.events.find((event) =>
+      event.type === "worker_completed" && event.roleId === "evaluator",
+    )?.payload["output"];
+
+    expect(typeof evaluatorOutput).toBe("string");
+    expect((evaluatorOutput as string).includes("evaluator_verdict")).toBe(true);
+    expect(fixture.events.some((event) => event.type === "evaluator_verdict_received")).toBe(false);
+
+    await withEnv({ PLUTO_DISPATCH_MODE: "teamlead_chat" }, async () => {
+      const workspace = await mkdtemp(join(tmpdir(), "pluto-live-typed-envelope-replay-"));
+      const dataDir = join(workspace, ".pluto");
+      tempDirs.push(workspace);
+
+      const result = await runManagerHarness({
+        rootDir: repoRoot,
+        selection: { scenario: "hello-team", runProfile: "fake-smoke" },
+        workspaceOverride: workspace,
+        dataDir,
+        createAdapter: ({ team }) => new FakeAdapter({
+          team,
+          workerOutputs: {
+            evaluator: evaluatorOutput as string,
+          },
+        }),
+      });
+
+      expect(result.run.status).toBe("succeeded");
+
+      const replayEvents = await readJsonLines<AgentEvent>(join(result.runDir, "events.jsonl"));
+      const replayMailbox = await readJsonLines<MailboxMessage>(join(result.runDir, "mailbox.jsonl"));
+      expect(replayEvents.some((event) =>
+        event.type === "evaluator_verdict_received"
+        && event.payload["taskId"] === "task-3"
+        && event.payload["verdict"] === "pass",
+      )).toBe(true);
+      expect(replayMailbox.some((message) => message.kind === "evaluator_verdict")).toBe(true);
+    });
+  });
+});
 
 async function withEnv<T>(entries: Record<string, string>, fn: () => Promise<T>): Promise<T> {
   const original = new Map<string, string | undefined>();

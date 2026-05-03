@@ -1,0 +1,8 @@
+{
+  "runId": "1475ff86-5c14-49ba-acca-fbc182c442c8",
+  "repoRoot": "/workspace/agent-teams-v1_6-root/.worktrees/agent-teams-chat-mailbox-runtime-s6",
+  "workspaceDir": "/workspace/agent-teams-v1_6-root/.worktrees/agent-teams-chat-mailbox-runtime-s6/.tmp/live-quickstart",
+  "runProfile": "fake-smoke",
+  "mailboxPath": "/workspace/agent-teams-v1_6-root/.worktrees/agent-teams-chat-mailbox-runtime-s6/.tmp/live-quickstart/.pluto/runs/1475ff86-5c14-49ba-acca-fbc182c442c8/mailbox.jsonl",
+  "taskListPath": "/workspace/agent-teams-v1_6-root/.worktrees/agent-teams-chat-mailbox-runtime-s6/.tmp/live-quickstart/.pluto/runs/1475ff86-5c14-49ba-acca-fbc182c442c8/tasks.json"
+}

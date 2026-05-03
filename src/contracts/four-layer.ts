@@ -179,7 +179,7 @@ export interface SecretHandlingPolicy {
 }
 
 export interface RunProfileRuntime {
-  paseo_mode?: string;
+  dispatchMode?: string;
   lead_timeout_seconds?: number;
 }
 

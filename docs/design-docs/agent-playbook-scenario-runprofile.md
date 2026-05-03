@@ -92,7 +92,7 @@ stdout_contract:
   required_lines:
     - "RUN_START"
 runtime:
-  paseo_mode: orchestrator
+  dispatch_mode: orchestrator
 ```
 
 There is **no runtime-selection field** in the authored schema. v1.6 mailbox/task-list

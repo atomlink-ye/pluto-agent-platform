@@ -33,6 +33,7 @@ import * as process from "node:process";
 import { FakeAdapter } from "../src/adapters/fake/index.js";
 import { PaseoOpenCodeAdapter } from "../src/adapters/paseo-opencode/index.js";
 import { DEFAULT_RUNNER } from "../src/adapters/paseo-opencode/process-runner.js";
+import { loadFourLayerWorkspace, resolveFourLayerSelection } from "../src/four-layer/index.js";
 import { normalizeBlockerReason, runManagerHarness, validateEvidencePacketV0 } from "../src/orchestrator/index.js";
 import type { EvidencePacket } from "../src/contracts/four-layer.js";
 import type {
@@ -163,6 +164,17 @@ function summarizeDispatchEvents(events: AgentEvent[]) {
   return { counts, sources };
 }
 
+function formatRoleList(roles: string[]): string {
+  if (roles.length === 0) return "the team";
+  if (roles.length === 1) return roles[0]!;
+  if (roles.length === 2) return `${roles[0]} and ${roles[1]}`;
+  return `${roles.slice(0, -1).join(", ")}, and ${roles[roles.length - 1]}`;
+}
+
+function buildRuntimeTask(expectedWorkerRoles: string[]): string {
+  return `Produce a markdown file that says hello from the lead, ${formatRoleList(expectedWorkerRoles)} (one line each).`;
+}
+
 function extractTransportMessageId(value: unknown): string | null {
   if (typeof value !== "object" || value === null) return null;
   const record = value as Record<string, unknown>;
@@ -281,7 +293,14 @@ async function main() {
     process.exit(2);
   }
 
-  const expectedWorkerRoles = ["planner", "generator", "evaluator"];
+  const workspace = await loadFourLayerWorkspace(process.cwd());
+  const resolvedSelection = await resolveFourLayerSelection(workspace, {
+    scenario: REQUESTED_SCENARIO,
+    runProfile: REQUESTED_RUN_PROFILE,
+    ...(REQUESTED_PLAYBOOK ? { playbook: REQUESTED_PLAYBOOK } : {}),
+  });
+  const expectedWorkerRoles = resolvedSelection.members.map((member) => member.value.name);
+  const runtimeTask = buildRuntimeTask(expectedWorkerRoles);
 
   const startedAt = Date.now();
   const result = await runManagerHarness({
@@ -290,7 +309,7 @@ async function main() {
       scenario: REQUESTED_SCENARIO,
       runProfile: REQUESTED_RUN_PROFILE,
       ...(REQUESTED_PLAYBOOK ? { playbook: REQUESTED_PLAYBOOK } : {}),
-      runtimeTask: "Produce a markdown file that says hello from the lead, planner, generator, and evaluator (one line each).",
+      runtimeTask,
     },
     workspaceOverride: WORKSPACE,
     dataDir: DATA_DIR,
@@ -300,6 +319,7 @@ async function main() {
   });
 
   const expectedDispatchSource = process.env["PLUTO_DISPATCH_MODE"] === "static_loop" ? "static_loop" : "teamlead_chat";
+  const expectsPlanApprovalRoundTrip = expectedWorkerRoles.includes("planner");
   const dispatchSummary = summarizeDispatchEvents(result.legacyResult.events);
 
   let summary: Record<string, unknown> = {
@@ -396,9 +416,7 @@ async function main() {
     );
     process.exit(1);
   }
-  if (!canonicalEvidence.roleCitations?.some((citation) => citation.role === "planner")
-    || !canonicalEvidence.roleCitations?.some((citation) => citation.role === "generator")
-    || !canonicalEvidence.roleCitations?.some((citation) => citation.role === "evaluator")) {
+  if (expectedWorkerRoles.some((roleId) => !canonicalEvidence.roleCitations?.some((citation) => citation.role === roleId))) {
     console.error(
       JSON.stringify(
         {
@@ -578,7 +596,7 @@ async function main() {
   }
   const planApprovalRequest = mailboxEntries.find((entry) => entry["kind"] === "plan_approval_request");
   const planApprovalResponse = mailboxEntries.find((entry) => entry["kind"] === "plan_approval_response");
-  if (!planApprovalRequest || !planApprovalResponse) {
+  if (expectsPlanApprovalRoundTrip && (!planApprovalRequest || !planApprovalResponse)) {
     console.error(
       JSON.stringify(
         {
@@ -593,13 +611,16 @@ async function main() {
     );
     process.exit(1);
   }
-  const requestTransportId = typeof planApprovalRequest["transportMessageId"] === "string"
+  const requestTransportId = typeof planApprovalRequest?.["transportMessageId"] === "string"
     ? planApprovalRequest["transportMessageId"]
     : null;
-  const responseTransportId = typeof planApprovalResponse["transportMessageId"] === "string"
+  const responseTransportId = typeof planApprovalResponse?.["transportMessageId"] === "string"
     ? planApprovalResponse["transportMessageId"]
     : null;
-  if (!requestTransportId || !responseTransportId || !deliveredTransportIds.has(requestTransportId) || !deliveredTransportIds.has(responseTransportId)) {
+  if (
+    expectsPlanApprovalRoundTrip
+    && (!requestTransportId || !responseTransportId || !deliveredTransportIds.has(requestTransportId) || !deliveredTransportIds.has(responseTransportId))
+  ) {
     console.error(
       JSON.stringify(
         {
@@ -616,7 +637,10 @@ async function main() {
     );
     process.exit(1);
   }
-  if (!runEvents.some((event) => event.type === "plan_approval_requested") || !runEvents.some((event) => event.type === "plan_approval_responded")) {
+  if (
+    expectsPlanApprovalRoundTrip
+    && (!runEvents.some((event) => event.type === "plan_approval_requested") || !runEvents.some((event) => event.type === "plan_approval_responded"))
+  ) {
     console.error(
       JSON.stringify(
         {
@@ -631,7 +655,7 @@ async function main() {
     );
     process.exit(1);
   }
-  if (ADAPTER_KIND === "paseo-opencode" && expectedDispatchSource === "teamlead_chat"
+  if (ADAPTER_KIND === "paseo-opencode" && expectedDispatchSource === "teamlead_chat" && expectedWorkerRoles.includes("evaluator")
     && !runEvents.some((event) => event.type === "evaluator_verdict_received")) {
     console.error(
       JSON.stringify(
@@ -871,6 +895,26 @@ async function main() {
         ),
       );
       process.exit(1);
+    }
+    for (const roleId of expectedWorkerRoles) {
+      if (!runEvents.some((event) =>
+        event.type === "spawn_request_executed"
+        && event.payload["targetRole"] === roleId,
+      )) {
+        console.error(
+          JSON.stringify(
+            {
+              status: "assertion_failed",
+              message: `events.jsonl is missing spawn_request_executed for ${roleId}`,
+              summary,
+              eventsPath,
+            },
+            null,
+            2,
+          ),
+        );
+        process.exit(1);
+      }
     }
   }
 
