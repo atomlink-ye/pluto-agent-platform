@@ -246,13 +246,18 @@ export class PaseoOpenCodeAdapter implements PaseoTeamAdapter {
     return { sessionId: agentId, role: input.role, external: { paseoAgentId: agentId } };
   }
 
+  async listActiveRoleSessions(input: { runId: string }): Promise<Record<string, string>> {
+    const run = this.expectRun(input.runId);
+    return Object.fromEntries(run.roleSessionIds.entries());
+  }
+
   async createWorkerSession(input: {
     runId: string;
     role: AgentRoleConfig;
     instructions: string;
   }): Promise<AgentSession> {
     const run = this.expectRun(input.runId);
-    const prompt = this.buildWorkerPrompt(run.task, input.role, input.instructions);
+    const prompt = this.buildWorkerPrompt(run.task, input.role, input.instructions, run.transcript);
     const attempt = (run.workerAttempts.get(input.role.id) ?? 0) + 1;
     run.workerAttempts.set(input.role.id, attempt);
     const args = this.runArgs({
@@ -428,7 +433,12 @@ export class PaseoOpenCodeAdapter implements PaseoTeamAdapter {
     }
     const match = this.findListedSession(result.stdout, input.sessionId);
     if (!match) {
-      throw new Error(`paseo_adapter_unknown_session:${input.sessionId}`);
+      // Session is known to the adapter (we created it) but paseo ls hasn't
+      // surfaced it yet — typical race between createWorkerSession and the
+      // first idle check. Treat as not-idle so the inbox loop will queue
+      // the message and retry on the next iteration; do NOT throw or the
+      // dispatch flow aborts the entire run.
+      return false;
     }
     return String(match["status"] ?? "").toLowerCase() === "idle";
   }
@@ -731,13 +741,20 @@ export class PaseoOpenCodeAdapter implements PaseoTeamAdapter {
     return lines.join("\n");
   }
 
-  private buildWorkerPrompt(task: TeamTask, role: AgentRoleConfig, instructions: string): string {
+  private buildWorkerPrompt(
+    task: TeamTask,
+    role: AgentRoleConfig,
+    instructions: string,
+    transcript?: CoordinationTranscriptRefV0,
+  ): string {
     const lines = [
       role.systemPrompt,
       "",
       `Task title: ${task.title}`,
       `Goal: ${task.prompt}`,
       `Workspace path: ${task.workspacePath}`,
+      `Mailbox kind: ${transcript?.kind ?? "shared_channel"}`,
+      `Mailbox reference: ${transcript?.roomRef ?? "not-provided"}`,
     ];
     if (task.artifactPath) {
       lines.push(`Artifact path the team should converge on: ${task.artifactPath}`);
@@ -747,7 +764,8 @@ export class PaseoOpenCodeAdapter implements PaseoTeamAdapter {
       "Instructions from the Team Lead:",
       instructions,
       "",
-      "Pluto owns mailbox.jsonl and tasks.json as read-only coordination artifacts. Never edit them or author synthetic coordination messages yourself.",
+      "Pluto owns mailbox.jsonl and tasks.json as read-only coordination artifacts. Never edit them directly.",
+      "When you need to send a typed mailbox envelope back to the lead, use SendMessage addressed to `lead` instead of writing coordination artifacts yourself.",
       "Work in the workspace directly. If the lead asks you to create or update files, make those changes before replying.",
       "Do not only describe intended edits when the task calls for an artifact change.",
       "Reply with your contribution only. Keep it concise (under 15 lines).",

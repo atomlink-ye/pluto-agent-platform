@@ -33,9 +33,10 @@ The sealed audit-lineage object emitted after validation.
 ### MailboxMessage
 
 Typed teammate-to-teammate or teammate-to-lead message persisted to the mirrored mailbox
-log. Core kinds include `text`, `shutdown_request`, `shutdown_response`,
-`plan_approval_request`, `plan_approval_response`, `spawn_request`,
-`worker_complete`, and `final_reconciliation`.
+log. Core kinds include `text`, `evaluator_verdict`, `revision_request`,
+`shutdown_request`, `shutdown_response`, `plan_approval_request`,
+`plan_approval_response`, `spawn_request`, `worker_complete`, and
+`final_reconciliation`.
 
 ### Task
 

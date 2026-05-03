@@ -24,20 +24,20 @@ import type {
 } from "../contracts/types.js";
 import type {
   DispatchOrchestrationSource,
+  EvaluatorVerdictBody,
   EvidenceCommandResult,
   FinalReconciliationBody,
   MailboxEnvelope,
   EvidenceRoleCitation,
   EvidenceTransition,
   MailboxMessage,
-  MailboxMessageBody,
   MailboxMessageKind,
-  SpawnRequestBody,
   Run,
   RunArtifactRef,
   RunProfile,
   RunProfileAcceptanceCommand,
   RunStatus,
+  SpawnRequestBody,
   TaskRecord,
   WorkerCompleteBody,
 } from "../contracts/four-layer.js";
@@ -56,7 +56,14 @@ import {
   createPlanApprovalResponse,
   FileBackedMailbox,
   FileBackedTaskList,
+  isEvaluatorVerdict,
+  isFinalReconciliation,
+  isRevisionRequest,
+  isShutdownRequest,
+  isShutdownResponse,
+  isSpawnRequest,
   isTrustedPlanApprovalResponse,
+  isWorkerComplete,
   loadFourLayerWorkspace,
   renderAllRolePrompts,
   resolveFourLayerSelection,
@@ -118,6 +125,12 @@ interface DispatchPlanEntry {
   index: number;
   role: AgentRoleConfig;
   task: TaskRecord;
+}
+
+interface ShutdownTracker {
+  expectedRoles: Map<string, "pending" | "received" | "timed_out">;
+  timeoutMs: number;
+  timer: ReturnType<typeof setTimeout> | null;
 }
 
 export async function runManagerHarness(options: ManagerRunHarnessOptions): Promise<ManagerRunHarnessResult> {
@@ -240,7 +253,7 @@ export async function runManagerHarness(options: ManagerRunHarnessOptions): Prom
     to: string;
     from: string;
     kind?: MailboxMessageKind;
-    body: MailboxMessageBody;
+    body: MailboxMessage["body"];
     summary?: string;
     replyTo?: string;
     transportReplyTo?: string;
@@ -299,7 +312,15 @@ export async function runManagerHarness(options: ManagerRunHarnessOptions): Prom
     return mirroredMessage;
   };
 
-  const dispatchMessageKinds = new Set<MailboxMessageKind>(["spawn_request", "worker_complete", "final_reconciliation"]);
+  const dispatchMessageKinds = new Set<MailboxMessageKind>([
+    "evaluator_verdict",
+    "revision_request",
+    "shutdown_request",
+    "shutdown_response",
+    "spawn_request",
+    "worker_complete",
+    "final_reconciliation",
+  ]);
   const resolveMailboxOrchestrationSource = (message: MailboxMessage): DispatchOrchestrationSource | undefined =>
     dispatchMessageKinds.has(message.kind) ? dispatchMode : undefined;
 
@@ -473,6 +494,12 @@ export async function runManagerHarness(options: ManagerRunHarnessOptions): Prom
     roleSessionIds.set(leadRole.id, leadSession.sessionId);
     await persistAdapterEvents();
     const memberRoles = team.roles.filter((role) => role.kind === "worker");
+    const memberRoleById = new Map<string, AgentRoleConfig>(memberRoles.map((role) => [role.id, role]));
+    const validRubricRefs = new Set(
+      Object.values(resolved.scenario.value.overlays ?? {})
+        .map((overlay) => overlay.rubricRef)
+        .filter((rubricRef): rubricRef is string => typeof rubricRef === "string" && rubricRef.length > 0),
+    );
     const acceptanceHook = createAcceptanceHook({
       workspaceDir,
       acceptanceCommands: runProfile?.acceptanceCommands ?? [],
@@ -482,10 +509,11 @@ export async function runManagerHarness(options: ManagerRunHarnessOptions): Prom
     const contributions: WorkerContribution[] = [];
     const dispatchPlan: DispatchPlanEntry[] = [];
     const dispatchPlanByTaskId = new Map<string, DispatchPlanEntry>();
-    const dispatchPlanByRoleId = new Map<string, DispatchPlanEntry>();
+    const evaluatorVerdictsByMessageId = new Map<string, EvaluatorVerdictBody>();
     const completedDispatchTaskIds = new Set<string>();
     let previousRole = leadRole.id;
     let lastTask: TaskRecord | null = null;
+    let shutdownTracker: ShutdownTracker | null = null;
     let finalReconciliationSettled = false;
     let resolveFinalReconciliation!: (body: FinalReconciliationBody) => void;
     let rejectFinalReconciliation!: (reason?: unknown) => void;
@@ -505,7 +533,6 @@ export async function runManagerHarness(options: ManagerRunHarnessOptions): Prom
         const entry: DispatchPlanEntry = { index, role, task: createdTask };
         dispatchPlan.push(entry);
         dispatchPlanByTaskId.set(createdTask.id, entry);
-        dispatchPlanByRoleId.set(role.id, entry);
         previousDispatchTaskId = createdTask.id;
         lastTask = createdTask;
         await emit("task_created", { taskId: createdTask.id, summary: createdTask.summary, dependsOn: createdTask.dependsOn }, role.id);
@@ -513,11 +540,52 @@ export async function runManagerHarness(options: ManagerRunHarnessOptions): Prom
     }
 
     const rejectFinalization = (reason: unknown) => {
+      if (shutdownTracker?.timer) {
+        clearTimeout(shutdownTracker.timer);
+        shutdownTracker.timer = null;
+      }
       if (finalReconciliationSettled) {
         return;
       }
       finalReconciliationSettled = true;
       rejectFinalReconciliation(reason);
+    };
+
+    const taskInstructionsFor = (taskRecord: TaskRecord): string => {
+      const prefix = taskRecord.assigneeId ? `${taskRecord.assigneeId}: ` : "";
+      return prefix && taskRecord.summary.startsWith(prefix)
+        ? taskRecord.summary.slice(prefix.length)
+        : taskRecord.summary;
+    };
+
+    const completeShutdown = async () => {
+      const tracker = shutdownTracker;
+      if (!tracker || finalReconciliationSettled) {
+        return;
+      }
+      if (tracker.timer) {
+        clearTimeout(tracker.timer);
+        tracker.timer = null;
+      }
+      const ackedRoles = Array.from(tracker.expectedRoles.entries())
+        .filter(([, state]) => state === "received")
+        .map(([roleId]) => roleId);
+      const timedOutRoles = Array.from(tracker.expectedRoles.entries())
+        .filter(([, state]) => state === "timed_out")
+        .map(([roleId]) => roleId);
+      await emit("shutdown_complete", {
+        ackedRoles,
+        timedOutRoles,
+        orchestrationSource: dispatchMode,
+      }, leadRole.id, leadSession.sessionId);
+      finalReconciliationSettled = true;
+      resolveFinalReconciliation({
+        schemaVersion: "v1",
+        summary: timedOutRoles.length > 0
+          ? `Shutdown completed with timeouts for ${timedOutRoles.join(", ")}.`
+          : `Shutdown completed after acknowledgments from ${ackedRoles.join(", ") || "no active teammates"}.`,
+        completedTaskIds: Array.from(completedDispatchTaskIds),
+      });
     };
 
     const postSpawnRequestMessage = async (entry: DispatchPlanEntry, rationale?: string) => {
@@ -617,10 +685,181 @@ export async function runManagerHarness(options: ManagerRunHarnessOptions): Prom
           }
 
           switch (message.kind) {
+            case "evaluator_verdict": {
+              if (!isEvaluatorVerdict(message)) {
+                return;
+              }
+              const currentTask = await taskList.read(message.body.taskId);
+              const sessionId = roleSessionIds.get(message.from);
+              if (!currentTask || currentTask.claimedBy !== message.from) {
+                await emit("evaluator_verdict_untrusted_sender", {
+                  messageId: message.id,
+                  taskId: message.body.taskId,
+                  fromRole: message.from,
+                  claimedBy: currentTask?.claimedBy ?? null,
+                  orchestrationSource: dispatchMode,
+                }, message.from as AgentEvent["roleId"], sessionId);
+                return;
+              }
+              if (message.body.failedRubricRef && !validRubricRefs.has(message.body.failedRubricRef)) {
+                return;
+              }
+              evaluatorVerdictsByMessageId.set(message.id, message.body);
+              await emit("evaluator_verdict_received", {
+                taskId: message.body.taskId,
+                verdict: message.body.verdict,
+                ...(message.body.failedRubricRef ? { failedRubricRef: message.body.failedRubricRef } : {}),
+                orchestrationSource: dispatchMode,
+              }, message.from as AgentEvent["roleId"], sessionId);
+              return;
+            }
+            case "revision_request": {
+              if (!isRevisionRequest(message)) {
+                return;
+              }
+              if (message.from !== leadRole.id) {
+                await emit("revision_request_untrusted_sender", {
+                  messageId: message.id,
+                  fromRole: message.from,
+                  orchestrationSource: dispatchMode,
+                }, leadRole.id, leadSession.sessionId);
+                return;
+              }
+              const failedTask = await taskList.read(message.body.failedTaskId);
+              const failedVerdict = evaluatorVerdictsByMessageId.get(message.body.failedVerdictMessageId);
+              const targetRole = memberRoleById.get(message.body.targetRole);
+              if (!failedTask || !failedVerdict || failedVerdict.verdict !== "fail" || !targetRole) {
+                return;
+              }
+              await emit("revision_request_received", {
+                messageId: message.id,
+                failedTaskId: message.body.failedTaskId,
+                failedVerdictMessageId: message.body.failedVerdictMessageId,
+                targetRole: message.body.targetRole,
+                orchestrationSource: dispatchMode,
+              }, leadRole.id, leadSession.sessionId);
+              const revisionTask = await taskList.create({
+                assigneeId: targetRole.id,
+                dependsOn: [message.body.failedTaskId],
+                summary: `${targetRole.id}: ${message.body.instructions}`,
+              });
+              const revisionEntry: DispatchPlanEntry = {
+                index: dispatchPlan.length + dispatchPlanByTaskId.size,
+                role: targetRole,
+                task: revisionTask,
+              };
+              dispatchPlanByTaskId.set(revisionTask.id, revisionEntry);
+              lastTask = revisionTask;
+              await emit("task_created", {
+                taskId: revisionTask.id,
+                summary: revisionTask.summary,
+                dependsOn: revisionTask.dependsOn,
+                orchestrationSource: dispatchMode,
+              }, targetRole.id);
+              const syntheticSpawn = await sendMailboxMessage({
+                to: leadRole.id,
+                from: leadRole.id,
+                kind: "spawn_request",
+                summary: `SPAWN ${revisionTask.id}`,
+                body: {
+                  schemaVersion: "v1",
+                  targetRole: targetRole.id,
+                  taskId: revisionTask.id,
+                  rationale: message.body.instructions,
+                } satisfies SpawnRequestBody,
+                replyTo: revisionTask.id,
+                taskId: revisionTask.id,
+              });
+              await recordMailboxMessageEvent(syntheticSpawn, leadRole.id, leadSession.sessionId, dispatchMode);
+              await emit("revision_request_dispatched", {
+                messageId: message.id,
+                failedTaskId: message.body.failedTaskId,
+                revisionTaskId: revisionTask.id,
+                targetRole: targetRole.id,
+                spawnMessageId: syntheticSpawn.id,
+                orchestrationSource: dispatchMode,
+              }, leadRole.id, leadSession.sessionId);
+              return;
+            }
+            case "shutdown_request": {
+              if (!isShutdownRequest(message)) {
+                return;
+              }
+              if (message.from !== leadRole.id) {
+                await emit("shutdown_request_untrusted_sender", {
+                  messageId: message.id,
+                  fromRole: message.from,
+                  orchestrationSource: dispatchMode,
+                }, leadRole.id, leadSession.sessionId);
+                return;
+              }
+              const activeRoleSessions = await adapter!.listActiveRoleSessions({ runId });
+              const activeWorkerRoles = memberRoles
+                .map((role) => role.id)
+                .filter((roleId) => typeof activeRoleSessions[roleId] === "string" && activeRoleSessions[roleId].length > 0);
+              const targetRoles = message.body.targetRole
+                ? activeWorkerRoles.filter((roleId) => roleId === message.body.targetRole)
+                : activeWorkerRoles;
+              const timeoutMs = message.body.timeoutMs ?? 30_000;
+              await emit("shutdown_request_received", {
+                messageId: message.id,
+                targetRole: message.body.targetRole ?? null,
+                timeoutMs,
+                targetRoles,
+                orchestrationSource: dispatchMode,
+              }, leadRole.id, leadSession.sessionId);
+              if (shutdownTracker?.timer) {
+                clearTimeout(shutdownTracker.timer);
+              }
+              shutdownTracker = {
+                expectedRoles: new Map(targetRoles.map((roleId) => [roleId, "pending" as const])),
+                timeoutMs,
+                timer: null,
+              };
+              const shutdownPayload = (targetRole: string) => JSON.stringify({
+                id: message.id,
+                to: targetRole,
+                from: leadRole.id,
+                kind: message.kind,
+                summary: message.summary,
+                replyTo: message.replyTo,
+                body: message.body,
+              });
+              for (const targetRole of targetRoles) {
+                await adapter!.sendRoleMessage({
+                  runId,
+                  roleId: targetRole,
+                  message: shutdownPayload(targetRole),
+                  wait: false,
+                });
+              }
+              shutdownTracker.timer = setTimeout(() => {
+                if (!shutdownTracker) {
+                  return;
+                }
+                for (const [roleId, state] of shutdownTracker.expectedRoles.entries()) {
+                  if (state === "pending") {
+                    shutdownTracker.expectedRoles.set(roleId, "timed_out");
+                  }
+                }
+                void completeShutdown().catch(rejectFinalization);
+              }, timeoutMs);
+              await emit("shutdown_request_dispatched", {
+                messageId: message.id,
+                targetRole: message.body.targetRole ?? null,
+                targetRoles,
+                timeoutMs,
+                orchestrationSource: dispatchMode,
+              }, leadRole.id, leadSession.sessionId);
+              if (targetRoles.length === 0) {
+                await completeShutdown();
+              }
+              return;
+            }
             case "spawn_request": {
               await emit("spawn_request_received", {
                 messageId: message.id,
-                taskId: typeof message.body === "object" && message.body !== null && "taskId" in message.body ? message.body.taskId : null,
+                taskId: isSpawnRequest(message) ? message.body.taskId : null,
                 orchestrationSource: dispatchMode,
               }, leadRole.id, leadSession.sessionId);
               if (message.from !== leadRole.id) {
@@ -631,7 +870,7 @@ export async function runManagerHarness(options: ManagerRunHarnessOptions): Prom
                 }, leadRole.id, leadSession.sessionId);
                 return;
               }
-              if (!isSpawnRequestBody(message.body)) {
+              if (!isSpawnRequest(message)) {
                 await emit("spawn_request_rejected", {
                   messageId: message.id,
                   reason: "invalid_body",
@@ -640,7 +879,7 @@ export async function runManagerHarness(options: ManagerRunHarnessOptions): Prom
                 return;
               }
               const entry = dispatchPlanByTaskId.get(message.body.taskId);
-              if (!entry || entry.role.id !== message.body.targetRole || !dispatchPlanByRoleId.has(message.body.targetRole)) {
+              if (!entry || entry.role.id !== message.body.targetRole || !memberRoleById.has(message.body.targetRole)) {
                 await emit("spawn_request_rejected", {
                   messageId: message.id,
                   taskId: message.body.taskId,
@@ -687,11 +926,12 @@ export async function runManagerHarness(options: ManagerRunHarnessOptions): Prom
 
               const idleHook = createIdleNudgeHook({ roleId: entry.role.id, taskList });
               await runHooks([idleHook], { roleId: entry.role.id });
+              const taskInstructions = taskInstructionsFor(claimedTask);
 
               const workerSession = await adapter!.createWorkerSession({
                 runId,
                 role: entry.role,
-                instructions: `Task ${entry.task.id}\n${taskText}`,
+                instructions: `Task ${entry.task.id}\n${taskInstructions}`,
               });
               roleSessionIds.set(entry.role.id, workerSession.sessionId);
 
@@ -699,7 +939,7 @@ export async function runManagerHarness(options: ManagerRunHarnessOptions): Prom
                 to: entry.role.id,
                 from: leadRole.id,
                 summary: `TASK ${entry.task.id}`,
-                body: `Task ${entry.task.id}\nRole: ${entry.role.id}\nGoal: ${taskText}`,
+                body: `Task ${entry.task.id}\nRole: ${entry.role.id}\nGoal: ${taskInstructions}`,
                 replyTo: entry.task.id,
                 taskId: entry.task.id,
               });
@@ -707,7 +947,7 @@ export async function runManagerHarness(options: ManagerRunHarnessOptions): Prom
 
               if (entry.role.id === "planner") {
                 const requestBody = createPlanApprovalRequest({
-                  plan: `Plan for ${entry.task.id}: ${taskText}`,
+                  plan: `Plan for ${entry.task.id}: ${taskInstructions}`,
                   requestedMode: "workspace_write",
                   taskId: entry.task.id,
                 });
@@ -729,6 +969,19 @@ export async function runManagerHarness(options: ManagerRunHarnessOptions): Prom
               const output = completedEvent
                 ? String(completedEvent.transient?.rawPayload?.output ?? completedEvent.payload.output ?? "")
                 : `Contribution from ${entry.role.id}.`;
+              const structuredWorkerMessage = extractStructuredWorkerMessage(output, entry.task.id);
+              if (structuredWorkerMessage) {
+                const relayedMessage = await sendMailboxMessage({
+                  to: leadRole.id,
+                  from: entry.role.id,
+                  kind: structuredWorkerMessage.kind,
+                  summary: structuredWorkerMessage.summary,
+                  body: structuredWorkerMessage.body,
+                  replyTo: entry.task.id,
+                  taskId: entry.task.id,
+                });
+                await recordMailboxMessageEvent(relayedMessage, entry.role.id, completedEvent?.sessionId ?? workerSession.sessionId, dispatchMode);
+              }
               contributions.push({
                 roleId: entry.role.id as WorkerContribution["roleId"],
                 sessionId: completedEvent?.sessionId ?? workerSession.sessionId,
@@ -749,7 +1002,7 @@ export async function runManagerHarness(options: ManagerRunHarnessOptions): Prom
               return;
             }
             case "worker_complete": {
-              if (!isWorkerCompleteBody(message.body)) {
+              if (!isWorkerComplete(message)) {
                 return;
               }
               const currentTask = await taskList.read(message.body.taskId);
@@ -794,8 +1047,36 @@ export async function runManagerHarness(options: ManagerRunHarnessOptions): Prom
               }
               return;
             }
+            case "shutdown_response": {
+              if (!isShutdownResponse(message)) {
+                return;
+              }
+              const activeRoleSessions = await adapter!.listActiveRoleSessions({ runId });
+              const sessionId = roleSessionIds.get(message.from);
+              if (!memberRoleById.has(message.from) || typeof activeRoleSessions[message.from] !== "string") {
+                await emit("shutdown_response_untrusted_sender", {
+                  messageId: message.id,
+                  fromRole: message.from,
+                  orchestrationSource: dispatchMode,
+                }, message.from as AgentEvent["roleId"], sessionId);
+                return;
+              }
+              if (shutdownTracker?.expectedRoles.has(message.from)) {
+                shutdownTracker.expectedRoles.set(message.from, "received");
+              }
+              await emit("shutdown_response_received", {
+                messageId: message.id,
+                fromRole: message.from,
+                ...(message.body.fromTaskId ? { fromTaskId: message.body.fromTaskId } : {}),
+                orchestrationSource: dispatchMode,
+              }, message.from as AgentEvent["roleId"], sessionId);
+              if (shutdownTracker && Array.from(shutdownTracker.expectedRoles.values()).every((state) => state === "received")) {
+                await completeShutdown();
+              }
+              return;
+            }
             case "final_reconciliation": {
-              if (!isFinalReconciliationBody(message.body)) {
+              if (!isFinalReconciliation(message)) {
                 return;
               }
               if (message.from !== leadRole.id) {
@@ -855,11 +1136,12 @@ export async function runManagerHarness(options: ManagerRunHarnessOptions): Prom
 
         const idleHook = createIdleNudgeHook({ roleId: role.id, taskList });
         await runHooks([idleHook], { roleId: role.id });
+        const taskInstructions = taskInstructionsFor(claimedTask);
 
         const workerSession = await adapter.createWorkerSession({
           runId,
           role,
-          instructions: `Task ${createdTask.id}\n${taskText}`,
+          instructions: `Task ${createdTask.id}\n${taskInstructions}`,
         });
         roleSessionIds.set(role.id, workerSession.sessionId);
 
@@ -867,7 +1149,7 @@ export async function runManagerHarness(options: ManagerRunHarnessOptions): Prom
           to: role.id,
           from: leadRole.id,
           summary: `TASK ${createdTask.id}`,
-          body: `Task ${createdTask.id}\nRole: ${role.id}\nGoal: ${taskText}`,
+          body: `Task ${createdTask.id}\nRole: ${role.id}\nGoal: ${taskInstructions}`,
           replyTo: createdTask.id,
           taskId: createdTask.id,
         });
@@ -875,7 +1157,7 @@ export async function runManagerHarness(options: ManagerRunHarnessOptions): Prom
 
         if (role.id === "planner") {
           const requestBody = createPlanApprovalRequest({
-            plan: `Plan for ${createdTask.id}: ${taskText}`,
+            plan: `Plan for ${createdTask.id}: ${taskInstructions}`,
             requestedMode: "workspace_write",
             taskId: createdTask.id,
           });
@@ -1456,34 +1738,49 @@ function findWorkerCompletedEvent(events: ReadonlyArray<AgentEvent>, roleId: str
   return [...events].reverse().find((event) => event.type === "worker_completed" && event.roleId === roleId);
 }
 
-function isSpawnRequestBody(body: MailboxMessageBody): body is SpawnRequestBody {
-  if (typeof body !== "object" || body === null) {
-    return false;
+function extractStructuredWorkerMessage(
+  output: string,
+  taskId: string,
+): { kind: "evaluator_verdict"; body: EvaluatorVerdictBody; summary: string } | null {
+  const candidates = [
+    ...Array.from(output.matchAll(/```json\s*([\s\S]*?)```/gi), (match) => match[1]?.trim() ?? ""),
+    ...output.split(/\r?\n/).map((line) => line.trim()).filter((line) => line.length > 0),
+  ];
+  for (const candidate of [...candidates].reverse()) {
+    if (!candidate.startsWith("{")) {
+      continue;
+    }
+    try {
+      const parsed = JSON.parse(candidate) as Record<string, unknown>;
+      const kind = parsed["kind"] === "evaluator_verdict"
+        ? "evaluator_verdict"
+        : (parsed["type"] === "evaluator_verdict" ? "evaluator_verdict" : null);
+      const body = typeof parsed["body"] === "object" && parsed["body"] !== null
+        ? parsed["body"] as Record<string, unknown>
+        : null;
+      if (!kind || !body || body["schemaVersion"] !== "v1") {
+        continue;
+      }
+      if ((body["verdict"] !== "pass" && body["verdict"] !== "fail") || typeof body["taskId"] !== "string") {
+        continue;
+      }
+      const verdictBody: EvaluatorVerdictBody = {
+        schemaVersion: "v1",
+        taskId: String(body["taskId"] || taskId),
+        verdict: body["verdict"],
+        ...(typeof body["rationale"] === "string" ? { rationale: body["rationale"] } : {}),
+        ...(typeof body["failedRubricRef"] === "string" ? { failedRubricRef: body["failedRubricRef"] } : {}),
+      };
+      return {
+        kind,
+        body: verdictBody,
+        summary: `VERDICT ${verdictBody.taskId} ${verdictBody.verdict.toUpperCase()}`,
+      };
+    } catch {
+      continue;
+    }
   }
-  const record = body as Record<string, unknown>;
-  return record["schemaVersion"] === "v1"
-    && typeof record["taskId"] === "string"
-    && typeof record["targetRole"] === "string";
-}
-
-function isWorkerCompleteBody(body: MailboxMessageBody): body is WorkerCompleteBody {
-  if (typeof body !== "object" || body === null) {
-    return false;
-  }
-  const record = body as Record<string, unknown>;
-  return record["schemaVersion"] === "v1"
-    && typeof record["taskId"] === "string"
-    && (record["status"] === "succeeded" || record["status"] === "failed");
-}
-
-function isFinalReconciliationBody(body: MailboxMessageBody): body is FinalReconciliationBody {
-  if (typeof body !== "object" || body === null) {
-    return false;
-  }
-  const record = body as Record<string, unknown>;
-  return record["schemaVersion"] === "v1"
-    && typeof record["summary"] === "string"
-    && Array.isArray(record["completedTaskIds"]);
+  return null;
 }
 
 function resolveDispatchMode(value: string | undefined): DispatchOrchestrationSource {

@@ -7,3 +7,4 @@ export * from "./mailbox.js";
 export * from "./task-list.js";
 export * from "./hooks.js";
 export * from "./plan-approval.js";
+export * from "./message-guards.js";

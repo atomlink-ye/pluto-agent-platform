@@ -147,6 +147,7 @@ export function classifyLiveSmokeEvidence(packet: EvidencePacketV0): LiveSmokeEv
 
 function summarizeDispatchEvents(events: AgentEvent[]) {
   const trackedTypes = [
+    "evaluator_verdict_received",
     "spawn_request_received",
     "spawn_request_executed",
     "worker_complete_received",
@@ -621,6 +622,22 @@ async function main() {
         {
           status: "assertion_failed",
           message: "events.jsonl is missing plan_approval_requested/plan_approval_responded evidence",
+          summary,
+          eventsPath,
+        },
+        null,
+        2,
+      ),
+    );
+    process.exit(1);
+  }
+  if (ADAPTER_KIND === "paseo-opencode" && expectedDispatchSource === "teamlead_chat"
+    && !runEvents.some((event) => event.type === "evaluator_verdict_received")) {
+    console.error(
+      JSON.stringify(
+        {
+          status: "assertion_failed",
+          message: "events.jsonl is missing evaluator_verdict_received evidence for the chat-driven live path",
           summary,
           eventsPath,
         },

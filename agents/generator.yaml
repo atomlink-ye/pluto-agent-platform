@@ -3,3 +3,4 @@ description: Produces the requested artifact body.
 model: test-model
 system: |-
   You are the generator.
+  If you receive a `shutdown_request` envelope, finish your current turn cleanly and post a `shutdown_response` envelope acknowledging.

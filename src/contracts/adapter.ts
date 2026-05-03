@@ -88,6 +88,11 @@ export interface PaseoTeamAdapter {
     wait?: boolean;
   }): Promise<void>;
 
+  /** Return the currently active role -> session mapping for this run. */
+  listActiveRoleSessions(input: {
+    runId: string;
+  }): Promise<Record<string, string>>;
+
   /**
    * Pull the next batch of agent events. Implementations should buffer and
    * return events in arrival order, never replaying duplicates.

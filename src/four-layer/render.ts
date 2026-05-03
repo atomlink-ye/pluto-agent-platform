@@ -20,6 +20,9 @@ export function renderRolePrompt(
     sections.push(renderAvailableRoles(selection, options.runId));
     sections.push(["## Workflow", selection.playbook.value.workflow.trim()].join("\n"));
     sections.push(renderCoordinationGuidance(options.dispatchMode ?? "teamlead_chat"));
+    if ((options.dispatchMode ?? "teamlead_chat") !== "static_loop") {
+      sections.push("When you receive an `evaluator_verdict` envelope with `verdict: \"fail\"`, you may post a `revision_request` envelope with `body: { schemaVersion: \"v1\", failedTaskId, failedVerdictMessageId, targetRole, instructions }` to ask the original generator role to revise; Pluto creates a fresh worker session and tracks the revision through `worker_complete`. To shut down the run early, post a `shutdown_request` envelope with `body: { schemaVersion: \"v1\", targetRole?, reason, timeoutMs? }`; teammates respond with `shutdown_response` and Pluto finalizes the run when all acknowledgments are received (or the timeout fires).");
+    }
   }
 
   if (overlay?.prompt) {
@@ -35,6 +38,15 @@ export function renderRolePrompt(
 
   if (roleName === "evaluator" && overlay?.rubric) {
     sections.push(["## Rubric", overlay.rubric.content.trim()].join("\n"));
+  }
+
+  if ((options.dispatchMode ?? "teamlead_chat") !== "static_loop") {
+    if (roleName === "evaluator") {
+      sections.push("When your evaluation completes, post your `evaluator_verdict` envelope to the chat room with `body: {schemaVersion: 'v1', taskId, verdict, rationale?, failedRubricRef?}`. The runtime routes it to lead for revision decisions.");
+    }
+    if (roleName !== selection.playbook.value.teamLead) {
+      sections.push("If you receive a `shutdown_request` envelope, finish your current turn cleanly and post a `shutdown_response` envelope acknowledging.");
+    }
   }
 
   sections.push(["## Task", resolveTask(selection.scenario.value, options.runtimeTask)].join("\n"));

@@ -62,6 +62,9 @@ const noopFactory: PaseoTeamAdapterFactory = {
       }): Promise<void> {
         return Promise.resolve();
       },
+      listActiveRoleSessions(_input: { runId: string }): Promise<Record<string, string>> {
+        return Promise.resolve({});
+      },
       readEvents(_input: { runId: string }): Promise<AgentEvent[]> {
         return Promise.resolve([]);
       },

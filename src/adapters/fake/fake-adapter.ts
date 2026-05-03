@@ -325,6 +325,11 @@ export class FakeAdapter implements PaseoTeamAdapter {
     }
   }
 
+  async listActiveRoleSessions(input: { runId: string }): Promise<Record<string, string>> {
+    const run = this.expectRun(input.runId);
+    return Object.fromEntries(run.roleSessionIds.entries());
+  }
+
   async readEvents(input: { runId: string }): Promise<AgentEvent[]> {
     const run = this.expectRun(input.runId);
     const next = run.events.slice(run.cursor);

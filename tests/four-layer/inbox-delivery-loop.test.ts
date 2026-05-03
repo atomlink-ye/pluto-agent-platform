@@ -32,6 +32,9 @@ class LoopTestAdapter implements PaseoTeamAdapter {
   async sendRoleMessage(_input: { runId: string; roleId: string; message: string; wait?: boolean }): Promise<void> {
     throw new Error("unused");
   }
+  async listActiveRoleSessions(_input: { runId: string }): Promise<Record<string, string>> {
+    return {};
+  }
   async readEvents(_input: { runId: string }): Promise<AgentEvent[]> {
     return [];
   }

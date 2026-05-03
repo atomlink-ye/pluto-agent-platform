@@ -1,0 +1,87 @@
+{
+  "schemaVersion": 0,
+  "kind": "evidence_packet",
+  "runId": "86557df1-0b4a-4bd4-8a75-027a4dcd5d38",
+  "status": "succeeded",
+  "summary": "Final Summary",
+  "failureReason": null,
+  "coordinationChannel": {
+    "kind": "shared_channel",
+    "locator": "216a3ed0-c0d9-4a9d-a730-251505cc7ca8",
+    "path": "[REDACTED:path]"
+  },
+  "artifactRefs": [
+    {
+      "path": "[REDACTED:path]",
+      "label": "artifact"
+    },
+    {
+      "path": "[REDACTED:path]",
+      "label": "task_tree"
+    },
+    {
+      "path": "[REDACTED:path]",
+      "label": "status"
+    },
+    {
+      "path": "[REDACTED:path]",
+      "label": "final_report"
+    }
+  ],
+  "transitions": [
+    {
+      "from": "lead",
+      "to": "planner",
+      "observedAt": "2026-05-03T02:51:55.244Z",
+      "source": "task_list"
+    },
+    {
+      "from": "planner",
+      "to": "generator",
+      "observedAt": "2026-05-03T02:54:32.603Z",
+      "source": "task_list"
+    },
+    {
+      "from": "generator",
+      "to": "evaluator",
+      "observedAt": "2026-05-03T02:56:50.314Z",
+      "source": "task_list"
+    },
+    {
+      "from": "evaluator",
+      "to": "lead",
+      "observedAt": "2026-05-03T02:58:10.626Z",
+      "source": "mailbox_summary"
+    }
+  ],
+  "roleCitations": [
+    {
+      "role": "planner",
+      "summary": "Plan: verify the target workspace, write `artifact.md` with four hello lines, then do a quick readback to confirm the content.`artifact.md` is in place at `.tmp/live-quickstart/artifact.md` with one hello line each for the lead, planner, generator, and evaluator.",
+      "quote": "Plan: verify the target workspace, write `artifact.md` with four hello lines, then do a quick readback to confirm the content.`artifact.md` is in place at `.tmp/live-quickstart/artifact.md` with one hello line each for the lead, planner, generator, and evaluator.",
+      "artifactPath": "[REDACTED:path]"
+    },
+    {
+      "role": "generator",
+      "summary": "I’m checking the workspace layout, then I’ll write the artifact file with the four hello lines.I found the target artifact path. Next I’m writing the markdown with one hello line per role.The artifact is written. I’m verifying the file contents now so I can reply with the exact result.",
+      "quote": "I’m checking the workspace layout, then I’ll write the artifact file with the four hello lines.I found the target artifact path. Next I’m writing the markdown with one hello line per role.The artifact is written. I’m verifying the file contents now so I can reply with the exact result.",
+      "artifactPath": "[REDACTED:path]"
+    },
+    {
+      "role": "evaluator",
+      "summary": "Checking the artifact content against the required four hello lines.",
+      "quote": "Checking the artifact content against the required four hello lines.",
+      "artifactPath": "[REDACTED:path]"
+    }
+  ],
+  "lineage": {
+    "stdoutPath": "/workspace/agent-teams-v1_6-root/.worktrees/agent-teams-chat-mailbox-runtime-s5/.tmp/live-quickstart/.pluto/runs/86557df1-0b4a-4bd4-8a75-027a4dcd5d38/stdout.log",
+    "transcriptPath": "/workspace/agent-teams-v1_6-root/.worktrees/agent-teams-chat-mailbox-runtime-s5/.tmp/live-quickstart/.pluto/runs/86557df1-0b4a-4bd4-8a75-027a4dcd5d38/mailbox.jsonl",
+    "finalReportPath": "/workspace/agent-teams-v1_6-root/.worktrees/agent-teams-chat-mailbox-runtime-s5/.tmp/live-quickstart/.pluto/runs/86557df1-0b4a-4bd4-8a75-027a4dcd5d38/final-report.md",
+    "mailboxLogPath": "/workspace/agent-teams-v1_6-root/.worktrees/agent-teams-chat-mailbox-runtime-s5/.tmp/live-quickstart/.pluto/runs/86557df1-0b4a-4bd4-8a75-027a4dcd5d38/mailbox.jsonl",
+    "taskListPath": "/workspace/agent-teams-v1_6-root/.worktrees/agent-teams-chat-mailbox-runtime-s5/.tmp/live-quickstart/.pluto/runs/86557df1-0b4a-4bd4-8a75-027a4dcd5d38/tasks.json",
+    "acceptanceOk": true,
+    "auditOk": true
+  },
+  "generatedAt": "2026-05-03T02:58:41.945Z"
+}

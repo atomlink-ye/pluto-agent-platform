@@ -39,6 +39,8 @@ export const RUN_STATUSES = [
 
 export const MAILBOX_MESSAGE_KINDS = [
   "text",
+  "evaluator_verdict",
+  "revision_request",
   "shutdown_request",
   "shutdown_response",
   "plan_approval_request",
@@ -227,15 +229,46 @@ export interface FinalReconciliationBody {
   completedTaskIds: string[];
 }
 
+export interface ShutdownRequestBody {
+  schemaVersion: "v1";
+  targetRole?: string;
+  reason: string;
+  timeoutMs?: number;
+}
+
+export interface ShutdownResponseBody {
+  schemaVersion: "v1";
+  fromTaskId?: string;
+  acknowledged: true;
+}
+
+export interface EvaluatorVerdictBody {
+  schemaVersion: "v1";
+  taskId: string;
+  verdict: "pass" | "fail";
+  rationale?: string;
+  failedRubricRef?: string;
+}
+
+export interface RevisionRequestBody {
+  schemaVersion: "v1";
+  failedTaskId: string;
+  failedVerdictMessageId: string;
+  targetRole: string;
+  instructions: string;
+}
+
 export type MailboxMessageBody =
   | string
+  | EvaluatorVerdictBody
+  | RevisionRequestBody
+  | ShutdownRequestBody
+  | ShutdownResponseBody
   | PlanApprovalRequestBody
   | PlanApprovalResponseBody
   | SpawnRequestBody
   | WorkerCompleteBody
-  | FinalReconciliationBody
-  | { reason?: string; taskId?: string }
-  | { acknowledged?: boolean; reason?: string; taskId?: string };
+  | FinalReconciliationBody;
 
 export interface MailboxMessage {
   id: string;
