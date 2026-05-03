@@ -1,0 +1,9 @@
+{
+  "ok": true,
+  "requestId": "runtime-helper-1777822185303-feb6d6a9",
+  "command": "wait",
+  "taskId": "task-2",
+  "targetStatus": "completed",
+  "status": "completed",
+  "waitedMs": 4825
+}

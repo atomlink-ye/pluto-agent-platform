@@ -1,0 +1,42 @@
+{
+  "nextId": 4,
+  "tasks": [
+    {
+      "id": "task-1",
+      "status": "completed",
+      "dependsOn": [],
+      "createdAt": "2026-05-03T15:28:08.079Z",
+      "updatedAt": "2026-05-03T15:29:35.710Z",
+      "summary": "planner: Produce a markdown file that says hello from the lead, planner, generator, and evaluator (one line each).",
+      "artifacts": [],
+      "assigneeId": "planner",
+      "claimedBy": "planner"
+    },
+    {
+      "id": "task-2",
+      "status": "completed",
+      "dependsOn": [
+        "task-1"
+      ],
+      "createdAt": "2026-05-03T15:28:08.094Z",
+      "updatedAt": "2026-05-03T15:33:56.063Z",
+      "summary": "generator: Produce a markdown file that says hello from the lead, planner, generator, and evaluator (one line each).",
+      "artifacts": [],
+      "assigneeId": "generator",
+      "claimedBy": "generator"
+    },
+    {
+      "id": "task-3",
+      "status": "completed",
+      "dependsOn": [
+        "task-2"
+      ],
+      "createdAt": "2026-05-03T15:28:08.116Z",
+      "updatedAt": "2026-05-03T15:34:29.775Z",
+      "summary": "evaluator: Produce a markdown file that says hello from the lead, planner, generator, and evaluator (one line each).",
+      "artifacts": [],
+      "assigneeId": "evaluator",
+      "claimedBy": "evaluator"
+    }
+  ]
+}

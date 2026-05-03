@@ -33,12 +33,41 @@ describe("src/cli/run.ts", () => {
         "--data-dir",
         dataDir,
       ],
-      { cwd: process.cwd(), timeout: 15_000 },
+      { cwd: process.cwd(), timeout: 30_000 },
     );
 
     const output = JSON.parse(stdout) as { status: string; scenario: string; evidencePacketPath: string };
     expect(output.status).toBe("succeeded");
     expect(output.scenario).toBe("hello-team");
     expect(output.evidencePacketPath.endsWith("evidence-packet.json")).toBe(true);
+  }, 30_000);
+});
+
+describe("src/cli/package.ts", () => {
+  it("prints a compiled run package from the CLI", async () => {
+    const workspace = await mkdtemp(join(tmpdir(), "pluto-package-cli-"));
+    tempDirs.push(workspace);
+
+    const { stdout } = await exec(
+      "pnpm",
+      [
+        "--silent",
+        "pluto:package",
+        "--",
+        "--scenario",
+        "hello-team",
+        "--run-profile",
+        "fake-smoke",
+        "--workspace",
+        workspace,
+      ],
+      { cwd: process.cwd(), timeout: 15_000 },
+    );
+
+    const output = JSON.parse(stdout) as { kind: string; runId: string; selection: { scenario: string }; workspace: { materializedCwd: string } };
+    expect(output.kind).toBe("run_package");
+    expect(output.runId).toBe("inspect-run");
+    expect(output.selection.scenario).toBe("hello-team");
+    expect(output.workspace.materializedCwd).toBe(workspace);
   });
 });

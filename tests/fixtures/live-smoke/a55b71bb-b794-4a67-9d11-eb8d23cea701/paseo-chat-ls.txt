@@ -1,0 +1,2 @@
+NAME                                                ID                                    PURPOSE                                                       MESSAGES  LAST MESSAGE            
+pluto-mailbox-a55b71bb-b794-4a67-9d11-eb8d23cea701  7732a290-3e7a-4a42-b9b0-5cbdefad7709  Pluto mailbox for run a55b71bb-b794-4a67-9d11-eb8d23cea701          20  2026-05-03T15:34:58.221Z
