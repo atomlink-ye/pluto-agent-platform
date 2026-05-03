@@ -2,6 +2,13 @@ import { mkdir, open, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
 import type { TaskRecord } from "../contracts/four-layer.js";
+import {
+  captureRuntimeOwnedFileSnapshot,
+  persistRuntimeOwnedFileSnapshot,
+  readRuntimeOwnedFileSnapshot,
+  runtimeOwnedSnapshotPath,
+  type RuntimeOwnedFileSnapshot,
+} from "./runtime-owned-files.js";
 
 const LOCK_RETRY_MS = 25;
 const LOCK_TIMEOUT_MS = 5_000;
@@ -29,12 +36,17 @@ export class FileBackedTaskList {
     return join(this.runDir, "tasks.json");
   }
 
+  runtimeSnapshotPath(): string {
+    return runtimeOwnedSnapshotPath(this.runDir, "tasklist");
+  }
+
   async ensure(): Promise<void> {
     await mkdir(this.runDir, { recursive: true });
     try {
       await readFile(this.path(), "utf8");
     } catch {
       await writeFile(this.path(), JSON.stringify({ nextId: 1, tasks: [] }, null, 2) + "\n", "utf8");
+      await this.captureRuntimeSnapshot();
     }
   }
 
@@ -130,6 +142,10 @@ export class FileBackedTaskList {
     });
   }
 
+  async readRuntimeSnapshot(): Promise<RuntimeOwnedFileSnapshot | null> {
+    return readRuntimeOwnedFileSnapshot(this.runtimeSnapshotPath());
+  }
+
   private taskLockPath(taskId: string): string {
     return join(this.runDir, `${taskId}.lock`);
   }
@@ -145,6 +161,18 @@ export class FileBackedTaskList {
 
   private async writeState(state: StoredTaskState): Promise<void> {
     await writeFile(this.path(), JSON.stringify(state, null, 2) + "\n", "utf8");
+    await this.captureRuntimeSnapshot();
+  }
+
+  private async captureRuntimeSnapshot(): Promise<void> {
+    // Best-effort: audit guard is emit-only, so snapshot I/O failure must not
+    // fail the surrounding task-list write.
+    try {
+      const snapshot = await captureRuntimeOwnedFileSnapshot(this.path(), this.clock().toISOString());
+      await persistRuntimeOwnedFileSnapshot(this.runtimeSnapshotPath(), snapshot);
+    } catch {
+      // intentionally swallowed
+    }
   }
 }
 

@@ -8,7 +8,8 @@ Pluto is a **playbook-first agent harness**.
 > Pluto persists mailbox/task/evidence artifacts.
 
 The v1.6 mainline is the four-layer manager-run harness with mailbox + shared task list +
-active hooks + plan-approval round-trip. Paseo chat is the live mailbox transport.
+active hooks + plan-approval round-trip. Paseo chat is the target live mailbox transport
+after `agent-teams-chat-mailbox-runtime` Stage B.
 
 ## Quickstart (offline, no Docker)
 

@@ -25,6 +25,9 @@ import type {
 import type {
   DispatchOrchestrationSource,
   EvaluatorVerdictBody,
+  EvidenceAuditEvent,
+  EvidenceAuditEventKind,
+  EvidenceAuditHookBoundary,
   EvidenceCommandResult,
   FinalReconciliationBody,
   MailboxEnvelope,
@@ -72,6 +75,7 @@ import {
   runHooks,
   writeEvidencePacket,
 } from "../four-layer/index.js";
+import { captureRuntimeOwnedFileSnapshot } from "../four-layer/runtime-owned-files.js";
 
 const exec = promisify(execCallback);
 const DEFAULT_LEAD_TIMEOUT_SECONDS = 600;
@@ -185,6 +189,7 @@ export async function runManagerHarness(options: ManagerRunHarnessOptions): Prom
   const transitions: EvidenceTransition[] = [];
   const roleCitations: EvidenceRoleCitation[] = [];
   const commandResults: CommandExecutionResult[] = [];
+  const auditEvents: EvidenceAuditEvent[] = [];
   const stdoutLines: string[] = [];
   const issues: string[] = [];
   let artifactPath: string | null = null;
@@ -366,6 +371,67 @@ export async function runManagerHarness(options: ManagerRunHarnessOptions): Prom
     }
   };
 
+  const recordAuditEvent = async (
+    kind: EvidenceAuditEventKind,
+    payload: Omit<EvidenceAuditEvent, "kind">,
+  ): Promise<void> => {
+    auditEvents.push({ kind, ...payload });
+    await emit(kind, payload);
+  };
+
+  const checkRuntimeMirror = async (
+    kind: EvidenceAuditEventKind,
+    hookBoundary: EvidenceAuditHookBoundary,
+    filePath: string,
+    readSnapshot: () => Promise<{ sha256: string; lineCount: number } | null>,
+  ): Promise<void> => {
+    const lastKnown = await readSnapshot();
+    if (!lastKnown) return;
+    // Best-effort capture: if the observed snapshot fails to read, audit guard
+    // stays emit-only and the boundary is skipped without aborting the run.
+    let observed;
+    try {
+      observed = await captureRuntimeOwnedFileSnapshot(filePath, clock().toISOString());
+    } catch {
+      return;
+    }
+    if (observed.sha256 === lastKnown.sha256 && observed.lineCount === lastKnown.lineCount) {
+      return;
+    }
+    await recordAuditEvent(kind, {
+      filePath,
+      lastKnownSha256: lastKnown.sha256,
+      observedSha256: observed.sha256,
+      lastKnownLineCount: lastKnown.lineCount,
+      observedLineCount: observed.lineCount,
+      hookBoundary,
+    });
+  };
+
+  const auditRuntimeMirrors = async (hookBoundary: EvidenceAuditHookBoundary): Promise<void> => {
+    await options.onPhase?.("before_hook_boundary", {
+      runId,
+      runDir,
+      hookBoundary,
+      mailboxPath: mailbox.mirrorPath(),
+      taskListPath: taskList.path(),
+    });
+    await Promise.all([
+      checkRuntimeMirror(
+        "mailbox_external_write_detected",
+        hookBoundary,
+        mailbox.mirrorPath(),
+        () => mailbox.readRuntimeSnapshot(),
+      ),
+      checkRuntimeMirror(
+        "tasklist_external_write_detected",
+        hookBoundary,
+        taskList.path(),
+        () => taskList.readRuntimeSnapshot(),
+      ),
+    ]);
+  };
+
   try {
     validateRunProfileRuntimeSupport(runProfile);
     await verifyRequiredReads(rootDir, runProfile?.requiredReads ?? []);
@@ -387,6 +453,7 @@ export async function runManagerHarness(options: ManagerRunHarnessOptions): Prom
       commandResults,
       transitions,
       roleCitations,
+      auditEvents,
       acceptance,
       audit,
     });
@@ -926,6 +993,7 @@ export async function runManagerHarness(options: ManagerRunHarnessOptions): Prom
 
               const idleHook = createIdleNudgeHook({ roleId: entry.role.id, taskList });
               await runHooks([idleHook], { roleId: entry.role.id });
+              await auditRuntimeMirrors("teammate_idle");
               const taskInstructions = taskInstructionsFor(claimedTask);
 
               const workerSession = await adapter!.createWorkerSession({
@@ -1136,6 +1204,7 @@ export async function runManagerHarness(options: ManagerRunHarnessOptions): Prom
 
         const idleHook = createIdleNudgeHook({ roleId: role.id, taskList });
         await runHooks([idleHook], { roleId: role.id });
+        await auditRuntimeMirrors("teammate_idle");
         const taskInstructions = taskInstructionsFor(claimedTask);
 
         const workerSession = await adapter.createWorkerSession({
@@ -1214,7 +1283,7 @@ export async function runManagerHarness(options: ManagerRunHarnessOptions): Prom
     await adapter.sendMessage({
       runId,
       sessionId: leadSession.sessionId,
-      message: buildSummaryRequest(taskText, contributions, completionMessages, mailbox.mirrorPath()),
+      message: buildSummaryRequest(taskText, contributions, completionMessages, mailboxRef.roomRef),
     });
     const summaryEvents = await persistAdapterEvents();
     const leadSummaryEvent = [...summaryEvents].reverse().find((event) => event.type === "lead_message");
@@ -1245,6 +1314,7 @@ export async function runManagerHarness(options: ManagerRunHarnessOptions): Prom
     if (lastTask) {
       const hookResult = await runHooks([acceptanceHook], { task: lastTask });
       issues.push(...hookResult.messages);
+      await auditRuntimeMirrors("task_completed");
     }
 
     const taskTreePath = join(runDir, "task-tree.md");
@@ -1265,6 +1335,8 @@ export async function runManagerHarness(options: ManagerRunHarnessOptions): Prom
     const stdout = stdoutLines.join("\n") + "\n";
     const stdoutPath = join(runDir, "stdout.log");
     await writeFile(stdoutPath, stdout, "utf8");
+
+    await auditRuntimeMirrors("run_end");
 
     acceptance = await runAcceptanceChecks({
       artifactRootDir: runDir,
@@ -1340,6 +1412,7 @@ export async function runManagerHarness(options: ManagerRunHarnessOptions): Prom
       commandResults,
       transitions,
       roleCitations: roleCitations.map((citation) => ({ ...citation, artifactPath: artifactPath ?? undefined })),
+      auditEvents,
       acceptance,
       audit,
       stdoutPath,
@@ -1409,6 +1482,7 @@ export async function runManagerHarness(options: ManagerRunHarnessOptions): Prom
       commandResults,
       transitions,
       roleCitations,
+      auditEvents,
       acceptance,
       audit,
     });
@@ -1434,6 +1508,7 @@ function finishFailure(input: {
   commandResults: CommandExecutionResult[];
   transitions: EvidenceTransition[];
   roleCitations: EvidenceRoleCitation[];
+  auditEvents: EvidenceAuditEvent[];
   acceptance: AcceptanceCheckResult;
   audit: AuditMiddlewareResult;
 }): Promise<ManagerRunHarnessResult> {
@@ -1467,6 +1542,7 @@ function finishFailure(input: {
       commandResults: input.commandResults,
       transitions: input.transitions,
       roleCitations: input.roleCitations,
+      auditEvents: input.auditEvents,
       stdoutPath,
       transcriptPath: input.mailboxRef.path,
       mailboxLogPath: input.mailboxRef.path,
@@ -1710,11 +1786,16 @@ function hasEnvelopeRejectionDrain(
   return typeof (transport as { drainEnvelopeRejections?: unknown }).drainEnvelopeRejections === "function";
 }
 
-function buildSummaryRequest(taskText: string, contributions: ReadonlyArray<WorkerContribution>, completionMessages: ReadonlyArray<MailboxMessage>, mailboxPath: string): string {
-  void mailboxPath;
+function buildSummaryRequest(
+  taskText: string,
+  contributions: ReadonlyArray<WorkerContribution>,
+  completionMessages: ReadonlyArray<MailboxMessage>,
+  coordinationHandle: string,
+): string {
   return [
     "SUMMARIZE",
     `Task: ${taskText}`,
+    `Coordination handle: ${coordinationHandle}`,
     "Completion messages:",
     ...completionMessages.map((message) => `- ${message.from}: ${message.id}`),
     "Contributions:",

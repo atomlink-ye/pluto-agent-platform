@@ -7,6 +7,13 @@ import type {
   MailboxMessageKind,
   MailboxTransportStatus,
 } from "../contracts/four-layer.js";
+import {
+  captureRuntimeOwnedFileSnapshot,
+  persistRuntimeOwnedFileSnapshot,
+  readRuntimeOwnedFileSnapshot,
+  runtimeOwnedSnapshotPath,
+  type RuntimeOwnedFileSnapshot,
+} from "./runtime-owned-files.js";
 
 const LOCK_RETRY_MS = 25;
 const LOCK_TIMEOUT_MS = 5_000;
@@ -57,6 +64,10 @@ export class FileBackedMailbox {
     return join(this.runDir, "mailbox.jsonl");
   }
 
+  runtimeSnapshotPath(): string {
+    return runtimeOwnedSnapshotPath(this.runDir, "mailbox");
+  }
+
   async ensure(): Promise<void> {
     await mkdir(join(this.runDir, "inboxes"), { recursive: true });
     await mkdir(dirname(this.mirrorPath()), { recursive: true });
@@ -72,6 +83,7 @@ export class FileBackedMailbox {
       await readFile(this.mirrorPath(), "utf8");
     } catch {
       await writeFile(this.mirrorPath(), "", "utf8");
+      await this.captureRuntimeSnapshot();
     }
   }
 
@@ -116,6 +128,7 @@ export class FileBackedMailbox {
     await this.ensure();
     await withFileLock(`${this.mirrorPath()}.lock`, async () => {
       await appendFile(this.mirrorPath(), JSON.stringify(message) + "\n", "utf8");
+      await this.captureRuntimeSnapshot();
     });
   }
 
@@ -127,6 +140,10 @@ export class FileBackedMailbox {
       .map((line) => line.trim())
       .filter((line) => line.length > 0)
       .map((line) => JSON.parse(line) as MailboxMessage);
+  }
+
+  async readRuntimeSnapshot(): Promise<RuntimeOwnedFileSnapshot | null> {
+    return readRuntimeOwnedFileSnapshot(this.runtimeSnapshotPath());
   }
 
   async read(teammateId: string, options: { unreadOnly?: boolean } = {}): Promise<MailboxMessage[]> {
@@ -154,6 +171,19 @@ export class FileBackedMailbox {
     const raw = await readFile(this.inboxPath(teammateId), "utf8");
     const parsed = JSON.parse(raw) as MailboxMessage[];
     return Array.isArray(parsed) ? parsed : [];
+  }
+
+  private async captureRuntimeSnapshot(): Promise<void> {
+    // Best-effort: audit guard is emit-only, so snapshot I/O failure must not
+    // fail the surrounding mailbox write. Loss of a snapshot just means a
+    // future external-write check will skip rather than producing a false
+    // positive.
+    try {
+      const snapshot = await captureRuntimeOwnedFileSnapshot(this.mirrorPath(), this.clock().toISOString());
+      await persistRuntimeOwnedFileSnapshot(this.runtimeSnapshotPath(), snapshot);
+    } catch {
+      // intentionally swallowed
+    }
   }
 }
 
