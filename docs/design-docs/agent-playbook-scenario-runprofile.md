@@ -149,7 +149,7 @@ Pluto's runtime responsibility is bounded but active:
    into the run directory as the durable evidence source.
 5. Launch the team lead and teammates with mailbox/task-list references, not per-role
    spawn-command templates.
-6. Let the team lead coordinate by creating tasks and sending mailbox messages.
+6. Let the team lead coordinate by creating tasks and sending mailbox messages, with `spawn_request` / `worker_complete` / `final_reconciliation` envelopes driving the default dispatch path.
 7. Run active hooks at `TaskCreated`, `TaskCompleted`, and `TeammateIdle`; hook exit 2
    blocks continuation.
 8. Execute the plan-approval round-trip through typed mailbox messages
@@ -165,12 +165,13 @@ Pluto's runtime responsibility is bounded but active:
   completion state.
 - **Hooks**: active control points, not post-hoc linting.
 - **Plan approval**: mailbox round-trip between teammate and team lead.
+- **Dispatch envelopes**: lead-authored `spawn_request` plus worker/lead completion envelopes that Pluto validates on inbox delivery.
 
 ### 5.2 Mailbox transport
 
 Paseo chat is the transport surface. Pluto reads/writes through the adapter, persists the
 authoritative mirrored log to the run directory, and does not rely on synthetic routing
-or fallback dispatch language.
+or fallback dispatch language. `PLUTO_DISPATCH_MODE=static_loop` remains a temporary compatibility fallback.
 
 ## 6. What this supersedes
 

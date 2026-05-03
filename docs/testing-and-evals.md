@@ -11,6 +11,7 @@
 
 - `tests/manager-run-harness.test.ts` — end-to-end fake run through mailbox/task runtime
 - `tests/orchestrator/plan-approval-round-trip.test.ts` — proves request -> deliver -> response -> deliver goes through transport plus the inbox loop
+- `tests/orchestrator/teamlead-driven-dispatch.test.ts` — happy path, dependsOn rejection, trusted-sender checks, and static fallback coverage for TeamLead-message-driven dispatch
 - `tests/four-layer/inbox-delivery-loop.test.ts` — idle delivery, busy queue + drain, failed delivery, wait-timeout loop behavior
 - `tests/four-layer-audit.test.ts` — mailbox/task/evidence audit behavior
 - `tests/paseo-opencode-adapter.test.ts` — live-adapter boundary behavior
@@ -33,12 +34,12 @@ PASEO_HOST=localhost:6767 pnpm smoke:live
 
 See `docs/harness.md` for the canonical live-smoke knob table.
 
-## Stage C checks
+## Stage D checks
 
-- Targeted validation for the inbox delivery loop and plan-approval wiring can use:
+- Targeted validation for TeamLead-message-driven dispatch can use:
 
 ```bash
-pnpm vitest --run tests/four-layer/inbox-delivery-loop.test.ts tests/orchestrator/plan-approval-round-trip.test.ts tests/orchestrator/harness-chat-room.test.ts tests/four-layer/mailbox-transport.test.ts tests/live-smoke-classification.test.ts
+pnpm vitest --run tests/orchestrator/teamlead-driven-dispatch.test.ts tests/orchestrator/plan-approval-round-trip.test.ts tests/orchestrator/harness-chat-room.test.ts tests/four-layer/inbox-delivery-loop.test.ts tests/live-smoke-classification.test.ts
 ```
 
-- `docker/live-smoke.ts` now asserts at least one delivery event chain from `events.jsonl` and verifies that the planner plan-approval round-trip is present in both `mailbox.jsonl` and `events.jsonl`.
+- `docker/live-smoke.ts` now asserts the chat-driven dispatch path by checking `spawn_request_received`, `spawn_request_executed`, `worker_complete_received`, and `final_reconciliation_received` plus `orchestrationSource: "teamlead_chat"` in `events.jsonl`.

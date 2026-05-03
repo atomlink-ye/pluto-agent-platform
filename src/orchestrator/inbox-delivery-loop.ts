@@ -2,7 +2,13 @@ import { setTimeout as delay } from "node:timers/promises";
 
 import type { PaseoTeamAdapter } from "../contracts/adapter.js";
 import type { AgentEvent, AgentEventType } from "../contracts/types.js";
-import type { MailboxMessage, ReceivedTransportMessage, RoomRef, TransportSince } from "../contracts/four-layer.js";
+import type {
+  DispatchOrchestrationSource,
+  MailboxMessage,
+  ReceivedTransportMessage,
+  RoomRef,
+  TransportSince,
+} from "../contracts/four-layer.js";
 import type { MailboxTransport } from "../four-layer/mailbox-transport.js";
 
 const DEFAULT_WAIT_TIMEOUT_MS = 100;
@@ -27,6 +33,7 @@ export interface InboxDeliveryLoopOptions {
     roleId: string;
     sessionId: string;
   }) => Promise<void> | void;
+  resolveOrchestrationSource?: (message: MailboxMessage) => DispatchOrchestrationSource | undefined;
   markMessageRead?: (message: MailboxMessage) => Promise<void> | void;
 }
 
@@ -189,13 +196,13 @@ export function startInboxDeliveryLoop(options: InboxDeliveryLoopOptions): Inbox
     queuedBySession.set(sessionId, queued);
     await options.emit(
       "mailbox_message_queued",
-      {
+      withOrchestrationSource(received.envelope.body, {
         transportMessageId: received.transportMessageId,
         sessionId,
         roleId,
         queuedAt: clock().toISOString(),
         queueDepth: queued.length,
-      },
+      }),
       roleId,
       sessionId,
     );
@@ -217,12 +224,12 @@ export function startInboxDeliveryLoop(options: InboxDeliveryLoopOptions): Inbox
       });
       await options.emit(
         "mailbox_message_delivered",
-        {
+        withOrchestrationSource(received.envelope.body, {
           transportMessageId: received.transportMessageId,
           sessionId,
           roleId,
           deliveredAt: clock().toISOString(),
-        },
+        }),
         roleId,
         sessionId,
       );
@@ -237,13 +244,13 @@ export function startInboxDeliveryLoop(options: InboxDeliveryLoopOptions): Inbox
     } catch (error) {
       await options.emit(
         "mailbox_message_failed",
-        {
+        withOrchestrationSource(received.envelope.body, {
           transportMessageId: received.transportMessageId,
           sessionId,
           roleId,
           attemptedAt,
           reason: error instanceof Error ? error.message : String(error),
-        },
+        }),
         roleId,
         sessionId,
       );
@@ -277,17 +284,25 @@ export function startInboxDeliveryLoop(options: InboxDeliveryLoopOptions): Inbox
   ): Promise<void> {
     await options.emit(
       "mailbox_message_failed",
-      {
+      withOrchestrationSource(received.envelope.body, {
         transportMessageId: received.transportMessageId,
         sessionId,
         roleId,
         attemptedAt,
         reason: "run_ended",
-      },
+      }),
       roleId,
       sessionId,
     );
     await markMessageRead(received);
+  }
+
+  function withOrchestrationSource(message: MailboxMessage, payload: Record<string, unknown>): Record<string, unknown> {
+    const orchestrationSource = options.resolveOrchestrationSource?.(message);
+    if (!orchestrationSource) {
+      return payload;
+    }
+    return { ...payload, orchestrationSource };
   }
 }
 

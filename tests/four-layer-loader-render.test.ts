@@ -145,6 +145,8 @@ describe("four-layer loader and render", () => {
     expect(leadPrompt).toContain("## Coordination via SendMessage and TaskTools");
     expect(leadPrompt).toContain("task.create");
     expect(leadPrompt).toContain("SendMessage");
+    expect(leadPrompt).toContain("spawn_request");
+    expect(leadPrompt).toContain("final_reconciliation");
     expect(leadPrompt).not.toContain("paseo run");
     expect(leadPrompt).not.toContain("DELEGATE: <available-role-name>");
     expect(leadPrompt).toContain("As team lead:");

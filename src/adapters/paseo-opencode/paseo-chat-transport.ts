@@ -133,7 +133,15 @@ export class PaseoChatTransport implements MailboxTransport {
       ...this.hostArgs(),
       input.room,
     ];
-    const parsed = await this.execJson(args);
+    let parsed: Record<string, unknown> | unknown[];
+    try {
+      parsed = await this.execJson(args);
+    } catch (error) {
+      if (!isTimeoutError(error)) {
+        throw error;
+      }
+      return { messages: [], latestTimestamp: null };
+    }
     const rows = Array.isArray(parsed)
       ? parsed
       : Array.isArray((parsed as Record<string, unknown>)["messages"])

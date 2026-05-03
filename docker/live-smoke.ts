@@ -39,7 +39,6 @@ import type {
   AgentEvent,
   BlockerReasonV0,
   EvidencePacketV0,
-  WorkerRequestedOrchestratorSource,
 } from "../src/contracts/types.js";
 
 function normalizePaseoHostForCli(host: string | undefined): string | undefined {
@@ -146,55 +145,21 @@ export function classifyLiveSmokeEvidence(packet: EvidencePacketV0): LiveSmokeEv
   };
 }
 
-function summarizeOrchestratorSources(events: AgentEvent[]) {
-  const sourceByRole = new Map<string, WorkerRequestedOrchestratorSource>();
-  for (const event of events) {
-    if (event.type !== "worker_requested") continue;
-    const roleId = String(event.payload["targetRole"] ?? event.roleId ?? "");
-    const orchestratorSource = event.payload["orchestratorSource"];
-    if (!roleId) {
-      throw new Error("worker_requested event missing targetRole for orchestratorSource summary");
-    }
-    if (
-      orchestratorSource !== "lead_marker" &&
-      orchestratorSource !== "pluto_fallback" &&
-      orchestratorSource !== "teamlead_direct"
-    ) {
-      throw new Error(`worker_requested event for ${roleId} missing valid orchestratorSource`);
-    }
-    sourceByRole.set(roleId, orchestratorSource);
-  }
-
-  const distribution: Record<WorkerRequestedOrchestratorSource, number> = {
-    lead_marker: 0,
-    pluto_fallback: 0,
-    teamlead_direct: 0,
-  };
-  const byRole: Record<string, WorkerRequestedOrchestratorSource> = {};
-
-  for (const event of events) {
-    if (event.type !== "worker_completed") continue;
-    const roleId = String(event.roleId ?? event.payload["targetRole"] ?? "");
-    if (!roleId) {
-      throw new Error("worker_completed event missing roleId for orchestratorSource summary");
-    }
-    const orchestratorSource = sourceByRole.get(roleId);
-    const normalizedSource = orchestratorSource ?? "teamlead_direct";
-    distribution[normalizedSource] += 1;
-    byRole[roleId] = normalizedSource;
-  }
-
-  const totalWorkers = Object.keys(byRole).length;
-  if (totalWorkers === 0) {
-    throw new Error("no completed workers were attributed to a worker_requested orchestratorSource");
-  }
-
-  return {
-    byRole,
-    distribution,
-    totalWorkers,
-    fallbackRatio: distribution.pluto_fallback / totalWorkers,
-  };
+function summarizeDispatchEvents(events: AgentEvent[]) {
+  const trackedTypes = [
+    "spawn_request_received",
+    "spawn_request_executed",
+    "worker_complete_received",
+    "final_reconciliation_received",
+  ] as const;
+  const relevant = events.filter((event) => trackedTypes.includes(event.type as typeof trackedTypes[number]));
+  const counts = Object.fromEntries(trackedTypes.map((type) => [type, relevant.filter((event) => event.type === type).length]));
+  const sources = Array.from(new Set(
+    relevant
+      .map((event) => event.payload["orchestrationSource"])
+      .filter((value): value is string => typeof value === "string" && value.length > 0),
+  ));
+  return { counts, sources };
 }
 
 function extractTransportMessageId(value: unknown): string | null {
@@ -333,23 +298,8 @@ async function main() {
       : new PaseoOpenCodeAdapter({ workspaceCwd }),
   });
 
-  let orchestratorSources: ReturnType<typeof summarizeOrchestratorSources>;
-  try {
-    orchestratorSources = summarizeOrchestratorSources(result.legacyResult.events);
-  } catch (error) {
-    console.error(
-      JSON.stringify(
-        {
-          status: "assertion_failed",
-          message: error instanceof Error ? error.message : String(error),
-          runId: result.run.runId,
-        },
-        null,
-        2,
-      ),
-    );
-    process.exit(1);
-  }
+  const expectedDispatchSource = process.env["PLUTO_DISPATCH_MODE"] === "static_loop" ? "static_loop" : "teamlead_chat";
+  const dispatchSummary = summarizeDispatchEvents(result.legacyResult.events);
 
   let summary: Record<string, unknown> = {
     runId: result.run.runId,
@@ -366,7 +316,8 @@ async function main() {
     })),
     artifactPath: result.artifactPath,
     eventsPath: `${result.runDir}/events.jsonl`,
-    orchestratorSources,
+    dispatchSummary,
+    expectedDispatchSource,
   };
 
   // --- MVP-beta evidence assertions ---
@@ -800,22 +751,6 @@ async function main() {
     process.exit(1);
   }
 
-  if (orchestratorSources.fallbackRatio > 0.5) {
-    console.error(
-      JSON.stringify(
-        {
-          status: "assertion_failed",
-          message: "more than 50% of completed workers were dispatched via pluto_fallback",
-          summary,
-          evidence: { md: evidenceMdPath, json: evidenceJsonPath },
-        },
-        null,
-        2,
-      ),
-    );
-    process.exit(1);
-  }
-
   if ((result.legacyResult.status === "failed") || !result.legacyResult.artifact) {
     console.error(
       JSON.stringify(
@@ -879,19 +814,47 @@ async function main() {
     process.exit(1);
   }
 
-  if (Object.values(orchestratorSources.byRole).some((value) => value !== "teamlead_direct")) {
-    console.error(
-      JSON.stringify(
-        {
-          status: "assertion_failed",
-          message: "manager-run harness emitted non-teamlead_direct worker_requested source",
-          summary,
-        },
-        null,
-        2,
-      ),
-    );
-    process.exit(1);
+  const dispatchEvents = runEvents.filter((event) =>
+    event.type === "spawn_request_received"
+    || event.type === "spawn_request_executed"
+    || event.type === "worker_complete_received"
+    || event.type === "final_reconciliation_received",
+  );
+  if (expectedDispatchSource === "teamlead_chat") {
+    const requiredDispatchTypes = ["spawn_request_received", "spawn_request_executed", "worker_complete_received", "final_reconciliation_received"] as const;
+    for (const requiredType of requiredDispatchTypes) {
+      if (!dispatchEvents.some((event) => event.type === requiredType)) {
+        console.error(
+          JSON.stringify(
+            {
+              status: "assertion_failed",
+              message: `events.jsonl is missing ${requiredType} evidence`,
+              summary,
+              eventsPath,
+            },
+            null,
+            2,
+          ),
+        );
+        process.exit(1);
+      }
+    }
+    if (dispatchEvents.some((event) => event.payload["orchestrationSource"] !== "teamlead_chat")) {
+      console.error(
+        JSON.stringify(
+          {
+            status: "assertion_failed",
+            message: "dispatch events are missing orchestrationSource: teamlead_chat",
+            summary,
+            eventsPath,
+            dispatchEvents: dispatchEvents.map((event) => ({ type: event.type, payload: event.payload })),
+          },
+          null,
+          2,
+        ),
+      );
+      process.exit(1);
+    }
   }
 
   const leakedProtocol = finalArtifact.contributions.filter((c) =>

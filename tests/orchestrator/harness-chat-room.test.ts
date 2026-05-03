@@ -62,6 +62,7 @@ describe.sequential("harness chat room wiring", () => {
     const workspace = await mkdtemp(join(tmpdir(), "pluto-harness-post-fail-"));
     const dataDir = join(workspace, ".pluto");
     tempDirs.push(workspace);
+    const originalDispatchMode = process.env["PLUTO_DISPATCH_MODE"];
 
     class PostFailingTransport extends FakeMailboxTransport {
       override async post(): Promise<never> {
@@ -69,21 +70,31 @@ describe.sequential("harness chat room wiring", () => {
       }
     }
 
-    const result = await runManagerHarness({
-      rootDir: repoRoot,
-      selection: { scenario: "hello-team", runProfile: "fake-smoke" },
-      workspaceOverride: workspace,
-      dataDir,
-      createAdapter: ({ team }) => new FakeAdapter({ team }),
-      createMailboxTransport: () => new PostFailingTransport(),
-    });
+    try {
+      process.env["PLUTO_DISPATCH_MODE"] = "static_loop";
 
-    expect(result.run.status).toBe("succeeded");
-    const events = await readJsonLines<Record<string, unknown>>(join(result.runDir, "events.jsonl"));
-    expect(events.some((event) => event["type"] === "mailbox_transport_post_failed")).toBe(true);
-    const mirror = await readJsonLines<Record<string, unknown>>(join(result.runDir, "mailbox.jsonl"));
-    expect(mirror.length).toBeGreaterThan(0);
-    expect(mirror.every((message) => message["transportStatus"] === "post_failed")).toBe(true);
+      const result = await runManagerHarness({
+        rootDir: repoRoot,
+        selection: { scenario: "hello-team", runProfile: "fake-smoke" },
+        workspaceOverride: workspace,
+        dataDir,
+        createAdapter: ({ team }) => new FakeAdapter({ team }),
+        createMailboxTransport: () => new PostFailingTransport(),
+      });
+
+      expect(result.run.status).toBe("succeeded");
+      const events = await readJsonLines<Record<string, unknown>>(join(result.runDir, "events.jsonl"));
+      expect(events.some((event) => event["type"] === "mailbox_transport_post_failed")).toBe(true);
+      const mirror = await readJsonLines<Record<string, unknown>>(join(result.runDir, "mailbox.jsonl"));
+      expect(mirror.length).toBeGreaterThan(0);
+      expect(mirror.every((message) => message["transportStatus"] === "post_failed")).toBe(true);
+    } finally {
+      if (originalDispatchMode === undefined) {
+        delete process.env["PLUTO_DISPATCH_MODE"];
+      } else {
+        process.env["PLUTO_DISPATCH_MODE"] = originalDispatchMode;
+      }
+    }
   });
 
   it("fails closed when mirror append fails after transport post", async () => {

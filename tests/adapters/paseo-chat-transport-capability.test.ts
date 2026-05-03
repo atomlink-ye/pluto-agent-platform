@@ -122,6 +122,27 @@ describe("PaseoChatTransport capability probing", () => {
     ]);
   });
 
+  it("treats chat read timeouts as an empty poll result", async () => {
+    const runner: ProcessRunner = {
+      async exec(_cmd, args) {
+        if (args[0] === "chat" && args[1] === "read") {
+          return {
+            stdout: "",
+            stderr: "CHAT_READ_FAILED: Timeout waiting for message (10000ms)",
+            exitCode: 1,
+          };
+        }
+        return { stdout: "{}", stderr: "", exitCode: 0 };
+      },
+      follow() {
+        return { dispose: async () => undefined };
+      },
+    };
+
+    const transport = new PaseoChatTransport({ paseoBin: "paseo", runner });
+    await expect(transport.read({ room: "room-1" })).resolves.toEqual({ messages: [], latestTimestamp: null });
+  });
+
   it("recovers a posted message by reading the room when chat post times out after delivery", async () => {
     const envelope = {
       schemaVersion: "v1",

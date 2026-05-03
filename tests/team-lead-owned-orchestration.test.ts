@@ -13,6 +13,8 @@ describe("agent teams v1.6 render", () => {
     expect(leadPrompt).toContain("## Coordination via SendMessage and TaskTools");
     expect(leadPrompt).toContain("task.create");
     expect(leadPrompt).toContain("SendMessage");
+    expect(leadPrompt).toContain("spawn_request");
+    expect(leadPrompt).toContain("final_reconciliation");
     expect(leadPrompt).not.toContain("paseo run --provider");
     expect(leadPrompt).not.toContain("STAGE:");
     expect(plannerPrompt).not.toContain("## Coordination via SendMessage and TaskTools");

@@ -17,7 +17,7 @@
 - `Run.coordinationChannel.locator` / `EvidencePacket.coordinationChannel.locator` record the real shared-channel room id for the run
 - Each `mailbox.jsonl` line bakes transport metadata at append time: `transportMessageId`, `transportTimestamp`, `transportStatus`
 - Mailbox entries also carry additive delivery metadata at append time when known: `deliveryStatus`, `deliveryAttemptedAt`, `deliveryFailedReason`
-- `.pluto/runs/<runId>/events.jsonl` records the delivery loop evidence chain: `mailbox_message`, `mailbox_message_delivered`, `mailbox_message_queued`, `mailbox_message_failed`, `plan_approval_requested`, `plan_approval_responded`
+- `.pluto/runs/<runId>/events.jsonl` records the delivery loop evidence chain: `mailbox_message`, `mailbox_message_delivered`, `mailbox_message_queued`, `mailbox_message_failed`, `plan_approval_requested`, `plan_approval_responded`, `spawn_request_received`, `spawn_request_executed`, `spawn_request_rejected`, `worker_complete_received`, and `final_reconciliation_received`
 - `.pluto/runs/<runId>/tasks.json`
 - `.pluto/runs/<runId>/artifact.md`
 - `.pluto/runs/<runId>/evidence-packet.md`
@@ -29,6 +29,7 @@
 - The loop waits on `MailboxTransport.wait()`, resolves role-to-session ids, delivers with `sendSessionMessage({ wait: false })`, queues when a session is busy, and marks inbox entries read after delivery or durable queueing.
 - Non-agent targets such as `pluto` and `broadcast` stay mirrored in `mailbox.jsonl` but are skipped cleanly by the delivery loop.
 - The planner plan-approval request and the lead response now travel through the shared room and leave delivery evidence in both `mailbox.jsonl` and `events.jsonl`.
+- In the default `PLUTO_DISPATCH_MODE=teamlead_chat` path, the same loop also consumes `spawn_request`, `worker_complete`, and `final_reconciliation` envelopes addressed to the lead, while `PLUTO_DISPATCH_MODE=static_loop` preserves the legacy one-release fallback.
 
 ## Runtime control knobs
 
@@ -40,6 +41,7 @@
 | Model | `PASEO_MODEL` | `opencode/minimax-m2.5-free` | model id |
 | Mode | `PASEO_MODE` | `orchestrator` | paseo launch mode |
 | Host | `PASEO_HOST` | local socket | explicit paseo daemon host |
+| Dispatch mode | `PLUTO_DISPATCH_MODE` | `teamlead_chat` | chat-driven dispatch or legacy static fallback |
 | Binary | `PASEO_BIN` | `paseo` | paseo CLI path |
 | Scenario | `PLUTO_SCENARIO` | `hello-team` | scenario selection |
 | Run profile | `PLUTO_RUN_PROFILE` | `fake-smoke` | run-profile selection |

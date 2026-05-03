@@ -1,9 +1,10 @@
-import type { Agent, Scenario } from "../contracts/four-layer.js";
+import type { Agent, DispatchOrchestrationSource, Scenario } from "../contracts/four-layer.js";
 import type { ResolvedFourLayerSelection } from "./loader.js";
 
 export interface RenderRolePromptOptions {
   runtimeTask?: string;
   runId?: string;
+  dispatchMode?: DispatchOrchestrationSource;
 }
 
 export function renderRolePrompt(
@@ -18,7 +19,7 @@ export function renderRolePrompt(
   if (roleName === selection.playbook.value.teamLead) {
     sections.push(renderAvailableRoles(selection, options.runId));
     sections.push(["## Workflow", selection.playbook.value.workflow.trim()].join("\n"));
-    sections.push(renderCoordinationGuidance());
+    sections.push(renderCoordinationGuidance(options.dispatchMode ?? "teamlead_chat"));
   }
 
   if (overlay?.prompt) {
@@ -78,8 +79,8 @@ function renderAvailableRoles(selection: ResolvedFourLayerSelection, runId?: str
   return lines.join("\n");
 }
 
-function renderCoordinationGuidance(): string {
-  return [
+function renderCoordinationGuidance(dispatchMode: DispatchOrchestrationSource): string {
+  const guidance = [
     "## Coordination via SendMessage and TaskTools",
     "- Create tasks with `task.create({ role: <role>, instructions: <task>, dependsOn: [...] })`.",
     "- Coordinate teammates with `SendMessage({ to: <name>, summary?: <short>, message: <text-or-typed-envelope> })`.",
@@ -87,7 +88,15 @@ function renderCoordinationGuidance(): string {
     "- Read your inbox and completion notices before moving to downstream roles.",
     "- When a teammate needs plan approval, review the request in your inbox; Pluto owns posting the transport-backed `plan_approval_response` after delivery.",
     "- Final output must cite the completion message id for every required role.",
-  ].join("\n");
+  ];
+
+  if (dispatchMode !== "static_loop") {
+    guidance.push(
+      "- When you need a teammate to execute a task, post a `spawn_request` envelope to the chat room with `body: { schemaVersion: \"v1\", targetRole: <role>, taskId: <existing or new task id>, rationale?: <reason> }`. Pluto will validate against the playbook and dependsOn rules and create the worker session for you. When you're done with the run, post a `final_reconciliation` envelope with `body: { schemaVersion: \"v1\", summary, completedTaskIds }`.",
+    );
+  }
+
+  return guidance.join("\n");
 }
 
 function resolveTask(scenario: Scenario, runtimeTask?: string): string {

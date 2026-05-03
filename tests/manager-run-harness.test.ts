@@ -35,8 +35,13 @@ describe("manager run harness", () => {
     await expect(access(join(result.runDir, "tasks.json"))).resolves.toBeUndefined();
     const mailboxLog = await readFile(join(result.runDir, "mailbox.jsonl"), "utf8");
     const tasks = await readFile(join(result.runDir, "tasks.json"), "utf8");
+    const artifact = await readFile(join(workspace, "artifact.md"), "utf8");
     expect(mailboxLog).toContain('"summary":"FINAL"');
     expect(tasks).toContain('"status": "completed"');
+    expect(artifact.toLowerCase()).toContain("lead");
+    expect(artifact.toLowerCase()).toContain("planner");
+    expect(artifact.toLowerCase()).toContain("generator");
+    expect(artifact.toLowerCase()).toContain("evaluator");
   });
 
   it("passes mailbox metadata into adapter startRun and createLeadSession", async () => {

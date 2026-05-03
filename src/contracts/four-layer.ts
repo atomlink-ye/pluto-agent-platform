@@ -43,7 +43,12 @@ export const MAILBOX_MESSAGE_KINDS = [
   "shutdown_response",
   "plan_approval_request",
   "plan_approval_response",
+  "spawn_request",
+  "worker_complete",
+  "final_reconciliation",
 ] as const;
+
+export const DISPATCH_ORCHESTRATION_SOURCES = ["teamlead_chat", "static_loop"] as const;
 
 export const MAILBOX_TRANSPORT_STATUSES = ["ok", "post_failed"] as const;
 
@@ -59,6 +64,7 @@ export type FourLayerObjectKind = typeof FOUR_LAYER_OBJECT_KINDS[number];
 export type ScenarioTaskMode = typeof SCENARIO_TASK_MODES[number];
 export type RunStatus = typeof RUN_STATUSES[number];
 export type MailboxMessageKind = typeof MAILBOX_MESSAGE_KINDS[number];
+export type DispatchOrchestrationSource = typeof DISPATCH_ORCHESTRATION_SOURCES[number];
 export type MailboxTransportStatus = typeof MAILBOX_TRANSPORT_STATUSES[number];
 export type TaskListStatus = typeof TASK_LIST_STATUSES[number];
 export type RequiredReadKind = typeof REQUIRED_READ_KINDS[number];
@@ -200,10 +206,34 @@ export interface PlanApprovalResponseBody {
   taskId?: string;
 }
 
+export interface SpawnRequestBody {
+  schemaVersion: "v1";
+  targetRole: string;
+  taskId: string;
+  rationale?: string;
+}
+
+export interface WorkerCompleteBody {
+  schemaVersion: "v1";
+  taskId: string;
+  status: "succeeded" | "failed";
+  artifactRef?: string;
+  summary?: string;
+}
+
+export interface FinalReconciliationBody {
+  schemaVersion: "v1";
+  summary: string;
+  completedTaskIds: string[];
+}
+
 export type MailboxMessageBody =
   | string
   | PlanApprovalRequestBody
   | PlanApprovalResponseBody
+  | SpawnRequestBody
+  | WorkerCompleteBody
+  | FinalReconciliationBody
   | { reason?: string; taskId?: string }
   | { acknowledged?: boolean; reason?: string; taskId?: string };
 
