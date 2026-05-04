@@ -1,7 +1,14 @@
 # Plan: Post-Slice-A refactor pass
 
 ## Status
-Active. Authored 2026-05-04. Does not change behavior; reduces complexity.
+Completed 2026-05-04. All 8 phases (R1–R8) landed across 11 commits on
+the `post-slice-a-refactor` branch. Final state: `pnpm verify` green —
+typecheck 0 errors, vitest 737/737, build, smoke:fake, no-paseo blocker
+check. All file-size targets hit except `paseo-opencode-adapter.ts`
+which lands at 676 vs the ~450 target (residual is constructor / env
+init / callback identity wiring on the class itself; deferred as a
+future S-effort). See `.local/REFACTOR_REPORT_FINAL.md` for the per-phase
+verdict matrix, commit map, and remaining follow-ups.
 
 ## Goal
 Shrink the modules that accumulated multiple responsibilities over successive slices, starting with the manager harness and the duplicated test/control-plane scaffolding around it. Preserve public APIs, event shapes, artifacts, and runtime behavior while extracting focused modules that make future slices cheaper and safer.
