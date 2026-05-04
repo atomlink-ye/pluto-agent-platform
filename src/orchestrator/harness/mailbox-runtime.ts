@@ -1,6 +1,5 @@
 import { captureRuntimeOwnedFileSnapshot } from "../../four-layer/runtime-owned-files.js";
 import type {
-  CoordinationTranscriptRefV0,
   DispatchOrchestrationSource,
   EvidenceAuditEvent,
   EvidenceAuditEventKind,
@@ -10,7 +9,7 @@ import type {
   MailboxMessageKind,
   Run,
 } from "../../contracts/four-layer.js";
-import type { AgentEvent, AgentEventType } from "../../contracts/types.js";
+import type { AgentEvent, AgentEventType, CoordinationTranscriptRefV0 } from "../../contracts/types.js";
 import type { MailboxTransport } from "../../four-layer/mailbox-transport.js";
 
 export interface SendMailboxMessageInput {

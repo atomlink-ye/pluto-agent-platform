@@ -13,6 +13,7 @@ import type {
   BudgetV0,
   BudgetSnapshotV0,
   BudgetDecisionV0,
+  ObservabilityRecordValidationError,
   ObservabilityRecordValidationResult,
 } from "./observability-schema.js";
 
@@ -44,6 +45,14 @@ function asRecord(value: unknown): Record<string, unknown> | null {
   }
 
   return value as Record<string, unknown>;
+}
+
+function validationSuccess<T>(value: T): ObservabilityRecordValidationResult<T> {
+  return { ok: true as const, value };
+}
+
+function validationError(errors: string[]): ObservabilityRecordValidationError {
+  return { ok: false as const, errors };
 }
 
 function validateStringField(record: Record<string, unknown>, field: string, errors: string[]): void {
@@ -126,7 +135,7 @@ function validateRecordRefV0(value: unknown, field: string, errors: string[]): v
 function validateRedactionSummaryV0(value: unknown, field: string): ObservabilityRecordValidationResult<RedactionSummaryV0> {
   const record = asRecord(value);
   if (!record) {
-    return { ok: false, errors: [`${field} must be an object`] };
+    return validationError([`${field} must be an object`]);
   }
 
   const errors: string[] = [];
@@ -147,8 +156,8 @@ function validateRedactionSummaryV0(value: unknown, field: string): Observabilit
   }
 
   const validationResult = errors.length === 0
-    ? { ok: true, value: record as unknown as RedactionSummaryV0 }
-    : { ok: false, errors };
+    ? validationSuccess(record as unknown as RedactionSummaryV0)
+    : validationError(errors);
   return validationResult;
 }
 
@@ -158,7 +167,7 @@ function validateCanonicalAuditEnvelopeV0(
 ): ObservabilityRecordValidationResult<CanonicalAuditEnvelopeV0> {
   const record = asRecord(value);
   if (!record) {
-    return { ok: false, errors: [`${field} must be an object`] };
+    return validationError([`${field} must be an object`]);
   }
 
   const errors: string[] = [];
@@ -184,12 +193,12 @@ function validateCanonicalAuditEnvelopeV0(
 
   const redaction = validateRedactionSummaryV0(record["redaction"], `${field}.redaction`);
   if (!redaction.ok) {
-    errors.push(...(redaction as any).errors);
+    errors.push(...redaction.errors);
   }
 
   const validationResult = errors.length === 0
-    ? { ok: true, value: record as unknown as CanonicalAuditEnvelopeV0 }
-    : { ok: false, errors };
+    ? validationSuccess(record as unknown as CanonicalAuditEnvelopeV0)
+    : validationError(errors);
   return validationResult;
 }
 
@@ -316,7 +325,7 @@ function validateBaseRecord(
 ): ObservabilityRecordValidationResult<Record<string, unknown>> {
   const record = asRecord(value);
   if (!record) {
-    return { ok: false, errors: ["record must be an object"] };
+    return validationError(["record must be an object"]);
   }
 
   const errors: string[] = [];
@@ -343,13 +352,13 @@ function validateBaseRecord(
   } else {
     const audit = validateCanonicalAuditEnvelopeV0(record["audit"], "audit");
     if (!audit.ok) {
-      errors.push(...(audit as any).errors);
+      errors.push(...audit.errors);
     }
   }
 
   const validationResult = errors.length === 0 
-    ? { ok: true, value: record as Record<string, unknown> }
-    : { ok: false, errors };
+    ? validationSuccess(record as Record<string, unknown>)
+    : validationError(errors);
   return validationResult;
 }
 
@@ -401,8 +410,8 @@ export function validateMetricSeriesV0(value: unknown): ObservabilityRecordValid
   validateMetricPoints(record["points"], "points", errors);
 
   return errors.length === 0
-    ? { ok: true, value: record as unknown as MetricSeriesV0 }
-    : { ok: false, errors };
+    ? validationSuccess(record as unknown as MetricSeriesV0)
+    : validationError(errors);
 }
 
 export function validateRunHealthSummaryV0(value: unknown): ObservabilityRecordValidationResult<RunHealthSummaryV0> {
@@ -425,8 +434,8 @@ export function validateRunHealthSummaryV0(value: unknown): ObservabilityRecordV
   }
 
   return errors.length === 0
-    ? { ok: true, value: record as unknown as RunHealthSummaryV0 }
-    : { ok: false, errors };
+    ? validationSuccess(record as unknown as RunHealthSummaryV0)
+    : validationError(errors);
 }
 
 export function validateAdapterHealthSummaryV0(
@@ -445,8 +454,8 @@ export function validateAdapterHealthSummaryV0(
   validateStringField(record, "observedAt", errors);
 
   return errors.length === 0
-    ? { ok: true, value: record as unknown as AdapterHealthSummaryV0 }
-    : { ok: false, errors };
+    ? validationSuccess(record as unknown as AdapterHealthSummaryV0)
+    : validationError(errors);
 }
 
 export function validateRedactedTraceV0(value: unknown): ObservabilityRecordValidationResult<RedactedTraceV0> {
@@ -466,8 +475,8 @@ export function validateRedactedTraceV0(value: unknown): ObservabilityRecordVali
   }
 
   return errors.length === 0
-    ? { ok: true, value: record as unknown as RedactedTraceV0 }
-    : { ok: false, errors };
+    ? validationSuccess(record as unknown as RedactedTraceV0)
+    : validationError(errors);
 }
 
 export function validateAlertV0(value: unknown): ObservabilityRecordValidationResult<AlertV0> {
@@ -491,8 +500,8 @@ export function validateAlertV0(value: unknown): ObservabilityRecordValidationRe
   }
 
   return errors.length === 0
-    ? { ok: true, value: record as unknown as AlertV0 }
-    : { ok: false, errors };
+    ? validationSuccess(record as unknown as AlertV0)
+    : validationError(errors);
 }
 
 export function validateDashboardDefinitionV0(
@@ -508,8 +517,8 @@ export function validateDashboardDefinitionV0(
   validateDashboardWidgetsV0(record["widgets"], "widgets", errors);
 
   return errors.length === 0
-    ? { ok: true, value: record as unknown as DashboardDefinitionV0 }
-    : { ok: false, errors };
+    ? validationSuccess(record as unknown as DashboardDefinitionV0)
+    : validationError(errors);
 }
 
 export function validateUsageMeterV0(value: unknown): ObservabilityRecordValidationResult<UsageMeterV0> {
@@ -526,8 +535,8 @@ export function validateUsageMeterV0(value: unknown): ObservabilityRecordValidat
   validateThresholdWindowV0(record["window"], "window", errors);
 
   return errors.length === 0
-    ? { ok: true, value: record as unknown as UsageMeterV0 }
-    : { ok: false, errors };
+    ? validationSuccess(record as unknown as UsageMeterV0)
+    : validationError(errors);
 }
 
 export function validateBudgetV0(value: unknown): ObservabilityRecordValidationResult<BudgetV0> {
@@ -545,8 +554,8 @@ export function validateBudgetV0(value: unknown): ObservabilityRecordValidationR
   }
 
   return errors.length === 0
-    ? { ok: true, value: record as unknown as BudgetV0 }
-    : { ok: false, errors };
+    ? validationSuccess(record as unknown as BudgetV0)
+    : validationError(errors);
 }
 
 export function validateBudgetSnapshotV0(value: unknown): ObservabilityRecordValidationResult<BudgetSnapshotV0> {
@@ -563,8 +572,8 @@ export function validateBudgetSnapshotV0(value: unknown): ObservabilityRecordVal
   validateStringField(record, "behavior", errors);
 
   return errors.length === 0
-    ? { ok: true, value: record as unknown as BudgetSnapshotV0 }
-    : { ok: false, errors };
+    ? validationSuccess(record as unknown as BudgetSnapshotV0)
+    : validationError(errors);
 }
 
 export function validateBudgetDecisionV0(value: unknown): ObservabilityRecordValidationResult<BudgetDecisionV0> {
@@ -582,6 +591,6 @@ export function validateBudgetDecisionV0(value: unknown): ObservabilityRecordVal
   validateRecordRefV0(record["subjectRef"], "subjectRef", errors);
 
   return errors.length === 0
-    ? { ok: true, value: record as unknown as BudgetDecisionV0 }
-    : { ok: false, errors };
+    ? validationSuccess(record as unknown as BudgetDecisionV0)
+    : validationError(errors);
 }

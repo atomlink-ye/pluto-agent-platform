@@ -141,11 +141,11 @@ export async function postShutdownRequest(
 
 export async function postShutdownResponse(
   run: MailboxHarnessRun,
-  input: { id?: string; from: string; fromTaskId?: string; acknowledged?: boolean; to?: string },
+  input: { id?: string; from: string; fromTaskId?: string; acknowledged?: true; to?: string },
 ): Promise<void> {
   const body: ShutdownResponseBody = {
     schemaVersion: "v1",
-    acknowledged: input.acknowledged ?? true,
+    acknowledged: input.acknowledged ?? (true as const),
     ...(input.fromTaskId ? { fromTaskId: input.fromTaskId } : {}),
   };
   await postMessage(run, createMailboxMessage({

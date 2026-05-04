@@ -7,22 +7,22 @@ export type ParsedSubcommandArgs = {
   flags: Record<string, string | boolean>;
 };
 
-type FlagDefinition<T> = {
+type FlagDefinition<T extends object> = {
   key: keyof T;
   parse?: (value: string | undefined) => T[keyof T];
 };
 
-export type KeyValueFlagSpec<T extends Record<string, unknown>> = {
+export type KeyValueFlagSpec<T extends object> = {
   defaults?: Partial<T>;
   flags: Record<string, FlagDefinition<T>>;
   required?: Array<keyof T>;
 };
 
-export function parseKeyValueFlags<T extends Record<string, unknown>>(
+export function parseKeyValueFlags<T extends object>(
   argv: string[],
   spec: KeyValueFlagSpec<T>,
 ): T {
-  const parsed: Partial<T> = { ...(spec.defaults ?? {}) };
+  const parsed = Object.assign({} as Partial<T>, spec.defaults ?? {});
 
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];

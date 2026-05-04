@@ -35,7 +35,7 @@ export interface CreateLeadControlPlaneInput {
   taskList: {
     create(input: { assigneeId?: string; dependsOn: string[]; summary: string }): Promise<TaskRecord>;
     read(taskId: string): Promise<TaskRecord | null>;
-    complete(taskId: string, artifactRefs: unknown[]): Promise<void>;
+    complete(taskId: string, artifactRefs?: string[]): Promise<TaskRecord>;
     claim(taskId: string, roleId: string): Promise<TaskRecord>;
   };
   adapter: PaseoTeamAdapter;

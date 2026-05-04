@@ -208,7 +208,7 @@ export async function waitForIdle(
   );
   const result = await input.runner.exec(input.bin, args, { cwd: input.cwd });
   // Don't throw on error - let the caller check exitCode
-  return { exitCode: result.exitCode, stderr: result.stderr };
+  return { exitCode: result.exitCode ?? 0, stderr: result.stderr };
 }
 
 /**

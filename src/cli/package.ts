@@ -17,7 +17,7 @@ interface CliFlags {
 }
 
 function parseFlags(argv: string[]): CliFlags {
-  return parseKeyValueFlags(argv, {
+  return parseKeyValueFlags<CliFlags>(argv, {
     defaults: {
       root: process.cwd(),
       runId: "inspect-run",

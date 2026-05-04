@@ -1,7 +1,9 @@
 import type {
   AgentEvent,
+  BlockerReasonV0,
   CoordinationTranscriptRefV0,
   EvidencePacketV0,
+  EvidencePacketStatusV0,
   ProvenancePinRef,
   StageDependencyTrace,
   WorkerContribution,
