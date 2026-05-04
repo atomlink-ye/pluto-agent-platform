@@ -9,11 +9,10 @@ import type {
   TeamTask,
 } from "../contracts/types.js";
 import { validateEvidencePacketV0 } from "./evidence/validate-v0.js";
-import { generateEvidencePacket, type GenerateEvidenceInput } from "./evidence/generate-v0.js";
 import { renderEvidenceMarkdown } from "./evidence/render.js";
 import { redactEvidencePacketV0 } from "./evidence/redact.js";
 
-export type { GenerateEvidenceInput };
+export type { GenerateEvidenceInput } from "./evidence/generate-v0.js";
 export type { EvidencePacketValidationResult } from "./evidence/validate-v0.js";
 
 export {
@@ -25,7 +24,15 @@ export {
 
 export { validateEvidencePacketV0 };
 
-export { generateEvidencePacket };
+export { generateEvidencePacket } from "./evidence/generate-v0.js";
+
+export {
+  cloneRef,
+  extractCatalogSelectionProvenance,
+  extractContributionProvenance,
+  mergeProvenancePins,
+  readProvenanceRef,
+} from "./evidence/provenance.js";
 
 export { renderEvidenceMarkdown };
 
