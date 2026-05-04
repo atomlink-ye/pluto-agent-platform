@@ -22,6 +22,7 @@ import { normalizeBlockerReason } from "./blocker-classifier.js";
  */
 export class RunStore {
   private readonly dataDir: string;
+  private readonly appendEventChains = new Map<string, Promise<void>>();
 
   constructor(opts: { dataDir?: string } = {}) {
     this.dataDir = opts.dataDir ?? process.env.PLUTO_DATA_DIR ?? ".pluto";
@@ -42,11 +43,25 @@ export class RunStore {
   async appendEvent(event: AgentEvent): Promise<void> {
     await this.ensure(event.runId);
     const persistedEvent = sanitizeEventForPersistence(event);
-    await appendFile(
-      join(this.runDir(event.runId), "events.jsonl"),
-      JSON.stringify(persistedEvent) + "\n",
-      "utf8",
-    );
+    const previous = this.appendEventChains.get(event.runId) ?? Promise.resolve();
+    const next = previous
+      .catch(() => undefined)
+      .then(() =>
+        appendFile(
+          join(this.runDir(event.runId), "events.jsonl"),
+          JSON.stringify(persistedEvent) + "\n",
+          "utf8",
+        ),
+      );
+    this.appendEventChains.set(event.runId, next);
+
+    try {
+      await next;
+    } finally {
+      if (this.appendEventChains.get(event.runId) === next) {
+        this.appendEventChains.delete(event.runId);
+      }
+    }
   }
 
   async writeArtifact(artifact: FinalArtifact): Promise<string> {

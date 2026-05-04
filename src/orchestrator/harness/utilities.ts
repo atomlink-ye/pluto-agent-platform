@@ -160,7 +160,7 @@ export interface CommandExecutionResult {
   finishedAt: string;
 }
 
-function firstNonEmptyLine(value: string): string {
+export function firstNonEmptyLine(value: string): string {
   for (const raw of value.split(/\r?\n/)) {
     const line = raw.trim();
     if (line.length === 0) continue;

@@ -278,28 +278,35 @@ export function startRuntimeHelperServer(options: RuntimeHelperServerOptions): R
   };
 
   async function processPendingRequests(): Promise<void> {
-    let raw = "";
-    try {
-      raw = await readFile(options.requestsPath, "utf8");
-    } catch {
-      return;
-    }
-
-    const lines = raw.split("\n").map((line) => line.trim()).filter((line) => line.length > 0);
-    for (const line of lines) {
-      let request: RuntimeHelperRequest | RuntimeHelperWaitRequest;
+    while (true) {
+      let raw = "";
       try {
-        request = JSON.parse(line) as RuntimeHelperRequest | RuntimeHelperWaitRequest;
+        raw = await readFile(options.requestsPath, "utf8");
       } catch {
-        continue;
+        return;
       }
-      if (seenRequestIds.has(request.id)) {
-        continue;
+
+      let processedNewRequest = false;
+      const lines = raw.split("\n").map((line) => line.trim()).filter((line) => line.length > 0);
+      for (const line of lines) {
+        let request: RuntimeHelperRequest | RuntimeHelperWaitRequest;
+        try {
+          request = JSON.parse(line) as RuntimeHelperRequest | RuntimeHelperWaitRequest;
+        } catch {
+          continue;
+        }
+        if (seenRequestIds.has(request.id)) {
+          continue;
+        }
+        seenRequestIds.add(request.id);
+        processedNewRequest = true;
+        await handleRequest(request);
       }
-      seenRequestIds.add(request.id);
-      await handleRequest(request);
+      await flushPendingWaits();
+      if (!processedNewRequest) {
+        return;
+      }
     }
-    await flushPendingWaits();
   }
 
   async function handleRequest(request: RuntimeHelperRequest | RuntimeHelperWaitRequest): Promise<void> {

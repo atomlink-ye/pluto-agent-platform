@@ -12,8 +12,6 @@ import type {
 import type { MailboxTransport } from "../four-layer/mailbox-transport.js";
 
 const DEFAULT_WAIT_TIMEOUT_MS = 100;
-const MAX_NO_PROGRESS_BACKOFF_ROUNDS = 5;
-const MAX_NO_PROGRESS_BACKOFF_TOTAL_MS = 500;
 const MAX_SHUTDOWN_DRAIN_PASSES_WITHOUT_PROGRESS = 3;
 
 export interface InboxDeliveryLoopOptions {
@@ -60,8 +58,6 @@ export function startInboxDeliveryLoop(options: InboxDeliveryLoopOptions): Inbox
   let stopped = false;
   let stopping = false;
   let since: TransportSince | undefined;
-  let noProgressRounds = 0;
-  let noProgressStartedAtMs: number | null = null;
 
   const loopPromise = (async () => {
     while (!stopped) {
@@ -89,18 +85,7 @@ export function startInboxDeliveryLoop(options: InboxDeliveryLoopOptions): Inbox
       }
 
       if (!madeProgress && waitResult.messages.length > 0 && !waitResult.timedOut && !stopping) {
-        noProgressRounds += 1;
-        noProgressStartedAtMs ??= clock().getTime();
-        const noProgressElapsedMs = clock().getTime() - noProgressStartedAtMs;
-        if (
-          noProgressRounds <= MAX_NO_PROGRESS_BACKOFF_ROUNDS
-          && noProgressElapsedMs <= MAX_NO_PROGRESS_BACKOFF_TOTAL_MS
-        ) {
-          await delay(waitTimeoutMs);
-        }
-      } else {
-        noProgressRounds = 0;
-        noProgressStartedAtMs = null;
+        await delay(waitTimeoutMs);
       }
     }
   })().finally(async () => {
