@@ -20,3 +20,25 @@ Declarative Pluto v2 contract package for S1.
 - No runtime, kernel, adapter, or CLI code
 
 Executable reducers and replay machinery live in S3, not S1.
+
+## Pure core (S2)
+
+S2 adds the pure event-sourced runtime core without introducing I/O, adapters, replay
+machinery, or CLI behavior.
+
+Public core surface:
+
+- `compile`, `AuthoredSpecSchema`, `TeamContextSchema`
+- `RunStateSchema`, `initialState`, `composeRequestKey`
+- `reduce`
+- `EventLogStore`, `InMemoryEventLogStore`, `SequenceGapError`, `DuplicateAppendError`
+- `validate`
+- `AUTHORITY_MATRIX`, `TRANSITION_GRAPH`, `actorAuthorizedForIntent`, `transitionLegal`
+- `RunKernel`, `defaultIdProvider`, `defaultClockProvider`, `counterIdProvider`, `fixedClockProvider`
+
+S2 boundaries:
+
+- No projections or replay reducers
+- No runtime adapter or CLI integration
+- No persistence beyond the in-memory `EventLogStore`
+- Determinism comes from injected id/clock providers
