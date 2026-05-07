@@ -163,6 +163,12 @@ by S2..S6.
    - `run_started`: `{ scenarioRef: string, runProfileRef: string, startedAt: string }`
    - `run_completed`: `{ status: 'succeeded' | 'failed' | 'cancelled', completedAt: string, summary: string | null }`
    - `mailbox_message_appended`: `{ messageId: string, fromActor: ActorRef, toActor: ActorRef | { kind: 'broadcast' }, kind: 'plan' | 'task' | 'completion' | 'plan_approval_request' | 'plan_approval_response' | 'final', body: string }`
+     — note: `plan_approval_request` and `plan_approval_response` here are **mailbox
+     message subtypes** representing the lead↔planner plan-approval workflow as
+     in-band evidence. They are NOT the deferred Approval product surface (formal
+     Approval / RBAC / reviewer workflow) listed in the handoff's deferred list. The
+     v2 core MUST NOT model the deferred Approval surface as an `EntityRef` kind or
+     `ProtocolRequest` intent.
    - `task_created`: `{ taskId: string, title: string, ownerActor: ActorRef | null, dependsOn: string[] }`
    - `task_state_changed`: `{ taskId: string, from: TaskState, to: TaskState }` where `TaskState = 'queued' | 'running' | 'blocked' | 'completed' | 'failed' | 'cancelled'`.
    - `artifact_published`: `{ artifactId: string, kind: 'final' | 'intermediate', mediaType: string, byteSize: number }`
@@ -176,10 +182,19 @@ by S2..S6.
    Where `RejectionReason` is the closed taxonomy from deliverable 4.
 
    The S1 schema MUST be a single discriminated zod union of all the above shapes such
-   that `RunEventSchema.parse(unknown)` accepts all valid examples and rejects anything
-   else.
+   that `RunEventSchema.parse(unknown)` accepts every valid example (including a valid
+   `request_rejected` event for each `RejectionReason`) and rejects any input that
+   violates the **structural** rules (missing required fields, wrong types, out-of-enum
+   discriminator values, out-of-enum `EntityRef.kind`, out-of-enum `ActorRef.role`,
+   etc.). The schema does NOT enforce authority semantics — a valid `request_rejected`
+   event with `payload.rejectionReason: 'state_conflict'` parses successfully because
+   the event is the kernel's record that authority rejected the request; the conflict
+   itself is detected by S2 authority logic, not by the schema.
 
-   2a. **`ActorRef` closed union**: `{ kind: 'manager' } | { kind: 'role', role: 'lead' | 'planner' | 'generator' | 'evaluator' } | { kind: 'system' }`. The `role` set is closed at v1.0 and additive within major. The contract MUST NOT model role-bound helper paths or helper CLI lineage; `ActorRef` is identity, not transport.
+   See deliverable 9 for the precise test split (taxonomy reachability vs schema
+   rejection).
+
+   2a. **`ActorRef` closed union**: `{ kind: 'manager' } | { kind: 'role', role: 'lead' | 'planner' | 'generator' | 'evaluator' } | { kind: 'system' }`. The `role` set is closed at v1.0; adding new roles requires a major version bump (see deliverable 7). The contract MUST NOT model role-bound helper paths or helper CLI lineage; `ActorRef` is identity, not transport.
 
    2b. **`EntityRef` closed union**: `{ kind: 'run', runId: string } | { kind: 'task', taskId: string } | { kind: 'mailbox_message', messageId: string } | { kind: 'artifact', artifactId: string }`. Deferred surfaces (approval, publish-package, schedule, RBAC, etc.) are NOT included; major bump required to add them.
 
@@ -212,22 +227,58 @@ by S2..S6.
    - `clientTimestamp: string` — RFC 3339; advisory.
    - `schemaVersion: string`
 
+   Note: `ProtocolRequest` does NOT carry a top-level `entityRef`. The entity is
+   identified by the per-intent payload's `*Id` fields (e.g.
+   `change_task_state.payload.taskId`). The kernel constructs the corresponding
+   `RunEvent.entityRef` from the request payload when emitting an accepted event.
+
    Per-intent payload schemas mirror the corresponding accepted-event payload, minus
-   server-assigned fields (`messageId`, `taskId`, etc.). The plan documents the exact
-   request→event mapping in `docs/design-docs/v2-contracts.md`.
+   server-assigned fields (`messageId`, `taskId` for newly-created tasks, etc.). The
+   exact mapping (binding for S1):
+
+   | `ProtocolRequest.intent` | Accepted `RunEvent.kind` (on success) | Server-assigned fields the kernel adds |
+   |---|---|---|
+   | `append_mailbox_message` | `mailbox_message_appended` | `messageId` |
+   | `create_task` | `task_created` | `taskId` |
+   | `change_task_state` | `task_state_changed` | (none — `taskId` and `to` come from request; `from` resolved from prior state) |
+   | `publish_artifact` | `artifact_published` | `artifactId` |
+   | `complete_run` | `run_completed` | `completedAt` |
+
+   System-emitted accepted kinds (`run_started`) have no corresponding `ProtocolRequest`
+   intent and are emitted by the kernel directly.
+
+   `request_rejected` events are emitted by the kernel for any of the five intents when
+   authority or schema validation fails. The same `requestId` is preserved on the
+   rejection event's `rejectedRequestId` payload field.
+
+   The design doc (`docs/design-docs/v2-contracts.md`) reproduces this table verbatim
+   and adds one worked example per intent.
 
 4. **`AuthorityValidationOutcome` and closed `RejectionReason` taxonomy.**
 
    `AuthorityValidationOutcome = { ok: true } | { ok: false, reason: RejectionReason, detail: string }`.
 
-   Closed `RejectionReason` taxonomy at v1.0 (additive within major):
+   Closed `RejectionReason` taxonomy at v1.0; adding new reasons requires a major
+   version bump (see deliverable 7).
 
    - `actor_not_authorized` — actor does not have the role required for this intent.
-   - `entity_unknown` — `entityRef` or any `*Id` in the payload references a non-existent entity for the run.
-   - `state_conflict` — the request would violate run state (e.g. `task_state_changed` from a state that disallows the target).
-   - `schema_invalid` — request did not parse against the zod schema.
-   - `idempotency_replay` — `(runId, actor, intent, idempotencyKey)` already produced an accepted event.
-   - `intent_unknown` — `intent` is not in the closed enum (defensive; should be caught by `schema_invalid` but kept distinct for clarity).
+     Schema-level proxy: `ActorRef.role` outside the closed set is rejected by the
+     ProtocolRequest schema.
+   - `entity_unknown` — a `*Id` in the request payload references a non-existent
+     entity for the run; OR the request references an `EntityRef.kind` outside the
+     closed set. Schema-level proxy: `RunEvent.entityRef.kind` outside the closed
+     set is rejected by the RunEvent schema.
+   - `state_conflict` — the request would violate run state (e.g. `task_state_changed`
+     from a state that disallows the target). Authority-only; no schema-level proxy.
+   - `schema_invalid` — request did not parse against the zod schema. This is the
+     catch-all for structural rejection.
+   - `idempotency_replay` — `(runId, actor, intent, idempotencyKey)` already produced
+     an accepted event. Authority-only; no schema-level proxy.
+   - `intent_unknown` — `intent` is not in the closed enum. Schema-level proxy:
+     `ProtocolRequest.intent` outside the closed enum is rejected.
+
+   The "schema-level proxy" rows describe how S1 tests can validate the closure of
+   each enum even though full authority checking lives in S2. See deliverable 9.
 
 5. **Projection contract interfaces (declarative only, no executable reducer).**
 
@@ -295,16 +346,34 @@ by S2..S6.
 
    - `schemaVersion` is `"<major>.<minor>"` as a string (e.g. `"1.0"`).
    - Initial value: `"1.0"`.
-   - Within the same major: only **additive optional fields** and **additive enum
-     members** are allowed. Existing required fields stay required and keep their
-     types. New event kinds may be added to the discriminated union; old fixtures
-     without those kinds remain valid.
-   - Major bump (`"2.0"`): allowed to remove fields, change types, or remove enum
-     members. Major bumps MUST ship a programmatic migrator from the prior major; the
-     migrator is part of the package.
+   - **Within the same major: ONLY additive *optional fields* are allowed.** Adding
+     a new `kind`, `intent`, `RejectionReason`, `ActorRef.role`, or `EntityRef.kind`
+     is an enum addition and **requires a major version bump** — closed enums in v2
+     are part of the strict-validation surface.
+   - Existing required fields stay required and keep their types within the same
+     major. Existing optional fields stay optional with the same type.
+   - Schemas use zod's default `.strip()` semantics at the top level: an event with
+     extra unknown fields parses successfully, and unknown fields are silently
+     dropped. This is what guarantees forward-compat for **field additions** within a
+     major: a v1.1 event carrying an extra optional field parses cleanly under the
+     v1.0 schema (the field is dropped).
+   - Discriminator fields (`kind`, `intent`, `outcome`) are validated against the
+     v1.0 closed enum. If a future v1.x event carries a discriminator value not in
+     the v1.0 enum, parse fails — this is the contract that prevents enum drift
+     within a major.
+   - Major bump (`"2.0"`): allowed to remove fields, change types, change enum
+     membership, or change discriminator semantics. Major bumps MUST ship a
+     programmatic migrator from the prior major; the migrator is part of the
+     package and is invoked explicitly on input that declares a different major.
    - Fixture compatibility expectation: a fixture written today with `schemaVersion =
-     "1.0"` MUST parse successfully against any future `"1.x"` schema. The package's
-     happy-path tests include this expectation.
+     "1.0"` MUST parse successfully against any future `"1.x"` schema **as long as
+     the fixture only uses v1.0 enum values**. New v1.x optional fields appearing in
+     newer fixtures parse under v1.0 by being dropped via `.strip()`. New v1.x enum
+     members do NOT exist by definition — they require a major bump.
+
+   This resolves the apparent tension between "closed schema rejects anything else"
+   and "future v1.x events parse against v1.0": rejection applies to *structural and
+   enum-discriminator* violations, while `.strip()` allows unknown *optional fields*.
 
 8. **Packaging & build.** ESM only, strict TypeScript, zero runtime deps beyond `zod`.
    The package compiles via `tsc --build` invoked through the workspace; root
@@ -315,23 +384,57 @@ by S2..S6.
 
 9. **Tests (S1 scope).**
 
-   - `__tests__/run-event.test.ts`: happy-path parse + round-trip per accepted kind +
-     happy-path parse for `request_rejected`.
-   - `__tests__/run-event-rejection.test.ts`: one negative test per `RejectionReason`
-     (six tests), each constructing an invalid event and asserting parse failure. Note
-     these test schema rejection at the contract layer, not authority logic (which is
-     S2).
-   - `__tests__/protocol-request.test.ts`: happy-path parse per intent + one
-     `schema_invalid` negative + one `intent_unknown` negative.
-   - `__tests__/projection-contracts.test.ts`: type-level checks (compile-time `expect
-     <T extends ...>`) confirming that `inputKinds ∪ outOfScopeKinds = AllKinds` for
-     each projection. NO reducer tests in S1.
+   The test contract has two distinct categories of negative tests; do not conflate:
+
+   - **Taxonomy-reachability tests** (parse-success): for each of the six
+     `RejectionReason` values, construct a valid `request_rejected` event with that
+     reason in the payload and assert `RunEventSchema.parse` succeeds. This proves
+     the rejected-event payload's `rejectionReason` field accepts every closed
+     taxonomy member; it does NOT prove authority logic.
+   - **Schema-rejection tests** (parse-failure): for each closed enum, construct an
+     input that violates the closure or drops a required field, and assert
+     `RunEventSchema.parse` (or `ProtocolRequestSchema.parse`) throws.
+
+   Concrete test files:
+
+   - `__tests__/run-event.test.ts`: happy-path parse + round-trip per accepted kind
+     (six tests, one per accepted `kind`). Each test uses the per-kind payload
+     listed in deliverable 2.
+   - `__tests__/run-event-rejected.test.ts`: six taxonomy-reachability tests —
+     parse-success of valid `request_rejected` events, one per `RejectionReason`.
+   - `__tests__/run-event-schema-rejection.test.ts`: schema-rejection tests
+     constructing structurally invalid input and asserting parse failure:
+     - drop a required field on an accepted event (covers `schema_invalid` proxy);
+     - set `actor.kind: 'role'` with `role` outside the closed four-role set
+       (covers `actor_not_authorized` schema proxy);
+     - set `entityRef.kind: 'approval'` (covers `entity_unknown` schema proxy via
+       EntityRef closure);
+     - set `outcome: 'rejected'` with `kind` other than `'request_rejected'`
+       (discriminator closure);
+     - set `kind: 'approval_emitted'` on an accepted event (RunEvent.kind
+       closure);
+     - set `payload.rejectionReason: 'budget_exceeded'` on a `request_rejected`
+       event (RejectionReason closure).
+   - `__tests__/protocol-request.test.ts`: happy-path parse per intent (five tests)
+     + parse-failure when `intent` is outside the closed enum (`intent_unknown`
+     schema proxy) + parse-failure when a required field is missing
+     (`schema_invalid`).
+   - `__tests__/projection-contracts.test.ts`: type-level checks (compile-time
+     `expect<T extends ...>`) confirming that `inputKinds ∪ outOfScopeKinds =
+     AllKinds` for each projection AND that `inputKinds ∩ outOfScopeKinds = ∅`.
+     NO reducer tests in S1.
    - `__tests__/replay-fixture.test.ts`: one fixture loads, parses against
      `RunEventSchema`, and the `expectedViews` shapes parse against their respective
      view shapes. NO reducer execution.
-   - `__tests__/versioning.test.ts`: a future-`"1.x"` event (with one extra optional
-     field) parses successfully against the v1.0 schema; a `"2.0"` event is rejected
-     unless the migrator is present.
+   - `__tests__/versioning.test.ts`:
+     - a future-`"1.x"` event with one extra **optional field** (e.g. an unknown
+       payload field added under a known `kind`) parses successfully against the
+       v1.0 schema (the unknown field is stripped by `.strip()`);
+     - a future-`"1.x"` event with a new **enum value** (a new `kind`) is rejected
+       at parse time (closed enum proves this);
+     - a `"2.0"` event whose schemaVersion declares a different major is rejected
+       unless explicitly fed through a migrator (the migrator is not part of v1.0,
+       so the test asserts rejection in the absence of a migrator).
 
 10. **Docs.**
 
