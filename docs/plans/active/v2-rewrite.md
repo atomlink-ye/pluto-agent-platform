@@ -1183,6 +1183,274 @@ S3 imports `@pluto/v2-core` schemas (S1) and `core/run-event-log` types
   no-I/O / no-runtime-leak / no-ambient-randomness greps, (e) diff hygiene,
   (f) `FinalReportProjectionView` decision documented.
 
+## S4 — Phase 4: Fake runtime end-to-end (next slice)
+
+### Outcome
+
+Wire the v2 stack end-to-end with a **Fake runtime adapter** that produces
+deterministic agent behavior without any LLM calls or external runtime
+dependencies. The Fake adapter exercises the full v2 path: authored-spec
+loading → `SpecCompiler` → `TeamContext` → `RunKernel.submit(...)` →
+`RunEventLog` → projections → `EvidencePacket`-shaped output. Includes
+**parity tests** against captured v1.6 live-smoke fixtures asserting that v2
+produces equivalent evidence shapes for the same scenario.
+
+This is the first slice where v2 leaves the pure-core boundary and touches
+**runtime concerns** (file I/O, scenario authoring, deterministic adapters).
+S5 introduces the real-LLM Paseo adapter; S6 switches the CLI default to v2.
+
+### S4 / runtime boundary (binding)
+
+S4 introduces a **runtime layer** that lives OUTSIDE
+`packages/pluto-v2-core/`. The pure-core package stays runtime-free. The new
+runtime code lives under either:
+
+- `packages/pluto-v2-runtime/` (a new workspace package), OR
+- `src/v2-runtime/` (a top-level subdir inside the legacy src/).
+
+**Decision (binding):** new package `packages/pluto-v2-runtime/` to keep the
+v2 surface physically separated from v1.6 src/. Add to root
+`pnpm-workspace.yaml` (additive). This is the second package introduction
+under the v2 surface (after `packages/pluto-v2-core/` from S1) — same
+.gitignore allow-list pattern (`!packages/pluto-v2-runtime/`).
+
+### Concrete deliverables
+
+1. **Module layout under `packages/pluto-v2-runtime/`** (NEW workspace
+   package; same allow-list pattern as v2-core):
+
+   - `package.json` — `name: "@pluto/v2-runtime"`, `type: module`, ESM-only.
+     Runtime deps: `@pluto/v2-core` (workspace), `zod`, `js-yaml` (only for
+     YAML loading; no other I/O libs). DevDeps: `vitest`, `@types/node`,
+     `typescript`.
+   - `tsconfig.json` — strict, ESM, package-scoped scripts (`typecheck`,
+     `build`, `test`).
+   - `src/loader/`:
+     - `authored-spec-loader.ts` — `loadAuthoredSpec(path: string): AuthoredSpec`.
+       Reads YAML/JSON from disk, validates via `AuthoredSpecSchema` (S2),
+       returns parsed object. THIS IS THE ONLY I/O ENTRY POINT IN v2.
+     - `scenario-loader.ts`, `playbook-loader.ts`, `agent-loader.ts`,
+       `run-profile-loader.ts` — typed loaders for each authored layer; emit
+       a unified `AuthoredSpec` value.
+   - `src/adapters/fake/`:
+     - `fake-adapter.ts` — implements a closed `RuntimeAdapter` interface
+       (defined in this slice). Produces deterministic ProtocolRequests for a
+       given TeamContext, scripted by the scenario's `fake-script` field
+       (new authored-spec optional field).
+     - `fake-script.ts` — script schema + interpreter. A fake script is a
+       declarative list of `{ actor, intent, payload }` requests that the
+       fake adapter emits in order, with deterministic
+       `idProvider`/`clockProvider` providing eventId/timestamp.
+     - `fake-run.ts` — `runFake(spec, options): { events, views,
+       evidencePacket }` end-to-end driver. Loads spec → compiles →
+       initializes RunState → submits scripted requests → collects events
+       from log → runs projections → assembles a `EvidencePacket`-shaped
+       output.
+   - `src/runtime/`:
+     - `runtime-adapter.ts` — closed `RuntimeAdapter` interface that S5's
+       Paseo adapter will also implement. Methods: `init(teamContext) →
+       AdapterState`, `nextRequest(state, kernel) → ProtocolRequest | done`.
+     - `runner.ts` — `runScenario(authoredSpec, adapter, options): {
+       events, views, evidencePacket }` provider-agnostic driver that orchestrates
+       the loop `while (req = adapter.nextRequest(...)) { kernel.submit(req) }`.
+   - `src/evidence/`:
+     - `evidence-packet.ts` — `EvidencePacketShape` zod schema + assembly:
+       given Task / Mailbox / Evidence views, produce a single
+       `EvidencePacket` value compatible with v1.6 evidence-packet.json
+       structure (per the `docs/design-docs/v2-contracts.md`
+       evidence-surface coverage table).
+   - `src/index.ts` — re-exports.
+
+2. **`fake-script` authoring shape (closed at v1.0).**
+
+   Adds an optional field to S2's `AuthoredSpec` schema:
+
+   ```ts
+   fakeScript: Array<{
+     actor: ActorRef;
+     intent: ProtocolRequest['intent'];
+     payload: <discriminated by intent>;
+     idempotencyKey?: string | null;
+   }> | undefined;
+   ```
+
+   This is an additive optional field on `AuthoredSpec` per the S1 versioning
+   policy — does NOT require a major bump. S1's `AuthoredSpecSchema` is in
+   `packages/pluto-v2-core/src/core/team-context.ts` (S2). S4 mutates that
+   ONE file to add the optional field; this is the controlled exception (the
+   alternative — keeping the script fully outside the spec — would require
+   S4 to re-implement scenario loading, which is more disruptive).
+
+   Justification: this is a strict "add new optional field" change; existing
+   v1.0 specs without `fakeScript` parse cleanly; new specs with `fakeScript`
+   parse and the field is consumed only by the fake adapter. Documented in
+   the S4 design doc as the only S2 surface change.
+
+3. **`runScenario` driver (provider-agnostic).**
+
+   Single entry point that S5 will reuse:
+
+   ```ts
+   function runScenario(
+     authored: AuthoredSpec,
+     adapter: RuntimeAdapter,
+     options: { idProvider: IdProvider; clockProvider: ClockProvider; correlationId?: string }
+   ): { events: RunEvent[]; views: ProjectionViews; evidencePacket: EvidencePacket }
+   ```
+
+   Algorithm:
+   1. `compile(authored)` → `TeamContext`.
+   2. Initialize `RunKernel` with in-memory `EventLogStore` + injected
+      providers.
+   3. Initialize `adapter` with TeamContext.
+   4. Emit synthetic `run_started` event directly through the kernel
+      (system-emitted, no ProtocolRequest).
+   5. Loop:
+      - `request = adapter.nextRequest(state, ctx)`.
+      - If `done`, break.
+      - `event = kernel.submit(request)`.
+   6. Emit synthetic `run_completed` event when adapter signals done.
+   7. `events = eventLog.read(0, head + 1)`.
+   8. `views = replayAll(events)` (S3).
+   9. `evidencePacket = assembleEvidencePacket(views)`.
+
+4. **Scenario fixtures** (under `packages/pluto-v2-runtime/test-fixtures/`):
+
+   - `scenarios/hello-team/scenario.yaml` — v2 authored spec with
+     `fakeScript` for a small 4-actor lead/planner/generator/evaluator run.
+     Mirrors v1.6's `hello-team` scenario at the workflow level.
+   - `scenarios/hello-team/expected-events.jsonl` — expected event stream
+     produced by `runScenario(spec, fakeAdapter)`.
+   - `scenarios/hello-team/expected-evidence-packet.json` — expected
+     evidence packet matching v1.6 evidence-packet.json shape.
+
+5. **Parity tests against captured v1.6 fixtures.**
+
+   Captured v1.6 live-smoke fixtures live under
+   `tests/fixtures/live-smoke/<runId>/` (per CLAUDE.md / R8). S4 includes
+   parity tests that:
+
+   - Load a representative captured v1.6 fixture
+     (`tests/fixtures/live-smoke/86557df1-0b4a-4bd4-8a75-027a4dcd5d38/`).
+   - Translate its `events.jsonl` into v2 `RunEvent` shapes (via a small
+     translator in `packages/pluto-v2-runtime/src/legacy/v1-translator.ts`).
+   - Run the v2 projections over the translated events.
+   - Assert the v2 `EvidencePacket` is structurally equivalent to the v1.6
+     `evidence-packet.json` for the SAME run, modulo:
+     - eventId / timestamp differences (kept abstract);
+     - role-bound helper paths (legacy artifact, dropped in v2);
+     - `runtime-helper-usage.jsonl` (out of v2 scope per evidence-surface
+       coverage table).
+
+   Equivalence assertions are documented in
+   `docs/design-docs/v2-fake-runtime.md`. The translator is a pure function;
+   it does NOT mutate the captured fixture.
+
+6. **Pure invariants for the runtime package.**
+
+   - **No paseo / no opencode / no claude / no helper-cli** in
+     `packages/pluto-v2-runtime/src/**` (same no-runtime-leak grep, with
+     `paseo` and `opencode` allowed only inside a future `src/adapters/paseo/`
+     subdir which S5 introduces; S4 ships only `src/adapters/fake/`).
+   - **Determinism**: `runScenario(spec, fakeAdapter, fixed-providers)`
+     produces byte-equal events twice.
+   - **No I/O outside the loader entry point**: `loader/` is allowed to use
+     `node:fs` and `js-yaml`; everything else under
+     `packages/pluto-v2-runtime/src/**` (excluding `loader/`) MUST NOT import
+     `node:fs`. Acceptance grep enforces this.
+   - **No ambient randomness/time outside providers**: same rule as core.
+
+7. **Tests (S4 scope; under `packages/pluto-v2-runtime/__tests__/`).**
+
+   - `loader/authored-spec-loader.test.ts` — round-trip YAML → AuthoredSpec
+     parse; one negative per closed compile-error reason.
+   - `adapters/fake/fake-adapter.test.ts` — fake adapter produces scripted
+     requests in order; deterministic given fixed providers.
+   - `adapters/fake/fake-run.test.ts` — `runFake(hello-team)` end-to-end:
+     events match `expected-events.jsonl`; views match `expected-evidence`;
+     evidence packet matches `expected-evidence-packet.json`.
+   - `runtime/runner.test.ts` — `runScenario` orchestrates loop correctly;
+     handles adapter `done` signal; emits synthetic `run_started` /
+     `run_completed`.
+   - `evidence/evidence-packet.test.ts` — packet assembly from views;
+     equivalence with v1.6 shape (excluding deferred fields).
+   - `parity/v1-translator.test.ts` — translator from v1.6 events.jsonl to
+     v2 RunEvent; lossless for the in-scope kinds.
+   - `parity/hello-team-parity.test.ts` — v2 projections over translated v1.6
+     fixture events match v1.6 evidence-packet.json (modulo allowed
+     differences listed in deliverable 5).
+
+   Total S4 test count: ≥ 30 across the 7 files.
+
+8. **Docs.**
+
+   - `packages/pluto-v2-runtime/README.md` — public surface enumeration;
+     "Fake runtime only; Paseo runtime arrives in S5".
+   - `docs/design-docs/v2-fake-runtime.md` — runtime layout, RuntimeAdapter
+     interface, fake-script schema, parity rules, allowed differences from
+     v1.6, S2 `AuthoredSpec` mutation justification.
+
+### Out of scope for S4
+
+- Real LLM via Paseo / OpenCode / Claude (S5).
+- CLI changes (S6).
+- Live-smoke against real LLMs (R8 / S5).
+- v1.6 file-lineage edits.
+- `FinalReportProjectionView` (still deferred).
+
+### S4 dependency graph
+
+S4 imports `@pluto/v2-core` (S1 + S2 + S3). S4 mutates S2's
+`AuthoredSpecSchema` ONLY to add the optional `fakeScript` field
+(deliverable 2 justification). No other S1/S2/S3 mutations.
+
+### S4 acceptance bar
+
+- **Package-scoped typecheck** for `@pluto/v2-runtime` AND `@pluto/v2-core`
+  clean.
+- **Package-scoped vitest** for both packages green; v2-runtime adds ≥ 30
+  S4 tests; total v2 tests ≥ S3 baseline (180) + 30 = 210.
+- **Package-scoped build** for both clean.
+- **Root regression**: `pnpm test` green (legacy v1.6 unaffected).
+- **Determinism**: `runFake(hello-team)` byte-equal across two runs.
+- **Parity test passes**: v2 projection of translated v1.6 fixture events
+  matches v1.6 evidence packet for the in-scope fields.
+- **No-runtime-leak grep** over `packages/pluto-v2-runtime/src/**`: no
+  matches for paseo/opencode/claude (only allowed inside future
+  `src/adapters/paseo/` which doesn't exist in S4).
+- **No-I/O outside loader**: source under
+  `packages/pluto-v2-runtime/src/**` excluding `loader/` does NOT import
+  `node:fs`.
+- **No-ambient-randomness** in v2-runtime source (excluding
+  `runtime/providers.ts` if it re-exports core providers).
+- **`AuthoredSpecSchema` mutation is single-field additive**: diff against
+  pre-S4 shows ONLY `fakeScript` field added; no other change.
+- **Diff hygiene**:
+  - `packages/pluto-v2-runtime/**` (new package)
+  - `packages/pluto-v2-core/src/core/team-context.ts` (single field add to
+    `AuthoredSpecSchema` only)
+  - `packages/pluto-v2-core/src/index.ts` (additive `fakeScript` re-export
+    if exposed)
+  - root `pnpm-workspace.yaml` (add `packages/pluto-v2-runtime`)
+  - root `.gitignore` (add `!packages/pluto-v2-runtime/` allow-list
+    exception)
+  - root `pnpm-lock.yaml` (regenerated)
+  - `packages/pluto-v2-core/__tests__/core/team-context.test.ts` if needed
+    for coverage on the new optional field
+  - `packages/pluto-v2-core/README.md` (additive note about new optional
+    field)
+  - `docs/design-docs/v2-fake-runtime.md` (new)
+  - `docs/plans/active/v2-rewrite.md` — S4 status row only.
+  - **NO edits** to v1.6 `src/`, `tests/`, `evals/`, `docker/`, `playbooks/`,
+    `scenarios/`, `run-profiles/`, `agents/`, S2 core files (other than
+    team-context's single-field add), S3 projection files.
+- **Branch is committed AND pushed**: `commit_and_push` step.
+- A reviewer sub-agent confirms (a) RuntimeAdapter interface is closed, (b)
+  fake-script schema is additive-only on AuthoredSpec, (c) loader is the
+  only I/O entry point, (d) parity test exercises a real captured fixture,
+  (e) S5 will be able to drop in a Paseo adapter without changing
+  `runScenario` or RuntimeAdapter.
+
 ## Discovery gate (per slice)
 
 Before each slice is dispatched to remote implementation:
