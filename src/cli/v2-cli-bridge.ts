@@ -2,70 +2,17 @@ import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import process from 'node:process';
 
+import type {
+  loadAuthoredSpec,
+  makePaseoAdapter,
+  makePaseoCliClient,
+  PaseoAgentSpec,
+  PaseoCliClient,
+  runPaseo,
+} from '@pluto/v2-runtime';
+import type { ActorRef, ClockProvider, IdProvider } from '@pluto/v2-core';
+
 import { classifyPaseoError } from './v2-cli-bridge-error.js';
-
-type ActorRef =
-  | { kind: 'manager' }
-  | { kind: 'system' }
-  | { kind: 'role'; role: string };
-
-type IdProvider = {
-  next(): string;
-};
-
-type ClockProvider = {
-  nowIso(): string;
-};
-
-type PaseoAgentSpec = {
-  readonly provider: string;
-  readonly model: string;
-  readonly mode: string;
-  readonly thinking?: string;
-  readonly title: string;
-  readonly initialPrompt: string;
-  readonly labels?: ReadonlyArray<string>;
-  readonly cwd?: string;
-};
-
-type PaseoCliClient = {
-  spawnAgent(spec: PaseoAgentSpec): Promise<{ agentId: string }>;
-  sendPrompt(agentId: string, prompt: string): Promise<void>;
-  waitIdle(agentId: string, timeoutSec: number): Promise<{ exitCode: number }>;
-  readTranscript(agentId: string, tailLines: number): Promise<string>;
-  usageEstimate(agentId: string): Promise<unknown>;
-  deleteAgent(agentId: string): Promise<void>;
-};
-
-type LoadAuthoredSpecFn = (filePath: string) => unknown;
-
-type RunPaseoFn = (
-  authored: unknown,
-  adapter: unknown,
-  options: {
-    client: PaseoCliClient;
-    idProvider: IdProvider;
-    clockProvider: ClockProvider;
-    paseoAgentSpec: (actor: ActorRef) => PaseoAgentSpec;
-    waitTimeoutSec?: number;
-  },
-) => Promise<{
-  evidencePacket: {
-    status: 'succeeded' | 'failed' | 'cancelled' | 'in_progress';
-    summary: string | null;
-  };
-}>;
-
-type MakePaseoCliClientFn = (input: {
-  bin?: string;
-  host?: string;
-  cwd: string;
-}) => PaseoCliClient;
-
-type MakePaseoAdapterFn = (input: {
-  idProvider: IdProvider;
-  clockProvider: ClockProvider;
-}) => unknown;
 
 export interface V2BridgeInput {
   readonly specPath: string;
@@ -85,10 +32,10 @@ export interface V2BridgeResult {
 }
 
 export interface V2BridgeDeps {
-  readonly loadAuthoredSpec: LoadAuthoredSpecFn;
-  readonly runPaseo: RunPaseoFn;
-  readonly makePaseoCliClient: MakePaseoCliClientFn;
-  readonly makePaseoAdapter: MakePaseoAdapterFn;
+  readonly loadAuthoredSpec: typeof loadAuthoredSpec;
+  readonly runPaseo: typeof runPaseo;
+  readonly makePaseoCliClient: typeof makePaseoCliClient;
+  readonly makePaseoAdapter: typeof makePaseoAdapter;
   readonly defaultIdProvider: IdProvider;
   readonly defaultClockProvider: ClockProvider;
 }

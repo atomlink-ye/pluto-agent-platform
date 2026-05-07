@@ -10,6 +10,7 @@ import { afterEach, describe, expect, it } from "vitest";
 const exec = promisify(execFile);
 const tempDirs: string[] = [];
 const nameSelectorError = "v1.6 name-based selection (--scenario/--playbook/--run-profile) requires --runtime=v1. For v2, pass a single --spec=<path> AuthoredSpec file. v1.6 will be archived in S7.";
+const specWithV1Error = "--spec is only valid with --runtime=v2 (the default). For v1.6, use --scenario / --playbook / --run-profile name selectors.";
 
 afterEach(async () => {
   await Promise.all(tempDirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
@@ -72,6 +73,22 @@ describe("src/cli/run.ts unsupported v1 selectors on v2", () => {
 
     expect(result.exitCode).toBe(1);
     expect(result.stderr).toContain(nameSelectorError);
+    expect(result.stdout).toBe("");
+  });
+
+  it("fails when v1 receives --spec alongside legacy name selectors", async () => {
+    const result = await runCli([
+      "--runtime=v1",
+      "--scenario",
+      "hello-team",
+      "--run-profile",
+      "fake-smoke",
+      "--spec",
+      "/unused.yaml",
+    ]);
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain(specWithV1Error);
     expect(result.stdout).toBe("");
   });
 

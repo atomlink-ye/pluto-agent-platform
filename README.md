@@ -4,8 +4,9 @@
 > **legacy reference prototype**. New development happens against the v2 rewrite plan at
 > [`docs/plans/active/v2-rewrite.md`](docs/plans/active/v2-rewrite.md). The v1.6 snapshot
 > at the time of freeze is preserved on the `legacy-v1.6-harness-prototype` branch on
-> `origin`. Until v2 lands, `pnpm pluto:run` and the documented runtime surfaces below
-> still reflect v1.6 behavior; they will be replaced once the v2 acceptance gates pass.
+> `origin`. v2 is the default runtime as of S6; pass `--runtime=v1` for the legacy v1.6
+> path during the transition window. See `docs/design-docs/v2-cli-default-switch.md`
+> for the transition guide.
 
 Pluto is a **playbook-first agent harness**.
 
@@ -26,11 +27,11 @@ pnpm typecheck
 pnpm test
 # Inspect the compiled run package before execution:
 pnpm pluto:package -- --scenario hello-team --run-profile fake-smoke
-# Execute the harness offline:
-pnpm pluto:run --scenario hello-team --run-profile fake-smoke --workspace .tmp/pluto-cli
+# Execute the legacy v1.6 harness offline during the transition window:
+pnpm pluto:run --runtime=v1 --scenario hello-team --run-profile fake-smoke --workspace .tmp/pluto-cli
 ```
 
-Short deprecation note: `--runtime=v1` remains available for the legacy v1.6 manager-run harness, but it now prints a deprecation warning and will be archived in S7. See `docs/design-docs/v2-cli-default-switch.md` for migration details.
+Short deprecation note: `--runtime=v1` remains available for the legacy v1.6 manager-run harness, but it now prints a deprecation warning and will be archived in S7. See `docs/design-docs/v2-cli-default-switch.md` for the transition guide.
 
 Outputs:
 

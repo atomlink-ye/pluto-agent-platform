@@ -28,6 +28,7 @@ interface CliFlags {
 
 const V1_DEPRECATION_WARNING = "v1.6 runtime is deprecated; will be archived in S7. See docs/design-docs/v2-cli-default-switch.md for migration.";
 const V2_NAME_SELECTOR_ERROR = "v1.6 name-based selection (--scenario/--playbook/--run-profile) requires --runtime=v1. For v2, pass a single --spec=<path> AuthoredSpec file. v1.6 will be archived in S7.";
+const V1_SPEC_ERROR = "--spec is only valid with --runtime=v2 (the default). For v1.6, use --scenario / --playbook / --run-profile name selectors.";
 let hasEmittedV1DeprecationWarning = false;
 
 function parseCliRuntime(value: string | undefined): CliRuntime {
@@ -78,6 +79,16 @@ function resolveSelectedRuntime(flags: CliFlags): CliRuntime {
 
 function hasV1NameSelectors(flags: CliFlags): boolean {
   return Boolean(flags.scenario || flags.playbook || flags.runProfile);
+}
+
+function validateRuntimeFlags(runtime: CliRuntime, flags: CliFlags): void {
+  if (runtime === "v1" && flags.spec) {
+    throw new Error(V1_SPEC_ERROR);
+  }
+
+  if (runtime === "v2" && hasV1NameSelectors(flags)) {
+    throw new Error(V2_NAME_SELECTOR_ERROR);
+  }
 }
 
 function emitV1DeprecationWarning(): void {
@@ -288,10 +299,6 @@ async function runV1(flags: CliFlags): Promise<void> {
 }
 
 async function runV2(flags: CliFlags): Promise<void> {
-  if (hasV1NameSelectors(flags)) {
-    throw new Error(V2_NAME_SELECTOR_ERROR);
-  }
-
   if (!flags.spec) {
     throw new Error("missing_required_flag: --spec is required");
   }
@@ -319,7 +326,10 @@ async function runV2(flags: CliFlags): Promise<void> {
 
 async function main() {
   const flags = parseFlags(process.argv.slice(2));
-  if (resolveSelectedRuntime(flags) === "v1") {
+  const runtime = resolveSelectedRuntime(flags);
+  validateRuntimeFlags(runtime, flags);
+
+  if (runtime === "v1") {
     await runV1(flags);
     return;
   }
