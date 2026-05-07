@@ -934,6 +934,221 @@ depend on S3, S4, or any later slice.
   grep passes, (g) `RunState` minimality grep passes, (h) basic-run
   fixture compatibility test exists and passes.
 
+## S3 — Phase 3: Projections + replay (next slice)
+
+### Outcome
+
+Implement **executable projection reducers** (Task / Mailbox / Evidence) that
+satisfy the S1 declarative projection contracts, plus **replay machinery** that
+folds a `RunEvent[]` into projection views. Add **replay tests** over the S1
+hand-written fixture and any additional synthetic fixtures needed for closure.
+S3 imports S1 schemas and S2 core types; it does NOT import any runtime
+adapter or CLI code.
+
+### S3 / runtime boundary (binding)
+
+S3 produces pure, deterministic, in-memory reducer code only. No I/O, no
+runtime adapter, no CLI. The only seam to runtime is that S4 will consume the
+projections (read-only). S3 is downstream of S2's `EventLogStore.read`
+interface but NOT of S2's `RunKernel` — projections take the event array
+directly.
+
+### Concrete deliverables
+
+1. **Module layout under `packages/pluto-v2-core/src/projections/`** (NEW
+   subdirectory; do NOT introduce a new package):
+   - `projections/task-projection.ts` — `taskReducer(state, event):
+     TaskProjectionView['view']` pure reducer; `replayTask(events): view`
+     convenience wrapper.
+   - `projections/mailbox-projection.ts` — `mailboxReducer` + `replayMailbox`.
+   - `projections/evidence-projection.ts` — `evidenceReducer` +
+     `replayEvidence`.
+   - `projections/replay.ts` — generic `replayAll(events): { task, mailbox,
+     evidence }` helper that runs each reducer over the same event stream
+     once. Uses `EventLogStore.read` if a store is passed, or a plain array
+     otherwise.
+   - `projections/index.ts` — re-exports the public surface.
+
+2. **Reducer contracts (binding).**
+
+   Each reducer:
+   - Is pure: no I/O, no ambient time/randomness, no mutation of inputs
+     (returns a new view object on each call).
+   - Is total over its declared `inputKinds` (see S1 `projections.ts`); kinds
+     in `outOfScopeKinds` are silently no-ops (return `state` unchanged).
+   - Is replay-equivalent: `replayX(events)` MUST equal `events.reduce(xReducer,
+     initialView)`, and applying the same events twice yields the same view
+     (idempotency under the no-op kinds).
+   - Builds the view shapes EXACTLY as declared in S1 `projections.ts`:
+     - `TaskProjectionView.view` = `{ tasks: Record<TaskId, { title,
+       ownerActor, state, dependsOn[], history: Array<{from, to, eventId}> }> }`
+     - `MailboxProjectionView.view` = `{ messages: Array<{ messageId,
+       fromActor, toActor, kind, body, sequence, eventId }> }` (chronologically
+       ordered by `sequence`)
+     - `EvidenceProjectionView.view` = `{ run: { runId, status, startedAt,
+       completedAt, summary } | null, citations: Array<{ eventId, sequence,
+       kind, summary: string }> }`
+
+3. **Per-projection input-kind closure (binding).**
+
+   The reducer MUST handle every event kind in its `inputKinds` and ignore
+   every kind in `outOfScopeKinds`. The exhaustiveness is verified at the
+   type level (already in S1 `__tests__/projection-contracts.test.ts`) AND
+   at runtime by iterating the closed kind set in tests.
+
+   - `TaskProjectionView.inputKinds` = `task_created`, `task_state_changed`.
+     Builds `tasks` map; appends to `history` on state change. Other kinds
+     no-op.
+   - `MailboxProjectionView.inputKinds` = `mailbox_message_appended`.
+     Appends to `messages` in `sequence` order.
+   - `EvidenceProjectionView.inputKinds` = `run_started`, `run_completed`,
+     `mailbox_message_appended`, `task_state_changed`, `artifact_published`,
+     `request_rejected`. Sets `run` on `run_started`/`run_completed`; appends
+     a `citation` entry per event with a short `summary` string derived
+     deterministically from the event kind + payload (e.g.
+     `"task <id> completed"`).
+
+   `request_rejected` events: only `EvidenceProjectionView` cites them
+   (with summary `"request rejected: <reason>"`); the other two reducers
+   no-op.
+
+4. **Replay machinery.**
+
+   - `replayTask(events): TaskView`,
+     `replayMailbox(events): MailboxView`,
+     `replayEvidence(events): EvidenceView`.
+   - `replayAll(events): { task, mailbox, evidence }` runs all three.
+   - `replayFromStore(store: EventLogStore): { task, mailbox, evidence }` is a
+     thin wrapper that calls `store.read()` then `replayAll`.
+   - All replay helpers are pure functions on arrays; they do NOT touch the
+     store after the read.
+
+5. **Pure-projection invariants (encoded in tests + grep).**
+
+   - **Determinism**: `replayAll(events)` returns byte-equal output (after
+     stable serialization) across two runs.
+   - **Idempotency**: applying the SAME event twice in sequence (illegal at
+     the kernel level but tested at the reducer level via direct invocation)
+     yields the same view as applying it once (since reducers depend only on
+     event content, and the second application's state is the result of the
+     first).
+   - **Replay equality**: `replayTask(events)` === `events.reduce(taskReducer,
+     initialTaskView)` for every fixture.
+   - **No I/O**: `projections/**` MUST NOT import any `node:*` I/O module
+     other than the type-level deps already in S1/S2.
+   - **No ambient randomness/time**: same grep as S2 — `crypto.randomUUID`,
+     `Math.random`, `Date.now`, `new Date(...)`, `performance.now` FORBIDDEN
+     in `projections/**`. Reducers consume the event's `timestamp` /
+     `eventId` / `sequence`; no generation.
+   - **No-runtime-leak**: same grep as S1/S2 over `projections/**`.
+
+6. **Tests.**
+
+   Under `packages/pluto-v2-core/__tests__/projections/`:
+
+   - `task-projection.test.ts` — happy-path `task_created` + state-change
+     sequence; out-of-input-kind no-op tests; replay-equality test using the
+     S1 `basic-run.json` fixture; idempotency test.
+   - `mailbox-projection.test.ts` — same shape: ordered append, sequence
+     monotonicity, out-of-input-kind no-op, replay-equality on fixture,
+     idempotency.
+   - `evidence-projection.test.ts` — same shape; covers `request_rejected`
+     citation emission.
+   - `replay-all.test.ts` — `replayAll` over `basic-run.json` matches the
+     fixture's `expectedViews.{task, mailbox, evidence}` BYTE-EQUAL.
+   - `replay-from-store.test.ts` — round-trip via `InMemoryEventLogStore`:
+     append all events, then `replayFromStore(store)` matches `replayAll(events)`.
+
+   Total S3 test count target: ≥ 25 across the 5 files.
+
+7. **Fixture coverage table (binding for design doc).**
+
+   `docs/design-docs/v2-projections.md` MUST include a small table mapping
+   each `RunEvent.kind` to which projections consume it:
+
+   | kind | task | mailbox | evidence |
+   |---|---|---|---|
+   | `run_started` | no-op | no-op | sets `run` |
+   | `run_completed` | no-op | no-op | sets `run.status / completedAt / summary` |
+   | `mailbox_message_appended` | no-op | append | citation |
+   | `task_created` | insert task | no-op | no-op |
+   | `task_state_changed` | update + history | no-op | citation |
+   | `artifact_published` | no-op | no-op | citation |
+   | `request_rejected` | no-op | no-op | citation |
+
+8. **`FinalReportProjectionView` reconsideration.**
+
+   S3 evaluates whether `FinalReportProjectionView` is required by checking
+   the legacy evidence-surface coverage table from
+   `docs/design-docs/v2-contracts.md` against the three core projections.
+   Decision documented in `docs/design-docs/v2-projections.md`:
+   - If **derivable**: `FinalReportProjectionView` stays deferred (write a
+     short note explaining how it's derived from `EvidenceProjectionView` +
+     `TaskProjectionView` + `MailboxProjectionView`).
+   - If **NOT derivable**: introduce it with a closed `view` shape, declare
+     it in S1 (delta on `projections.ts`), implement its reducer in S3.
+
+   Default expectation: deferred unless the legacy `final-report.md`
+   structure has a piece of evidence that's not in the union of the three.
+   The S3 design doc records the decision and its rationale.
+
+### Out of scope for S3
+
+- Any runtime adapter (Fake or Paseo) — S4 / S5.
+- Any CLI changes — S6.
+- Persistence to disk / DB / network beyond what S2's
+  `InMemoryEventLogStore` provides.
+- v1.6 file-lineage edits.
+- Authority / kernel / state-machine code (those are S2; S3 only consumes
+  events emitted by S2).
+
+### S3 dependency graph
+
+S3 imports `@pluto/v2-core` schemas (S1) and `core/run-event-log` types
+(S2). S3 does NOT depend on S4, S5, or any later slice.
+
+### S3 acceptance bar
+
+- **Package-scoped typecheck**: `pnpm --filter @pluto/v2-core typecheck` clean.
+- **Package-scoped vitest**: `pnpm --filter @pluto/v2-core exec vitest run`
+  green; the new `projections/` test suite ≥ 5 files; total package test
+  count ≥ S2 baseline (153) + 25 = 178; finishes < 90 s.
+- **Package-scoped build**: `pnpm --filter @pluto/v2-core build` clean.
+- **Root regression**: `pnpm test` green.
+- **Reducer purity**: replay-equality + idempotency tests pass.
+- **basic-run fixture compatibility**: `replayAll` over `basic-run.json` MUST
+  match the fixture's `expectedViews` exactly.
+- **No-I/O grep**: `projections/**` does not import any `node:*` I/O module.
+- **No-ambient-randomness grep**: clean over `projections/**`.
+- **No-runtime-leak grep**: clean over `projections/**`.
+- **Closure proofs**:
+  - Each projection's runtime reducer respects the S1 declared `inputKinds`
+    / `outOfScopeKinds` partition.
+  - The fixture-coverage table in the design doc matches the actual reducer
+    behaviors.
+- **Diff hygiene**: edits limited to:
+  - `packages/pluto-v2-core/src/projections/**`
+  - `packages/pluto-v2-core/__tests__/projections/**`
+  - `packages/pluto-v2-core/src/index.ts` (additive `projections/*`
+    re-exports)
+  - `packages/pluto-v2-core/README.md` (additive S3 section)
+  - `docs/design-docs/v2-projections.md` (new)
+  - `docs/plans/active/v2-rewrite.md` — S3 status row only.
+  - **NO edits** to S1 schema files, S2 core files, root config, or any v1.6
+    surface.
+  - **Exception**: if `FinalReportProjectionView` is determined to be
+    necessary (deliverable 8), a single edit to
+    `packages/pluto-v2-core/src/projections.ts` is allowed to add its
+    declarative contract — but this MUST be flagged as an S1 contract
+    addition (additive optional field; not a breaking change). If this
+    happens, the S2 acceptance bar's "no edits to S1" rule is waived for
+    this one targeted addition; document explicitly in the report.
+- **Branch is committed AND pushed**: `commit_and_push` step + `verify_pushed_state`.
+- A reviewer sub-agent confirms (a) replay-equality on `basic-run.json`,
+  (b) input-kind closure per reducer, (c) determinism + idempotency, (d)
+  no-I/O / no-runtime-leak / no-ambient-randomness greps, (e) diff hygiene,
+  (f) `FinalReportProjectionView` decision documented.
+
 ## Discovery gate (per slice)
 
 Before each slice is dispatched to remote implementation:
