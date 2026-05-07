@@ -1214,6 +1214,31 @@ v2 surface physically separated from v1.6 src/. Add to root
 under the v2 surface (after `packages/pluto-v2-core/` from S1) — same
 .gitignore allow-list pattern (`!packages/pluto-v2-runtime/`).
 
+### S4 mutates two S2 files (both additive-only)
+
+S4 introduces TWO controlled S2 mutations, each additive-only, both gated
+by acceptance:
+
+1. `packages/pluto-v2-core/src/core/team-context.ts` — adds optional
+   `fakeScript` field to `AuthoredSpecSchema` (deliverable 2).
+2. `packages/pluto-v2-core/src/core/run-kernel.ts` — adds new public method
+   `RunKernel.seedRunStarted(payload, ctx?)` (deliverable 3, kernel API
+   extension). The kernel today only exposes `submit(rawRequest)`, but
+   `RunStartedEventSchema` is `system`-emitted with `requestId: null`, so
+   it has no production path. Adding a single seed API is the minimum-
+   surface fix.
+
+Both mutations are STRICTLY ADDITIVE: no existing public surface is
+renamed, removed, or behaviorally altered. Existing callers of `submit`
+are unaffected. Discovery confirmed `runScenario` cannot stitch
+`run_started` from outside without bypassing kernel state ownership
+(kernel `#state` is private and only mutated through `submit`); a
+seed-from-outside approach would desync state from eventLog. The kernel
+extension keeps the contract clean.
+
+`run_completed` stays request-backed via the existing `complete_run`
+intent in `submit`. No second seed API.
+
 ### Concrete deliverables
 
 1. **Module layout under `packages/pluto-v2-runtime/`** (NEW workspace
@@ -1227,126 +1252,342 @@ under the v2 surface (after `packages/pluto-v2-core/` from S1) — same
      `build`, `test`).
    - `src/loader/`:
      - `authored-spec-loader.ts` — `loadAuthoredSpec(path: string): AuthoredSpec`.
-       Reads YAML/JSON from disk, validates via `AuthoredSpecSchema` (S2),
-       returns parsed object. THIS IS THE ONLY I/O ENTRY POINT IN v2.
+       Reads file from disk via `node:fs`, parses YAML via
+       `yaml.load(content, { schema: yaml.FAILSAFE_SCHEMA })` (single-doc,
+       safe schema only — no `!!js/*` tags, no merge keys, no anchors that
+       reach into the host environment), then validates via
+       `AuthoredSpecSchema` (S2, strict). THIS IS THE ONLY I/O ENTRY POINT
+       IN v2-RUNTIME. Loader rejects multi-document YAML and any value that
+       fails post-parse Zod validation. JSON is parsed via `JSON.parse`.
      - `scenario-loader.ts`, `playbook-loader.ts`, `agent-loader.ts`,
        `run-profile-loader.ts` — typed loaders for each authored layer; emit
        a unified `AuthoredSpec` value.
-   - `src/adapters/fake/`:
-     - `fake-adapter.ts` — implements a closed `RuntimeAdapter` interface
-       (defined in this slice). Produces deterministic ProtocolRequests for a
-       given TeamContext, scripted by the scenario's `fake-script` field
-       (new authored-spec optional field).
-     - `fake-script.ts` — script schema + interpreter. A fake script is a
-       declarative list of `{ actor, intent, payload }` requests that the
-       fake adapter emits in order, with deterministic
-       `idProvider`/`clockProvider` providing eventId/timestamp.
-     - `fake-run.ts` — `runFake(spec, options): { events, views,
-       evidencePacket }` end-to-end driver. Loads spec → compiles →
-       initializes RunState → submits scripted requests → collects events
-       from log → runs projections → assembles a `EvidencePacket`-shaped
-       output.
    - `src/runtime/`:
-     - `runtime-adapter.ts` — closed `RuntimeAdapter` interface that S5's
-       Paseo adapter will also implement. Methods: `init(teamContext) →
-       AdapterState`, `nextRequest(state, kernel) → ProtocolRequest | done`.
-     - `runner.ts` — `runScenario(authoredSpec, adapter, options): {
-       events, views, evidencePacket }` provider-agnostic driver that orchestrates
-       the loop `while (req = adapter.nextRequest(...)) { kernel.submit(req) }`.
+     - `runtime-adapter.ts` — closed `RuntimeAdapter` interface (concrete TS
+       in deliverable 3 below) that S5's Paseo adapter will also implement.
+     - `runner.ts` — `runScenario(authoredSpec, adapter, options)` provider-
+       agnostic driver. 9-step algorithm in deliverable 3.
+     - `kernel-view.ts` — read-only kernel snapshot type
+       `{ state: RunState; events: ReadonlyArray<RunEvent> }` passed into
+       adapter on each step.
+   - `src/adapters/fake/`:
+     - `fake-adapter.ts` — implements `RuntimeAdapter`. Produces deterministic
+       ProtocolRequests for a given TeamContext, scripted by the scenario's
+       `fakeScript` field (deliverable 2). Resolves `$ref` tokens at step
+       time against the kernel-view event stream (deliverable 2 grammar).
+     - `fake-script.ts` — script schema (Zod) + `$ref` resolver +
+       interpreter. Token grammar in deliverable 2.
+     - `fake-run.ts` — convenience wrapper:
+       `runFake(authored, options) = runScenario(authored, makeFakeAdapter(authored.fakeScript), options)`.
    - `src/evidence/`:
-     - `evidence-packet.ts` — `EvidencePacketShape` zod schema + assembly:
-       given Task / Mailbox / Evidence views, produce a single
-       `EvidencePacket` value compatible with v1.6 evidence-packet.json
-       structure (per the `docs/design-docs/v2-contracts.md`
-       evidence-surface coverage table).
-   - `src/index.ts` — re-exports.
+     - `evidence-packet.ts` — `EvidencePacketShape` Zod schema (v2 shape,
+       NOT v1.6 shape verbatim — v2 covers a documented subset; see
+       deliverable 5 normalization table) + assembly given Task / Mailbox /
+       Evidence views.
+   - `src/legacy/`:
+     - `v1-translator.ts` — pure function
+       `translateLegacyEvents(legacyEvents: unknown[]): RunEvent[]`.
+       Implements the binding map/drop/infer table in deliverable 5.
+   - `src/index.ts` — re-exports public surface
+     (`runScenario`, `RuntimeAdapter`, `loadAuthoredSpec`,
+     `assembleEvidencePacket`, `translateLegacyEvents`).
 
-2. **`fake-script` authoring shape (closed at v1.0).**
+2. **`fakeScript` authoring shape (closed at v1.0).**
 
-   Adds an optional field to S2's `AuthoredSpec` schema:
+   Adds an optional field to S2's `AuthoredSpec` schema in
+   `packages/pluto-v2-core/src/core/team-context.ts`:
 
    ```ts
-   fakeScript: Array<{
-     actor: ActorRef;
-     intent: ProtocolRequest['intent'];
-     payload: <discriminated by intent>;
-     idempotencyKey?: string | null;
-   }> | undefined;
+   // FakeScriptStepSchema (Zod, discriminated by `intent`):
+   //   - actor: ActorRefSchema
+   //   - intent: 'append_mailbox_message' | 'create_task' | 'change_task_state'
+   //             | 'publish_artifact' | 'complete_run'
+   //   - payload: matches the corresponding ProtocolRequest payload schema
+   //   - idempotencyKey: optional string | null
+   //
+   // Payload values may use a closed token grammar to reference IDs from
+   // earlier accepted events:
+   //   { "$ref": "events[<index>].payload.<dotted-path>" }
+   //
+   // <index> is a non-negative integer (0-based) into the eventLog after
+   //   `run_started` (i.e. events[0] is the first request-backed accepted
+   //   event). Negative indices are NOT supported in v1.0.
+   // <dotted-path> is a dotted path into the matching event's `payload`,
+   //   restricted to known v2 payload field names per RunEventSchema.
+   //
+   // The resolver:
+   //   - Walks each payload value pre-submit; if a value matches the
+   //     `{ "$ref": "events[i].payload.X" }` shape exactly, replaces it
+   //     with the resolved value from the eventLog.
+   //   - Throws if `events[i]` does not exist or `payload.X` is missing
+   //     (closed grammar; no fallback).
+   //
+   // Example: a `change_task_state` step references a `task_created` taskId
+   //   step 0 → create_task → events[0].payload.taskId
+   //   step 1 → change_task_state with payload.taskId = { "$ref":
+   //            "events[0].payload.taskId" }
+
+   fakeScript?: Array<FakeScriptStep>;
    ```
 
-   This is an additive optional field on `AuthoredSpec` per the S1 versioning
-   policy — does NOT require a major bump. S1's `AuthoredSpecSchema` is in
-   `packages/pluto-v2-core/src/core/team-context.ts` (S2). S4 mutates that
-   ONE file to add the optional field; this is the controlled exception (the
-   alternative — keeping the script fully outside the spec — would require
-   S4 to re-implement scenario loading, which is more disruptive).
+   **Justification (S1 versioning policy):** strict additive optional field.
+   Existing v1.0 specs without `fakeScript` parse cleanly; specs with
+   `fakeScript` parse and the field is consumed only by the fake adapter.
+   No existing field is renamed or removed. Per S1 versioning policy, this
+   is a non-breaking minor change at v1.0.
 
-   Justification: this is a strict "add new optional field" change; existing
-   v1.0 specs without `fakeScript` parse cleanly; new specs with `fakeScript`
-   parse and the field is consumed only by the fake adapter. Documented in
-   the S4 design doc as the only S2 surface change.
+   **Mutation scope (binding):** the only edit to `team-context.ts` is the
+   addition of `FakeScriptStepSchema`, the `fakeScript` field on
+   `AuthoredSpecSchema`, and any imports those need. No semantic edits to
+   the existing `AuthoredSpec` shape, validation rules, or
+   `compileTeamContext` body. Acceptance enforces this by reviewing the
+   diff scope against `team-context.ts`.
 
-3. **`runScenario` driver (provider-agnostic).**
+3. **`RuntimeAdapter` interface and `runScenario` driver (concrete TS).**
 
-   Single entry point that S5 will reuse:
+   Closed `RuntimeAdapter` interface (S4, reused by S5):
 
    ```ts
-   function runScenario(
+   import type { ProtocolRequest, RunEvent, RunState, TeamContext }
+     from '@pluto/v2-core';
+
+   export interface KernelView {
+     readonly state: RunState;
+     readonly events: ReadonlyArray<RunEvent>;
+   }
+
+   export type RuntimeAdapterStep<S> =
+     | { kind: 'request'; request: ProtocolRequest; nextState: S }
+     | { kind: 'done';
+         completion: {
+           status: 'succeeded' | 'failed' | 'cancelled';
+           summary: string | null;
+         };
+         nextState: S;
+       };
+
+   export interface RuntimeAdapter<S = unknown> {
+     /**
+      * Build initial adapter state. Called once after run_started is seeded.
+      * Synchronous; adapter MUST NOT do I/O or read ambient time/randomness.
+      * Use providers from `runScenario` options instead.
+      */
+     init(teamContext: TeamContext, view: KernelView): S;
+
+     /**
+      * Decide the next protocol request OR signal completion. Synchronous.
+      * Errors thrown propagate out of `runScenario` (run is aborted; no
+      * synthetic run_completed is emitted).
+      */
+     step(state: S, view: KernelView): RuntimeAdapterStep<S>;
+   }
+   ```
+
+   Notes:
+   - **Sync-only at v1.0.** S5's Paseo adapter will buffer
+     LLM-call results elsewhere; the adapter step itself stays sync. If
+     async is needed in S5+, that's a closed v2.0 contract change.
+   - **Adapter owns its state** between steps via `nextState`. `runScenario`
+     never inspects `S`.
+   - **`done.completion`** is what `runScenario` uses to build the
+     `complete_run` ProtocolRequest payload (status + summary).
+   - **Errors** thrown from `init` or `step` propagate; the run aborts. No
+     synthetic completion.
+   - **`KernelView.events`** is a stable snapshot from `eventLog.read(0,
+     head + 1)` taken before each step. Adapter MUST treat it read-only.
+
+   `runScenario` driver:
+
+   ```ts
+   function runScenario<S>(
      authored: AuthoredSpec,
-     adapter: RuntimeAdapter,
-     options: { idProvider: IdProvider; clockProvider: ClockProvider; correlationId?: string }
-   ): { events: RunEvent[]; views: ProjectionViews; evidencePacket: EvidencePacket }
+     adapter: RuntimeAdapter<S>,
+     options: {
+       idProvider: IdProvider;
+       clockProvider: ClockProvider;
+       correlationId?: string | null;
+       maxSteps?: number; // default 1000; throws if exceeded
+     }
+   ): {
+     events: ReadonlyArray<RunEvent>;
+     views: { task: TaskProjectionView['view'];
+              mailbox: MailboxProjectionView['view'];
+              evidence: EvidenceProjectionView['view'] };
+     evidencePacket: EvidencePacket;
+   };
    ```
 
-   Algorithm:
-   1. `compile(authored)` → `TeamContext`.
-   2. Initialize `RunKernel` with in-memory `EventLogStore` + injected
-      providers.
-   3. Initialize `adapter` with TeamContext.
-   4. Emit synthetic `run_started` event directly through the kernel
-      (system-emitted, no ProtocolRequest).
-   5. Loop:
-      - `request = adapter.nextRequest(state, ctx)`.
-      - If `done`, break.
-      - `event = kernel.submit(request)`.
-   6. Emit synthetic `run_completed` event when adapter signals done.
-   7. `events = eventLog.read(0, head + 1)`.
+   9-step algorithm:
+   1. `teamContext = compileTeamContext(authored)` (S2).
+   2. `kernel = new RunKernel({ initialState: teamContext.initialRunState,
+      idProvider, clockProvider })`.
+   3. `kernel.seedRunStarted({ scenarioRef: teamContext.scenarioRef,
+      runProfileRef: teamContext.runProfileRef,
+      startedAt: clockProvider.nowIso() }, { correlationId })`.
+   4. `let adapterState = adapter.init(teamContext, kernelViewOf(kernel))`.
+   5. Loop up to `maxSteps`:
+      - `view = kernelViewOf(kernel)`.
+      - `step = adapter.step(adapterState, view)`.
+      - If `step.kind === 'done'`: build a `complete_run` ProtocolRequest
+        with the system actor (`{ kind: 'system' }`) and `step.completion`
+        as payload, `kernel.submit(request, { correlationId })`, then
+        `adapterState = step.nextState`, break.
+      - Else `step.kind === 'request'`: `kernel.submit(step.request,
+        { correlationId })`, `adapterState = step.nextState`. (If the
+        kernel emits `request_rejected`, the loop continues; the adapter
+        sees the rejection in `view.events` on its next step and decides.)
+   6. If loop exits without `done`, throw `RunNotCompletedError` (no
+      synthetic `run_completed`).
+   7. `events = kernel.eventLog.read(0, kernel.eventLog.head + 1)`.
    8. `views = replayAll(events)` (S3).
-   9. `evidencePacket = assembleEvidencePacket(views)`.
+   9. `evidencePacket = assembleEvidencePacket(views, kernel.state.runId)`.
 
-4. **Scenario fixtures** (under `packages/pluto-v2-runtime/test-fixtures/`):
+   The `complete_run` actor decision is binding: **system actor**, since
+   no concrete authored actor has run-completion authority in v1.0. The
+   protocol-validator already accepts `complete_run` from any actor;
+   policy-level restriction is outside S4 scope.
+
+4. **Kernel API extension: `RunKernel.seedRunStarted` (S2 file edit).**
+
+   Add to `packages/pluto-v2-core/src/core/run-kernel.ts`:
+
+   ```ts
+   seedRunStarted(
+     payload: {
+       scenarioRef: string;
+       runProfileRef: string;
+       startedAt: string; // ISO 8601
+     },
+     ctx?: RunKernelSubmitContext,
+   ): { event: RunStartedEvent }
+   ```
+
+   Behavior:
+   - Throws if eventLog is non-empty (run_started must be the first event).
+   - Builds a `RunStartedEvent` envelope: `eventId = idProvider.next()`,
+     `runId = state.runId`, `sequence = state.sequence + 1`,
+     `timestamp = clockProvider.nowIso()`, `actor = { kind: 'system' }`,
+     `requestId = null`, `causationId = null`,
+     `correlationId = ctx?.correlationId ?? null`,
+     `entityRef = { kind: 'run', runId }`, `outcome = 'accepted'`,
+     `kind = 'run_started'`, `payload = <input payload>`.
+   - Validates via `RunStartedEventSchema.parse`.
+   - Appends to eventLog and reduces internal `#state` (same path as
+     `submit`).
+   - Returns `{ event }`.
+
+   This is **strictly additive**: no existing kernel surface is touched.
+   Two new acceptance tests in
+   `packages/pluto-v2-core/__tests__/core/run-kernel.test.ts` (within
+   the existing file): (a) seedRunStarted produces a valid run_started
+   event and updates state.status to 'running'; (b) calling
+   seedRunStarted on a kernel whose eventLog already has events throws.
+
+   `run_completed` continues to use the existing `complete_run` intent
+   path through `submit`; no `seedRunCompleted` is added.
+
+5. **Evidence packet shape (v2-only) and parity normalization.**
+
+   `EvidencePacketShape` is a v2-native Zod schema, NOT a verbatim copy of
+   v1.6 evidence-packet.json. The v2 fields cover ONLY what current v2
+   projections produce:
+
+   ```ts
+   EvidencePacketShape = {
+     schemaVersion: '1.0',         // v2 schema, not v1.6 schema=0
+     kind: 'evidence_packet',
+     runId: string,
+     status: 'succeeded' | 'failed' | 'cancelled' | 'in_progress',
+     summary: string | null,
+     startedAt: string | null,     // from evidence.run.startedAt
+     completedAt: string | null,   // from evidence.run.completedAt
+     citations: Array<{ eventId, kind, text, observedAt }>,  // from evidence.citations
+     tasks: TaskProjectionView['view']['tasks'],
+     mailboxMessages: ReadonlyArray<{
+       messageId, fromActor, toActor, kind, body, sequence,
+     }>,
+     artifacts: ReadonlyArray<{
+       artifactId, kind, mediaType, byteSize,
+     }>,
+   }
+   ```
+
+   **v1.6 → v2 evidence-packet field normalization (binding parity table):**
+
+   | v1.6 field | v2 status | rule |
+   |---|---|---|
+   | `runId` | strict equal | byte-equal string match |
+   | `schemaVersion` | ignored | namespaces differ (v1.6=0, v2='1.0') |
+   | `kind` | strict equal | both `'evidence_packet'` |
+   | `status` | strict equal | string equal |
+   | `summary` | strict equal | string-or-null equal |
+   | `failureReason` | ignored | not produced by v2 in S4 |
+   | `coordinationChannel` | ignored | out of v2 scope (deferred) |
+   | `artifactRefs` | normalized compare | compare `length` and the bag of `label` strings; v2 has `artifacts[*].kind` (final/intermediate) but no `path`/`label` text — use a side mapping `label → kind` only for the parity test |
+   | `transitions` | ignored | derived from v1.6 task list / mailbox summary, not modeled in v2 projections at S4 |
+   | `roleCitations` | ignored | out of v2 scope (deferred) |
+   | `lineage` | ignored | runtime-helper-usage / file-lineage out of scope |
+   | `generatedAt` | abstracted | both must parse as ISO 8601; values not compared |
+
+   The parity test asserts: for the in-scope rows above, the v2 packet
+   built from translated legacy events matches the v1.6 packet field-for-
+   field. Ignored rows are skipped explicitly (the test does NOT consume
+   them). The test fails if any row marked "strict equal" or "normalized
+   compare" diverges.
+
+6. **Legacy v1.6 → v2 event translator (binding map/drop/infer table).**
+
+   The captured fixture
+   `tests/fixtures/live-smoke/86557df1-0b4a-4bd4-8a75-027a4dcd5d38/events.jsonl`
+   contains 20 distinct `type` values; v2's closed event set has 7. The
+   translator implements this binding table (one row per legacy `type`):
+
+   | legacy type | v2 disposition | rule |
+   |---|---|---|
+   | `run_started` | **map** | → v2 `run_started`; copy `runId`, `scenarioRef`, `runProfileRef`, `startedAt` (synthesize defaults if missing) |
+   | `lead_started` | **drop** | subsumed by `run_started` (legacy duplicate) |
+   | `run_completed` | **map** | → v2 `run_completed`; copy `status`, `summary`, `completedAt` |
+   | `final_reconciliation_received` | **drop** | subsumed by `run_completed` |
+   | `task_created` | **map** | → v2 `task_created`; copy `taskId`, `title`, `ownerActor`, `dependsOn` (default `[]`) |
+   | `task_claimed` | **infer** | → v2 `task_state_changed` from `queued` → `running` |
+   | `task_completed` | **infer** | → v2 `task_state_changed` from `running` → `completed` |
+   | `mailbox_message_queued` | **map** | → v2 `mailbox_message_appended`; this is the canonical legacy event for "message exists"; subsequent `mailbox_message_delivered` for the same messageId is dropped |
+   | `mailbox_message_delivered` | **drop** | already represented by `mailbox_message_queued` |
+   | `mailbox_message` | **drop** | legacy duplicate of queued/delivered |
+   | `lead_message` | **drop** | legacy lead-internal event; not a mailbox surface |
+   | `plan_approval_requested` | **map** | → v2 `mailbox_message_appended` with `kind: 'plan_approval_request'` |
+   | `plan_approval_responded` | **map** | → v2 `mailbox_message_appended` with `kind: 'plan_approval_response'` |
+   | `artifact_created` | **map** | → v2 `artifact_published`; copy `artifactId`; `kind: 'final'` if legacy event marks final, else `'intermediate'`; `mediaType` from legacy `mediaType` (default `text/markdown`); `byteSize` from legacy or computed from artifact body length |
+   | `worker_started` | **drop** | internal coordination, not a v2 surface |
+   | `worker_completed` | **drop** | task state change is already represented by `task_completed` legacy event |
+   | `worker_complete_received` | **drop** | internal coordination |
+   | `spawn_request_received` | **drop** | internal coordination |
+   | `spawn_request_executed` | **drop** | internal coordination |
+   | `coordination_transcript_created` | **drop** | out of v2 scope (deferred) |
+
+   The translator preserves legacy event order. For `infer` rows, the
+   translator carries minimal state (the last seen `state` per `taskId`)
+   to fill the `from` field. For `map` rows missing optional fields, the
+   translator synthesizes defaults documented in the table (e.g.
+   `dependsOn = []`). The translator emits an envelope with v2-shaped
+   `eventId`, `sequence`, `requestId` chosen deterministically from the
+   legacy `eventId` (e.g. namespaced UUIDv5) so the parity test can run
+   without ambient randomness. Unknown legacy types are an explicit
+   error (closed grammar; new legacy types require a translator update).
+
+7. **Scenario fixtures** (under `packages/pluto-v2-runtime/test-fixtures/`):
 
    - `scenarios/hello-team/scenario.yaml` — v2 authored spec with
      `fakeScript` for a small 4-actor lead/planner/generator/evaluator run.
-     Mirrors v1.6's `hello-team` scenario at the workflow level.
+     Uses the closed `$ref` grammar from deliverable 2 to thread
+     `task_created.payload.taskId` through subsequent
+     `change_task_state` steps.
    - `scenarios/hello-team/expected-events.jsonl` — expected event stream
-     produced by `runScenario(spec, fakeAdapter)`.
-   - `scenarios/hello-team/expected-evidence-packet.json` — expected
-     evidence packet matching v1.6 evidence-packet.json shape.
+     produced by `runScenario(spec, fakeAdapter)` with fixed providers.
+   - `scenarios/hello-team/expected-evidence-packet.json` — expected v2
+     evidence packet (v2 shape from deliverable 5, NOT v1.6 shape).
 
-5. **Parity tests against captured v1.6 fixtures.**
-
-   Captured v1.6 live-smoke fixtures live under
-   `tests/fixtures/live-smoke/<runId>/` (per CLAUDE.md / R8). S4 includes
-   parity tests that:
-
-   - Load a representative captured v1.6 fixture
-     (`tests/fixtures/live-smoke/86557df1-0b4a-4bd4-8a75-027a4dcd5d38/`).
-   - Translate its `events.jsonl` into v2 `RunEvent` shapes (via a small
-     translator in `packages/pluto-v2-runtime/src/legacy/v1-translator.ts`).
-   - Run the v2 projections over the translated events.
-   - Assert the v2 `EvidencePacket` is structurally equivalent to the v1.6
-     `evidence-packet.json` for the SAME run, modulo:
-     - eventId / timestamp differences (kept abstract);
-     - role-bound helper paths (legacy artifact, dropped in v2);
-     - `runtime-helper-usage.jsonl` (out of v2 scope per evidence-surface
-       coverage table).
-
-   Equivalence assertions are documented in
-   `docs/design-docs/v2-fake-runtime.md`. The translator is a pure function;
-   it does NOT mutate the captured fixture.
-
-6. **Pure invariants for the runtime package.**
+8. **Pure invariants for the runtime package.**
 
    - **No paseo / no opencode / no claude / no helper-cli** in
      `packages/pluto-v2-runtime/src/**` (same no-runtime-leak grep, with
@@ -1354,41 +1595,53 @@ under the v2 surface (after `packages/pluto-v2-core/` from S1) — same
      subdir which S5 introduces; S4 ships only `src/adapters/fake/`).
    - **Determinism**: `runScenario(spec, fakeAdapter, fixed-providers)`
      produces byte-equal events twice.
-   - **No I/O outside the loader entry point**: `loader/` is allowed to use
-     `node:fs` and `js-yaml`; everything else under
-     `packages/pluto-v2-runtime/src/**` (excluding `loader/`) MUST NOT import
-     `node:fs`. Acceptance grep enforces this.
+   - **No I/O outside the loader entry point**: only files under
+     `packages/pluto-v2-runtime/src/loader/**` may import `node:fs` or
+     `js-yaml`. Acceptance grep enforces this.
    - **No ambient randomness/time outside providers**: same rule as core.
 
-7. **Tests (S4 scope; under `packages/pluto-v2-runtime/__tests__/`).**
+9. **Tests (S4 scope; under `packages/pluto-v2-runtime/__tests__/`).**
 
    - `loader/authored-spec-loader.test.ts` — round-trip YAML → AuthoredSpec
-     parse; one negative per closed compile-error reason.
+     parse; one negative per closed compile-error reason; rejects
+     multi-document YAML; rejects YAML using `!!js/*` tags.
+   - `adapters/fake/fake-script.test.ts` — `$ref` resolver: resolves valid
+     refs, throws on invalid index / missing path; rejects malformed token
+     shapes.
    - `adapters/fake/fake-adapter.test.ts` — fake adapter produces scripted
      requests in order; deterministic given fixed providers.
    - `adapters/fake/fake-run.test.ts` — `runFake(hello-team)` end-to-end:
-     events match `expected-events.jsonl`; views match `expected-evidence`;
-     evidence packet matches `expected-evidence-packet.json`.
+     events match `expected-events.jsonl`; views match expected; evidence
+     packet matches `expected-evidence-packet.json` (v2 shape).
    - `runtime/runner.test.ts` — `runScenario` orchestrates loop correctly;
-     handles adapter `done` signal; emits synthetic `run_started` /
-     `run_completed`.
-   - `evidence/evidence-packet.test.ts` — packet assembly from views;
-     equivalence with v1.6 shape (excluding deferred fields).
-   - `parity/v1-translator.test.ts` — translator from v1.6 events.jsonl to
-     v2 RunEvent; lossless for the in-scope kinds.
-   - `parity/hello-team-parity.test.ts` — v2 projections over translated v1.6
-     fixture events match v1.6 evidence-packet.json (modulo allowed
-     differences listed in deliverable 5).
+     handles adapter `done` signal; `RunNotCompletedError` thrown when
+     adapter doesn't emit `done` within `maxSteps`; `kernel.seedRunStarted`
+     is called exactly once.
+   - `evidence/evidence-packet.test.ts` — packet assembly from views
+     against the v2 `EvidencePacketShape` schema.
+   - `legacy/v1-translator.test.ts` — translator from v1.6 events.jsonl to
+     v2 RunEvent: at least one assertion per row in deliverable 6 table;
+     rejects unknown legacy types.
+   - `parity/hello-team-parity.test.ts` — parity gate: load
+     `tests/fixtures/live-smoke/86557df1-...`, translate → `replayAll` →
+     `assembleEvidencePacket`, then compare against the v1.6 packet
+     row-by-row using the deliverable 5 normalization table.
 
-   Total S4 test count: ≥ 30 across the 7 files.
+   Total S4 test count: ≥ 30 across the 8 files. The two recommended
+   advisory translator coverage fixtures from the discovery review
+   (`1475ff86-...`, `a55b71bb-...`) are NOT included as parity gates in
+   S4 (only `86557df1-...` is binding); they may be added later if
+   translator drift is observed.
 
-8. **Docs.**
+10. **Docs.**
 
-   - `packages/pluto-v2-runtime/README.md` — public surface enumeration;
-     "Fake runtime only; Paseo runtime arrives in S5".
-   - `docs/design-docs/v2-fake-runtime.md` — runtime layout, RuntimeAdapter
-     interface, fake-script schema, parity rules, allowed differences from
-     v1.6, S2 `AuthoredSpec` mutation justification.
+    - `packages/pluto-v2-runtime/README.md` — public surface enumeration;
+      "Fake runtime only; Paseo runtime arrives in S5".
+    - `docs/design-docs/v2-fake-runtime.md` — runtime layout, RuntimeAdapter
+      interface, fakeScript schema + `$ref` grammar, parity normalization
+      table (deliverable 5), legacy translator map/drop/infer table
+      (deliverable 6), kernel `seedRunStarted` API justification, the two
+      additive S2 mutations (`team-context.ts` + `run-kernel.ts`).
 
 ### Out of scope for S4
 
@@ -1400,56 +1653,82 @@ under the v2 surface (after `packages/pluto-v2-core/` from S1) — same
 
 ### S4 dependency graph
 
-S4 imports `@pluto/v2-core` (S1 + S2 + S3). S4 mutates S2's
-`AuthoredSpecSchema` ONLY to add the optional `fakeScript` field
-(deliverable 2 justification). No other S1/S2/S3 mutations.
+S4 imports `@pluto/v2-core` (S1 + S2 + S3). S4 mutates TWO S2 files, each
+ADDITIVE-ONLY:
+
+1. `packages/pluto-v2-core/src/core/team-context.ts` — adds
+   `FakeScriptStepSchema` and optional `fakeScript` field on
+   `AuthoredSpecSchema` (deliverable 2). No semantic edits to existing
+   AuthoredSpec.
+2. `packages/pluto-v2-core/src/core/run-kernel.ts` — adds new public method
+   `RunKernel.seedRunStarted(payload, ctx?)` (deliverable 4). No edits to
+   `submit` or other existing surface.
+
+No other S1/S2/S3 mutations.
 
 ### S4 acceptance bar
 
 - **Package-scoped typecheck** for `@pluto/v2-runtime` AND `@pluto/v2-core`
   clean.
 - **Package-scoped vitest** for both packages green; v2-runtime adds ≥ 30
-  S4 tests; total v2 tests ≥ S3 baseline (180) + 30 = 210.
+  S4 tests; total v2 tests ≥ S3 baseline (180) + 30 + 2 (kernel seed
+  tests) = 212.
 - **Package-scoped build** for both clean.
 - **Root regression**: `pnpm test` green (legacy v1.6 unaffected).
 - **Determinism**: `runFake(hello-team)` byte-equal across two runs.
 - **Parity test passes**: v2 projection of translated v1.6 fixture events
-  matches v1.6 evidence packet for the in-scope fields.
+  matches v1.6 evidence packet row-by-row per deliverable 5 normalization
+  table.
+- **Translator coverage**: at least one assertion per row in deliverable
+  6 map/drop/infer table; unknown legacy types throw.
 - **No-runtime-leak grep** over `packages/pluto-v2-runtime/src/**`: no
   matches for paseo/opencode/claude (only allowed inside future
   `src/adapters/paseo/` which doesn't exist in S4).
 - **No-I/O outside loader**: source under
-  `packages/pluto-v2-runtime/src/**` excluding `loader/` does NOT import
-  `node:fs`.
-- **No-ambient-randomness** in v2-runtime source (excluding
-  `runtime/providers.ts` if it re-exports core providers).
-- **`AuthoredSpecSchema` mutation is single-field additive**: diff against
-  pre-S4 shows ONLY `fakeScript` field added; no other change.
+  `packages/pluto-v2-runtime/src/**` excluding
+  `packages/pluto-v2-runtime/src/loader/**` does NOT import `node:fs`,
+  `js-yaml`, or any other I/O library. Acceptance grep enforces this.
+- **No-ambient-randomness** in v2-runtime source (everything goes through
+  injected `idProvider` / `clockProvider`).
+- **S2 mutations are scoped**: diff of
+  `packages/pluto-v2-core/src/core/team-context.ts` is bounded to additive
+  `FakeScriptStepSchema` + `fakeScript` field; diff of
+  `packages/pluto-v2-core/src/core/run-kernel.ts` is bounded to additive
+  `seedRunStarted` method (and any imports that needs). No semantic edits
+  to existing surfaces. Reviewer enforces by reading the diff (NOT by
+  literal hunk count — imports may move).
+- **Kernel seed test coverage**: at least 2 new tests in
+  `packages/pluto-v2-core/__tests__/core/run-kernel.test.ts` for
+  `seedRunStarted` (happy path + reject when eventLog non-empty).
 - **Diff hygiene**:
   - `packages/pluto-v2-runtime/**` (new package)
-  - `packages/pluto-v2-core/src/core/team-context.ts` (single field add to
-    `AuthoredSpecSchema` only)
-  - `packages/pluto-v2-core/src/index.ts` (additive `fakeScript` re-export
-    if exposed)
+  - `packages/pluto-v2-core/src/core/team-context.ts` (additive scope only)
+  - `packages/pluto-v2-core/src/core/run-kernel.ts` (additive scope only)
+  - `packages/pluto-v2-core/src/index.ts` (additive re-exports for
+    `FakeScriptStepSchema` / `seedRunStarted` types if exposed)
   - root `pnpm-workspace.yaml` (add `packages/pluto-v2-runtime`)
   - root `.gitignore` (add `!packages/pluto-v2-runtime/` allow-list
     exception)
   - root `pnpm-lock.yaml` (regenerated)
-  - `packages/pluto-v2-core/__tests__/core/team-context.test.ts` if needed
-    for coverage on the new optional field
-  - `packages/pluto-v2-core/README.md` (additive note about new optional
-    field)
+  - `packages/pluto-v2-core/__tests__/core/team-context.test.ts` for
+    `fakeScript` coverage
+  - `packages/pluto-v2-core/__tests__/core/run-kernel.test.ts` for
+    `seedRunStarted` coverage (additive tests; existing tests untouched)
+  - `packages/pluto-v2-core/README.md` (additive note)
   - `docs/design-docs/v2-fake-runtime.md` (new)
   - `docs/plans/active/v2-rewrite.md` — S4 status row only.
   - **NO edits** to v1.6 `src/`, `tests/`, `evals/`, `docker/`, `playbooks/`,
-    `scenarios/`, `run-profiles/`, `agents/`, S2 core files (other than
-    team-context's single-field add), S3 projection files.
+    `scenarios/`, `run-profiles/`, `agents/`, other S2 core files, or S3
+    projection files.
 - **Branch is committed AND pushed**: `commit_and_push` step.
-- A reviewer sub-agent confirms (a) RuntimeAdapter interface is closed, (b)
-  fake-script schema is additive-only on AuthoredSpec, (c) loader is the
-  only I/O entry point, (d) parity test exercises a real captured fixture,
-  (e) S5 will be able to drop in a Paseo adapter without changing
-  `runScenario` or RuntimeAdapter.
+- A reviewer sub-agent confirms (a) RuntimeAdapter interface is concrete TS
+  with `init`/`step`/`done` semantics matching deliverable 3, (b)
+  `fakeScript` and `seedRunStarted` are strictly additive on the named
+  S2 files, (c) loader is the only I/O entry point, (d) parity test
+  exercises the captured fixture row-by-row per deliverable 5, (e)
+  translator covers deliverable 6 table row-by-row, (f) S5 will be able
+  to drop in a Paseo adapter implementing the same `RuntimeAdapter`
+  without changing `runScenario` or the kernel.
 
 ## Discovery gate (per slice)
 
