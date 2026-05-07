@@ -1237,7 +1237,7 @@ After each slice's remote return:
 | S0 | In progress | `main` | this plan + legacy banners |
 | S1 | Done | `main` @ `c9bc46f` | `packages/pluto-v2-core/` (closed schemas, declarative projections, replay-fixture format, versioning, 7 files / 32 tests, README, design doc) — local OpenCode acceptance review READY_TO_MERGE 2026-05-07 |
 | S2 | Done | `main` @ `41f82e9` | `packages/pluto-v2-core/src/core/` (SpecCompiler / RunState / RunStateReducer / RunEventLog + InMemoryEventLogStore / ProtocolValidator / Authority + closed matrix + transition graph + composeRequestKey / RunKernel + injected providers / 7 test files / 121 S2 tests). Local OpenCode @oracle acceptance review READY_TO_MERGE 9/9 PASS 2026-05-07 |
-| S3 | Not started | — | — |
+| S3 | Done | `main` @ `44594f8` | `packages/pluto-v2-core/src/projections/` (Task / Mailbox / Evidence executable reducers + replayAll/replayFromStore + 5 test files / 27 S3 tests; total package 19 files / 180 tests). basic-run fixture parity asserted both deep-equal AND stable-byte-equal. FinalReportProjectionView DEFERRED. Local OpenCode @oracle acceptance polish round 8/10→10/10 PASS 2026-05-07 |
 | S4 | Not started | — | — |
 | S5 | Not started | — | — |
 | S6 | Not started | — | — |
