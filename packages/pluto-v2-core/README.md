@@ -42,3 +42,16 @@ S2 boundaries:
 - No runtime adapter or CLI integration
 - No persistence beyond the in-memory `EventLogStore`
 - Determinism comes from injected id/clock providers
+
+## Projections and replay (S3)
+
+S3 adds pure executable projection reducers and replay helpers:
+
+- `taskReducer`, `initialTaskState`, `replayTask`
+- `mailboxReducer`, `initialMailboxState`, `replayMailbox`
+- `evidenceReducer`, `initialEvidenceState`, `replayEvidence`
+- `replayAll(events)` and `replayFromStore(store)`
+
+Projection replay is deterministic, in-memory only, and contains no runtime
+adapter, CLI, persistence, or parsing I/O. `FinalReportProjectionView` remains
+deferred; consumers compose the task, mailbox, and evidence views for v1.0.
