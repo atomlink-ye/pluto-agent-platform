@@ -2489,10 +2489,18 @@ based selection stays a v1.6-only feature reachable only via
    ```
 
    Detection rules (closed at v1.0):
-   - `capability_unavailable` if the error message matches:
-     - `paseo run failed with exit code` AND stderr contains
-       `command not found` / `ENOENT` / `not executable`
-     - OR `Failed to spawn paseo CLI`
+   - `capability_unavailable` if ANY of:
+     - The error is a raw `spawn ENOENT` (Node's
+       `child_process.spawn` fails before `paseo run` itself runs;
+       this is the case `tests/cli/run-exit-code-2.test.ts` exercises
+       via `PASEO_BIN=/definitely/missing/paseo`). Detect via
+       `(err as NodeJS.ErrnoException).code === 'ENOENT'` OR
+       `err.message.includes('spawn') && err.message.includes('ENOENT')`.
+     - The error message matches `paseo run failed with exit code`
+       AND stderr contains `command not found` / `ENOENT` /
+       `not executable` (the post-spawn missing-binary case).
+     - OR `Failed to spawn paseo CLI` / `EACCES` permission
+       failure on the paseo binary.
    - `spec_invalid` if Zod parse error from `loadAuthoredSpec`.
    - `run_not_completed` if `RunNotCompletedError`.
    - `agent_failed_to_start` if error message contains
