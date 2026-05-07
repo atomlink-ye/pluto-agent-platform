@@ -535,6 +535,226 @@ new workspace package legitimately stales the lockfile; allowing the install to
 regenerate it is the correct path. CI / future repeated runs may add
 `--frozen-lockfile` back once the lockfile is stable.
 
+## S2 — Phase 2: Pure core (next slice)
+
+### Outcome
+
+Implement the pure event-sourced core under `packages/pluto-v2-core/src/core/`,
+using only the schemas published by S1. The core accepts `ProtocolRequest`
+inputs, performs authority + schema validation, and produces `RunEvent`s
+(accepted or rejected) plus an updated `RunState`. **No projections, no replay
+machinery, no runtime adapter, no CLI, no I/O.** S3 owns projections; S4 owns
+runtime adapter wiring.
+
+### Concrete deliverables
+
+1. **Module layout under `packages/pluto-v2-core/src/core/`** (extends the
+   existing S1 package; do NOT introduce a new package):
+   - `core/spec-compiler.ts` — compiles a four-layer spec (Agent / Playbook /
+     Scenario / RunProfile authored objects) into a `TeamContext` value
+     consumed by the kernel. Loads the four-layer YAML / JSON authored
+     content; emits typed compile errors as a closed taxonomy.
+   - `core/team-context.ts` — `TeamContext` zod schema + types. Closed shape
+     covering: `runId`, `scenarioRef`, `runProfileRef`, declared `actors`
+     (closed ActorRef set for this run), `tasks` initial spec (optional),
+     `policies` (authority rules — see deliverable 4).
+   - `core/run-state.ts` — `RunState` zod schema + types. The current
+     in-memory projection of the event log, used **only** by the kernel for
+     authority validation; consumers use S3 projections, not `RunState`. Fields
+     include: `runId`, `sequence`, `status`, `tasks` (`Record<TaskId, TaskState>`
+     with state machine), `mailbox` (small head-only summary for idempotency
+     checking), `acceptedRequestKeys` (`Set<idempotencyKey>` for
+     `idempotency_replay` detection), `actors` (allowed ActorRef set).
+   - `core/run-state-reducer.ts` — pure `reduce(state, event): RunState`
+     function. Consumes only `RunEvent` (any kind, accepted or rejected).
+     Idempotent under replay. Total over the closed kind set; throws on
+     unexpected kind only as a defensive assertion.
+   - `core/run-event-log.ts` — append-only log abstraction with strict
+     monotonic `sequence` and an `appendOnly` invariant. Pluggable backing
+     store interface (`EventLogStore`); ships an in-memory implementation
+     for unit tests. NO file/database I/O. The kernel uses `EventLogStore`
+     to commit events and re-derive `RunState`.
+   - `core/protocol-validator.ts` — pure `validate(state, request, ctx):
+     ValidationResult`. Performs schema validation (already covered by
+     `ProtocolRequestSchema.parse`) plus the authority checks below.
+     Returns `{ ok: true, accept: AcceptedDecision } | { ok: false,
+     reject: RejectionReason, detail }`.
+   - `core/authority.ts` — closed authority predicates:
+     - `actorAuthorizedForIntent(actor, intent)` — maps each
+       `ProtocolRequest.intent` to the closed set of `ActorRef.kind` /
+       `role` allowed to issue it.
+     - `entityResolvable(state, request)` — confirms task/mailbox/artifact
+       refs in the payload exist in `RunState`.
+     - `transitionLegal(state, request)` — for `change_task_state`, enforces
+       the closed task-state transition graph (`queued → running → completed
+       | blocked | failed`; `running → blocked → running`; `* → cancelled`;
+       NO arbitrary transitions).
+     - `idempotencyClear(state, request)` — `(runId, actor, intent,
+       idempotencyKey)` not yet in `acceptedRequestKeys`.
+     - The S2 design doc fixes the closed authority matrix (which intent
+       requires which role); see deliverable 7.
+   - `core/run-kernel.ts` — single entry point.
+     `RunKernel.submit(request): { event: RunEvent }` — synchronous, pure
+     except for the side-effecting append-to-log. Steps: schema parse →
+     `protocol-validator.validate` → if accepted, construct accepted
+     `RunEvent` with server-assigned fields; if rejected, construct
+     `request_rejected` event. Append to log. Update `RunState`. Return
+     event.
+   - `core/index.ts` — re-exports the public core surface.
+
+2. **Authority matrix (binding for S2).**
+
+   For each `ProtocolRequest.intent`, list the closed `ActorRef.kind` /
+   `role` set authorized to issue it:
+
+   | intent | allowed actors |
+   |---|---|
+   | `append_mailbox_message` | manager, role=lead, role=planner, role=generator, role=evaluator |
+   | `create_task` | role=lead, role=planner |
+   | `change_task_state` | role=lead, role=generator, role=evaluator (each only for tasks they own); manager (any task) |
+   | `publish_artifact` | role=generator (intermediate + final), role=lead (final) |
+   | `complete_run` | manager only |
+
+   The mapping is encoded in `core/authority.ts` as a closed table, NOT
+   open-ended policy. Roles are checked via `ActorRef.role`; manager via
+   `ActorRef.kind === 'manager'`.
+
+3. **Task-state transition graph (binding).**
+
+   Closed graph encoded in `core/authority.ts`:
+
+   ```
+   queued    → running, cancelled
+   running   → completed, blocked, failed, cancelled
+   blocked   → running, cancelled
+   completed → (terminal)
+   failed    → (terminal)
+   cancelled → (terminal)
+   ```
+
+   Any transition outside this graph is `state_conflict`.
+
+4. **Pure-core invariants (encoded in tests).**
+
+   - **Determinism**: same `(initial state, request sequence) → same event
+     sequence`.
+   - **Idempotency under replay**: replaying the kernel's emitted event
+     stream through `run-state-reducer.reduce` from genesis yields the same
+     final `RunState`.
+   - **No I/O**: `core/**` MUST NOT import `node:fs`, `node:path`, `node:net`,
+     any HTTP/WS client, or anything outside the package itself. The
+     `EventLogStore` interface is the only abstraction-of-side-effect
+     boundary, and the in-memory implementation MUST be pure.
+   - **No runtime concepts**: no Paseo, no OpenCode, no helper-CLI, no
+     adapter, no CLI strings — same no-runtime-leak grep as S1, applied to
+     `core/**`.
+
+5. **Tests.**
+
+   Under `packages/pluto-v2-core/__tests__/core/`:
+
+   - `__tests__/core/spec-compiler.test.ts` — happy-path compile +
+     compile-error taxonomy (`unknown_actor`, `duplicate_task`,
+     `policy_invalid`, etc.; closed enum).
+   - `__tests__/core/run-state-reducer.test.ts` — reducer purity tests:
+     reduce twice = same state; reducer is total over the closed kind set.
+   - `__tests__/core/run-event-log.test.ts` — in-memory log append-only,
+     monotonic sequence, replay yields same events.
+   - `__tests__/core/protocol-validator.test.ts` — one parse-success +
+     authority-accept per intent (5); one rejection test per
+     `RejectionReason` (6). Tests use canonical fixture states
+     (re-using `test-fixtures/replay/basic-run.json` where applicable).
+   - `__tests__/core/authority.test.ts` — authority matrix table-driven
+     test: every `(actor, intent)` pair in the matrix accepts; every pair
+     OUTSIDE the matrix rejects with `actor_not_authorized`.
+   - `__tests__/core/transition-graph.test.ts` — task-state transition
+     graph table-driven: every legal transition accepts; every illegal
+     transition rejects with `state_conflict`.
+   - `__tests__/core/run-kernel.test.ts` — end-to-end kernel scenarios
+     producing event streams that match expected snapshots; covers all 5
+     intents + all 6 rejection reasons.
+
+6. **No-runtime-leak (S2 scope).**
+
+   Same grep as S1, applied to `packages/pluto-v2-core/src/core/**` and
+   `packages/pluto-v2-core/__tests__/core/**`. Zero matches expected.
+
+7. **Docs.**
+
+   - Update `packages/pluto-v2-core/README.md` to add a "Pure core (S2)"
+     section enumerating the new public surface.
+   - Add `docs/design-docs/v2-core.md` covering: `RunKernel` flow,
+     authority matrix (verbatim from deliverable 2), task-state transition
+     graph (verbatim from deliverable 3), `RunState` shape rationale,
+     EventLogStore interface, replay-equivalence proof sketch, what is
+     intentionally absent (projections, runtime adapter, CLI).
+
+### Out of scope for S2
+
+- Projections (`TaskProjectionView` / `MailboxProjectionView` /
+  `EvidenceProjectionView`) and replay tests against fixtures — those are S3.
+- Any runtime adapter (Fake or Paseo) — S4 / S5.
+- Any CLI changes — S6.
+- Any v1.6 file-lineage edits.
+- Persistence to disk / database / network — `EventLogStore` ships only the
+  in-memory implementation in S2; durable stores arrive when needed by S4+.
+- `FinalReportProjectionView` — still deferred until S3 reconsideration.
+
+### Process improvement (binding for S2 onward)
+
+The S1 remote run lost working-tree files between gate completion and the
+self-review loop, forcing the local manager to reconstruct from
+`artifacts/diff.patch`. To prevent recurrence:
+
+- The remote root manager MUST `git add -A && git commit` AS SOON AS gate
+  artifacts are written (i.e. immediately after `gate_test_suite` returns
+  zero), BEFORE the self-review loop begins.
+- The remote root manager MUST `git push origin <branch>` after the commit,
+  so the work is durable and addressable from the local manager regardless
+  of working-tree state.
+- The self-review loop runs against the committed branch, not the working
+  tree. The reviewer reads the diff via `git show` / `git diff main..HEAD`,
+  not via uncommitted files.
+- If the review loop produces fix rounds, each fix is a NEW commit on the
+  branch. The branch grows; nothing is reverted in working tree.
+
+This rule is enforced by the S2 acceptance bar's diff-hygiene check (the
+branch HEAD MUST be ahead of `main` by at least one commit at acceptance
+time).
+
+### S2 dependency graph
+
+S2 imports `@pluto/v2-core` schemas (S1) — already on `main`. S2 does NOT
+depend on S3, S4, or any later slice.
+
+### S2 acceptance bar
+
+- **Package-scoped typecheck**: `pnpm --filter @pluto/v2-core typecheck` clean.
+- **Package-scoped vitest**: `pnpm --filter @pluto/v2-core exec vitest run`
+  green; the new `core/` test suite ≥ 7 files; total package test count ≥
+  S1 baseline (32) + S2 additions; finishes < 90 s.
+- **Package-scoped build**: `pnpm --filter @pluto/v2-core build` clean.
+- **Root regression**: `pnpm test` green (single full-suite at slice end;
+  R7).
+- All authority predicates table-driven and prove closure over the matrix.
+- Reducer purity test passes (reduce-twice equality).
+- No-runtime-leak grep clean over `core/**`.
+- Diff hygiene: edits limited to `packages/pluto-v2-core/src/core/**`,
+  `packages/pluto-v2-core/__tests__/core/**`,
+  `packages/pluto-v2-core/src/index.ts` (additive re-exports for `core/*`),
+  `packages/pluto-v2-core/README.md` (additive S2 section),
+  `docs/design-docs/v2-core.md` (new), and the S2 row of the Status
+  tracker. NO edits to S1 schema files. NO edits to root `package.json` /
+  `pnpm-workspace.yaml` / `.gitignore` / lockfile. NO edits to `src/`,
+  `tests/` (root), `evals/`, `docker/`, `playbooks/`, `scenarios/`,
+  `run-profiles/`, `agents/`, or any v1.6 contract file.
+- **Branch must be committed and pushed**: at acceptance time, branch HEAD
+  is at least one commit ahead of `main`, and the remote review loop ran
+  against the committed branch (not uncommitted working-tree state).
+- A reviewer sub-agent confirms (a) authority matrix membership, (b) closed
+  task-state transition graph, (c) reducer purity, (d) no-I/O assertion,
+  (e) no-runtime-leak.
+
 ## Discovery gate (per slice)
 
 Before each slice is dispatched to remote implementation:
