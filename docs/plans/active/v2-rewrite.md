@@ -1419,8 +1419,9 @@ intent in `submit`. No second seed API.
 
    9-step algorithm:
    1. `teamContext = compileTeamContext(authored)` (S2).
-   2. `kernel = new RunKernel({ initialState: teamContext.initialRunState,
-      idProvider, clockProvider })`.
+   2. `kernel = new RunKernel({ initialState: initialState(teamContext),
+      idProvider, clockProvider })` (call the named `initialState` factory
+      function from `packages/pluto-v2-core/src/core/run-state.ts`).
    3. `kernel.seedRunStarted({ scenarioRef: teamContext.scenarioRef,
       runProfileRef: teamContext.runProfileRef,
       startedAt: clockProvider.nowIso() }, { correlationId })`.
@@ -1429,8 +1430,12 @@ intent in `submit`. No second seed API.
       - `view = kernelViewOf(kernel)`.
       - `step = adapter.step(adapterState, view)`.
       - If `step.kind === 'done'`: build a `complete_run` ProtocolRequest
-        with the system actor (`{ kind: 'system' }`) and `step.completion`
-        as payload, `kernel.submit(request, { correlationId })`, then
+        with the **manager actor** (`{ kind: 'manager' }`) — per
+        `AUTHORITY_MATRIX.complete_run = [{ kind: 'manager' }]` in
+        `packages/pluto-v2-core/src/core/authority.ts` only `manager` is
+        authorized; the manager actor must therefore be present in
+        `teamContext.declaredActors`. `step.completion` becomes the
+        request payload. `kernel.submit(request, { correlationId })`, then
         `adapterState = step.nextState`, break.
       - Else `step.kind === 'request'`: `kernel.submit(step.request,
         { correlationId })`, `adapterState = step.nextState`. (If the
@@ -1440,12 +1445,17 @@ intent in `submit`. No second seed API.
       synthetic `run_completed`).
    7. `events = kernel.eventLog.read(0, kernel.eventLog.head + 1)`.
    8. `views = replayAll(events)` (S3).
-   9. `evidencePacket = assembleEvidencePacket(views, kernel.state.runId)`.
+   9. `evidencePacket = assembleEvidencePacket(views, events,
+      kernel.state.runId)` — assembly takes the event stream too because
+      `replayAll` does not project artifacts (see deliverable 5).
 
-   The `complete_run` actor decision is binding: **system actor**, since
-   no concrete authored actor has run-completion authority in v1.0. The
-   protocol-validator already accepts `complete_run` from any actor;
-   policy-level restriction is outside S4 scope.
+   **Manager actor seeding:** the `compileTeamContext` step MUST include
+   `{ kind: 'manager' }` in `declaredActors` whenever the authored spec
+   targets `runScenario`. The fake adapter's hello-team scenario adds
+   `actor: 'manager'` to its `declaredActors` list explicitly. The
+   loader rejects authored specs whose `fakeScript` includes a
+   `complete_run` step but whose `declaredActors` does not include
+   `manager`.
 
 4. **Kernel API extension: `RunKernel.seedRunStarted` (S2 file edit).**
 
@@ -1490,7 +1500,10 @@ intent in `submit`. No second seed API.
 
    `EvidencePacketShape` is a v2-native Zod schema, NOT a verbatim copy of
    v1.6 evidence-packet.json. The v2 fields cover ONLY what current v2
-   projections produce:
+   projections produce, plus a flat `artifacts` list scanned directly
+   from the event stream (since `replayAll` in S3 does not include an
+   artifact projection — `packages/pluto-v2-core/src/projections/replay.ts`
+   only produces `task`, `mailbox`, `evidence` views):
 
    ```ts
    EvidencePacketShape = {
@@ -1505,12 +1518,20 @@ intent in `submit`. No second seed API.
      tasks: TaskProjectionView['view']['tasks'],
      mailboxMessages: ReadonlyArray<{
        messageId, fromActor, toActor, kind, body, sequence,
-     }>,
+     }>,                           // from mailbox.messages
      artifacts: ReadonlyArray<{
        artifactId, kind, mediaType, byteSize,
-     }>,
+     }>,                           // scanned from artifact_published events
    }
    ```
+
+   `assembleEvidencePacket(views, events, runId)` assembles by:
+   - Reading `views.evidence.run` for `status`, `summary`, `startedAt`,
+     `completedAt`.
+   - Copying `views.task.tasks` and `views.mailbox.messages` directly.
+   - Filtering `events` for `kind === 'artifact_published'` and projecting
+     `{ artifactId, kind, mediaType, byteSize }` per event.
+   - Reading `views.evidence.citations` directly.
 
    **v1.6 → v2 evidence-packet field normalization (binding parity table):**
 
@@ -1523,7 +1544,7 @@ intent in `submit`. No second seed API.
    | `summary` | strict equal | string-or-null equal |
    | `failureReason` | ignored | not produced by v2 in S4 |
    | `coordinationChannel` | ignored | out of v2 scope (deferred) |
-   | `artifactRefs` | normalized compare | compare `length` and the bag of `label` strings; v2 has `artifacts[*].kind` (final/intermediate) but no `path`/`label` text — use a side mapping `label → kind` only for the parity test |
+   | `artifactRefs` | normalized compare | the v1.6 packet's `artifactRefs` includes 1 `artifact` row sourced from the legacy `artifact_created` event, plus 3 derived metadata rows (`task_tree`, `status`, `final_report`) produced by v1.6 evidence generation, NOT from any event. The v2 translator produces v2 `artifact_published` events ONLY for legacy `artifact_created` rows. Parity asserts: the count of v2 `EvidencePacket.artifacts` (1) equals the count of legacy `artifact_created` events in `events.jsonl` (1); v2 packet does NOT attempt to reconstruct the `task_tree`/`status`/`final_report` rows |
    | `transitions` | ignored | derived from v1.6 task list / mailbox summary, not modeled in v2 projections at S4 |
    | `roleCitations` | ignored | out of v2 scope (deferred) |
    | `lineage` | ignored | runtime-helper-usage / file-lineage out of scope |
@@ -1544,26 +1565,37 @@ intent in `submit`. No second seed API.
 
    | legacy type | v2 disposition | rule |
    |---|---|---|
-   | `run_started` | **map** | → v2 `run_started`; copy `runId`, `scenarioRef`, `runProfileRef`, `startedAt` (synthesize defaults if missing) |
+   | `run_started` | **map** | → v2 `run_started`; legacy payload `scenario`/`runProfile` map to v2 `scenarioRef`/`runProfileRef`; `startedAt` from envelope `ts`. The translator emits a v2 `run_started` envelope with `actor: { kind: 'system' }`, `requestId: null`. |
    | `lead_started` | **drop** | subsumed by `run_started` (legacy duplicate) |
-   | `run_completed` | **map** | → v2 `run_completed`; copy `status`, `summary`, `completedAt` |
+   | `run_completed` | **map** | → v2 `run_completed`. Legacy payload only has `{ workerCount, playbookId }` — NO `status`, `summary`, `completedAt`. Synthesize defaults: `status = 'succeeded'` (legacy fixtures lacking explicit failure are treated as successful), `summary = null`, `completedAt = <envelope ts>`. The translator emits with `actor: { kind: 'manager' }`, `requestId = idProvider.next()` (deterministic from envelope `eventId`). |
    | `final_reconciliation_received` | **drop** | subsumed by `run_completed` |
    | `task_created` | **map** | → v2 `task_created`; copy `taskId`, `title`, `ownerActor`, `dependsOn` (default `[]`) |
    | `task_claimed` | **infer** | → v2 `task_state_changed` from `queued` → `running` |
    | `task_completed` | **infer** | → v2 `task_state_changed` from `running` → `completed` |
-   | `mailbox_message_queued` | **map** | → v2 `mailbox_message_appended`; this is the canonical legacy event for "message exists"; subsequent `mailbox_message_delivered` for the same messageId is dropped |
-   | `mailbox_message_delivered` | **drop** | already represented by `mailbox_message_queued` |
-   | `mailbox_message` | **drop** | legacy duplicate of queued/delivered |
+   | `mailbox_message` | **map** (with filter) | → v2 `mailbox_message_appended`. Legacy payload carries `messageId`, `to`, `from`, `kind`, `transportMessageId`. The legacy `kind` is mapped to v2 `MailboxMessageKindSchema` per the sub-table below; if the legacy kind has no v2 mapping, the row is **dropped**. `body` is synthesized as the empty string `""` because legacy `events.jsonl` does NOT carry message body (body lives in `mailbox.jsonl`, which is out of S4 scope). `fromActor` / `toActor` are reconstructed by `actorRef` lookup in TeamContext keyed on legacy `from` / `to` strings |
+   | `mailbox_message_queued` | **drop** | transport-only metadata (`transportMessageId`, `queueDepth`, `queuedAt`); no message semantics |
+   | `mailbox_message_delivered` | **drop** | transport-only metadata (`transportMessageId`, `deliveredAt`); no message semantics |
    | `lead_message` | **drop** | legacy lead-internal event; not a mailbox surface |
-   | `plan_approval_requested` | **map** | → v2 `mailbox_message_appended` with `kind: 'plan_approval_request'` |
-   | `plan_approval_responded` | **map** | → v2 `mailbox_message_appended` with `kind: 'plan_approval_response'` |
-   | `artifact_created` | **map** | → v2 `artifact_published`; copy `artifactId`; `kind: 'final'` if legacy event marks final, else `'intermediate'`; `mediaType` from legacy `mediaType` (default `text/markdown`); `byteSize` from legacy or computed from artifact body length |
+   | `plan_approval_requested` | **drop** | already represented by the corresponding `mailbox_message` row whose `kind` is `plan_approval_request` |
+   | `plan_approval_responded` | **drop** | already represented by the corresponding `mailbox_message` row whose `kind` is `plan_approval_response` (mapped to v2 `plan_approval_response`) |
+   | `artifact_created` | **map** | → v2 `artifact_published`; legacy payload carries only `path` and `playbookId` (NO `artifactId`, `mediaType`, `byteSize` in v1.6 fixture). Synthesize: `artifactId = idProvider.next()` deterministically seeded from legacy `eventId`; `kind = 'final'`; `mediaType = 'text/markdown'`; `byteSize = 0` (placeholder, since translator does NOT read the artifact file). The parity test compares ARTIFACT COUNT against the legacy `artifact_created` event count, NOT against the v1.6 packet's `artifactRefs.length` (which includes 3 derived metadata files: `task_tree`, `status`, `final_report` — produced by v1.6 evidence generation, not by `artifact_created` events). |
    | `worker_started` | **drop** | internal coordination, not a v2 surface |
    | `worker_completed` | **drop** | task state change is already represented by `task_completed` legacy event |
    | `worker_complete_received` | **drop** | internal coordination |
    | `spawn_request_received` | **drop** | internal coordination |
    | `spawn_request_executed` | **drop** | internal coordination |
    | `coordination_transcript_created` | **drop** | out of v2 scope (deferred) |
+
+   **Legacy mailbox-kind → v2 MailboxMessageKind sub-table:**
+
+   | legacy `payload.kind` | v2 disposition | rule |
+   |---|---|---|
+   | `text` | **drop** | no v2 closed-set equivalent |
+   | `plan_approval_request` | **map** → `plan_approval_request` | exact |
+   | `plan_approval_response` | **map** → `plan_approval_response` | exact |
+   | `worker_complete` | **map** → `completion` | semantic |
+   | `spawn_request` | **drop** | internal coordination |
+   | (any other) | **drop** | unknown legacy mailbox kind; closed |
 
    The translator preserves legacy event order. For `infer` rows, the
    translator carries minimal state (the last seen `state` per `taskId`)
@@ -1572,8 +1604,11 @@ intent in `submit`. No second seed API.
    `dependsOn = []`). The translator emits an envelope with v2-shaped
    `eventId`, `sequence`, `requestId` chosen deterministically from the
    legacy `eventId` (e.g. namespaced UUIDv5) so the parity test can run
-   without ambient randomness. Unknown legacy types are an explicit
-   error (closed grammar; new legacy types require a translator update).
+   without ambient randomness. Unknown legacy `type` values are an
+   explicit error (closed grammar; new legacy types require a translator
+   update). Unknown legacy mailbox `payload.kind` values are dropped per
+   the sub-table above (translator does not throw, since legacy mailbox
+   kinds may proliferate).
 
 7. **Scenario fixtures** (under `packages/pluto-v2-runtime/test-fixtures/`):
 
