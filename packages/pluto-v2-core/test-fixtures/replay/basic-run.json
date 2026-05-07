@@ -1,0 +1,160 @@
+{
+  "name": "basic-run",
+  "description": "Hand-written declarative replay fixture with task, mailbox, and evidence views.",
+  "schemaVersion": "1.0",
+  "events": [
+    {
+      "eventId": "00000000-0000-4000-8000-000000000001",
+      "runId": "run-1",
+      "sequence": 0,
+      "timestamp": "2026-05-07T00:00:00.000Z",
+      "schemaVersion": "1.0",
+      "actor": { "kind": "system" },
+      "requestId": null,
+      "causationId": null,
+      "correlationId": null,
+      "entityRef": { "kind": "run", "runId": "run-1" },
+      "outcome": "accepted",
+      "kind": "run_started",
+      "payload": {
+        "scenarioRef": "scenario/hello-team",
+        "runProfileRef": "fake-smoke",
+        "startedAt": "2026-05-07T00:00:00.000Z"
+      }
+    },
+    {
+      "eventId": "00000000-0000-4000-8000-000000000002",
+      "runId": "run-1",
+      "sequence": 1,
+      "timestamp": "2026-05-07T00:01:00.000Z",
+      "schemaVersion": "1.0",
+      "actor": { "kind": "manager" },
+      "requestId": "00000000-0000-4000-8000-000000000102",
+      "causationId": null,
+      "correlationId": "corr-1",
+      "entityRef": { "kind": "mailbox_message", "messageId": "msg-1" },
+      "outcome": "accepted",
+      "kind": "mailbox_message_appended",
+      "payload": {
+        "messageId": "msg-1",
+        "fromActor": { "kind": "manager" },
+        "toActor": { "kind": "broadcast" },
+        "kind": "plan",
+        "body": "Plan the implementation."
+      }
+    },
+    {
+      "eventId": "00000000-0000-4000-8000-000000000003",
+      "runId": "run-1",
+      "sequence": 2,
+      "timestamp": "2026-05-07T00:02:00.000Z",
+      "schemaVersion": "1.0",
+      "actor": { "kind": "manager" },
+      "requestId": "00000000-0000-4000-8000-000000000103",
+      "causationId": "00000000-0000-4000-8000-000000000002",
+      "correlationId": "corr-1",
+      "entityRef": { "kind": "task", "taskId": "task-1" },
+      "outcome": "accepted",
+      "kind": "task_created",
+      "payload": {
+        "taskId": "task-1",
+        "title": "Implement Lane D contracts",
+        "ownerActor": { "kind": "role", "role": "generator" },
+        "dependsOn": []
+      }
+    },
+    {
+      "eventId": "00000000-0000-4000-8000-000000000004",
+      "runId": "run-1",
+      "sequence": 3,
+      "timestamp": "2026-05-07T00:03:00.000Z",
+      "schemaVersion": "1.0",
+      "actor": { "kind": "role", "role": "generator" },
+      "requestId": "00000000-0000-4000-8000-000000000104",
+      "causationId": "00000000-0000-4000-8000-000000000003",
+      "correlationId": "corr-1",
+      "entityRef": { "kind": "task", "taskId": "task-1" },
+      "outcome": "accepted",
+      "kind": "task_state_changed",
+      "payload": {
+        "taskId": "task-1",
+        "from": "queued",
+        "to": "completed"
+      }
+    },
+    {
+      "eventId": "00000000-0000-4000-8000-000000000005",
+      "runId": "run-1",
+      "sequence": 4,
+      "timestamp": "2026-05-07T00:04:00.000Z",
+      "schemaVersion": "1.0",
+      "actor": { "kind": "manager" },
+      "requestId": "00000000-0000-4000-8000-000000000105",
+      "causationId": null,
+      "correlationId": "corr-1",
+      "entityRef": { "kind": "run", "runId": "run-1" },
+      "outcome": "accepted",
+      "kind": "run_completed",
+      "payload": {
+        "status": "succeeded",
+        "completedAt": "2026-05-07T00:04:00.000Z",
+        "summary": "Lane D contracts parsed."
+      }
+    }
+  ],
+  "expectedViews": {
+    "task": {
+      "tasks": {
+        "task-1": {
+          "title": "Implement Lane D contracts",
+          "ownerActor": { "kind": "role", "role": "generator" },
+          "state": "completed",
+          "dependsOn": [],
+          "history": [
+            {
+              "from": "queued",
+              "to": "completed",
+              "eventId": "00000000-0000-4000-8000-000000000004"
+            }
+          ]
+        }
+      }
+    },
+    "mailbox": {
+      "messages": [
+        {
+          "messageId": "msg-1",
+          "fromActor": { "kind": "manager" },
+          "toActor": { "kind": "broadcast" },
+          "kind": "plan",
+          "body": "Plan the implementation.",
+          "sequence": 1,
+          "eventId": "00000000-0000-4000-8000-000000000002"
+        }
+      ]
+    },
+    "evidence": {
+      "run": {
+        "runId": "run-1",
+        "status": "succeeded",
+        "startedAt": "2026-05-07T00:00:00.000Z",
+        "completedAt": "2026-05-07T00:04:00.000Z",
+        "summary": "Lane D contracts parsed."
+      },
+      "citations": [
+        {
+          "eventId": "00000000-0000-4000-8000-000000000001",
+          "sequence": 0,
+          "kind": "run_started",
+          "summary": "Run started."
+        },
+        {
+          "eventId": "00000000-0000-4000-8000-000000000005",
+          "sequence": 4,
+          "kind": "run_completed",
+          "summary": "Run completed."
+        }
+      ]
+    }
+  }
+}

@@ -587,7 +587,7 @@ After each slice's remote return:
 | Slice | State | Branch | Evidence |
 |---|---|---|---|
 | S0 | In progress | `main` | this plan + legacy banners |
-| S1 | Not started | TBD | TBD |
+| S1 | In progress | `pluto/v2/s1-contracts-c8ef58` | implementation complete; review blocked on committed patch artifact contract |
 | S2 | Not started | — | — |
 | S3 | Not started | — | — |
 | S4 | Not started | — | — |

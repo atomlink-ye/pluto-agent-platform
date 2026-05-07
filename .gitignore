@@ -9,7 +9,12 @@ dist/
 .opencode-serve.json
 .opencode-jobs.json
 .worktrees/
-packages/
+packages/*
+!packages/pluto-v2-core/
+!packages/pluto-v2-core/**
+packages/pluto-v2-core/node_modules/
+packages/pluto-v2-core/dist/
+packages/pluto-v2-core/.vitest-cache/
 
 .claude/
 artifacts/

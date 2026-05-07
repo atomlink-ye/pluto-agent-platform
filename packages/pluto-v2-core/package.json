@@ -1,0 +1,20 @@
+{
+  "name": "@pluto/v2-core",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Declarative Pluto v2 contract package.",
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "build": "tsc -p tsconfig.json",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.0",
+    "typescript": "^5.6.3",
+    "vitest": "^2.1.8"
+  }
+}
