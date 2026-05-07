@@ -1,5 +1,12 @@
 # Pluto Agent Platform — MVP-alpha
 
+> **Status (2026-05-07):** the v1.6 manager-run harness on `main` is now treated as a
+> **legacy reference prototype**. New development happens against the v2 rewrite plan at
+> [`docs/plans/active/v2-rewrite.md`](docs/plans/active/v2-rewrite.md). The v1.6 snapshot
+> at the time of freeze is preserved on the `legacy-v1.6-harness-prototype` branch on
+> `origin`. Until v2 lands, `pnpm pluto:run` and the documented runtime surfaces below
+> still reflect v1.6 behavior; they will be replaced once the v2 acceptance gates pass.
+
 Pluto is a **playbook-first agent harness**.
 
 > Select authored `Agent` + `Playbook` + `Scenario` + `RunProfile` → Pluto's

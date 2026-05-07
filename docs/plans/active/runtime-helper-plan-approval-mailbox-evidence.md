@@ -1,5 +1,10 @@
 # Plan: Runtime helper plan-approval mailbox evidence
 
+> **Status (2026-05-07):** this plan targets the v1.6 runtime helper / plan-approval
+> lineage, which is now frozen as legacy. The active replacement is
+> [`docs/plans/active/v2-rewrite.md`](v2-rewrite.md). Items here should not be re-opened
+> against `main` until the v2 acceptance gates land.
+
 ## Status
 
 Status: Active. Captured 2026-05-03 from the Slice A `pnpm smoke:live` run that surfaced the issue.
