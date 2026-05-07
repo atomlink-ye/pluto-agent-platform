@@ -12,9 +12,14 @@ dist/
 packages/*
 !packages/pluto-v2-core/
 !packages/pluto-v2-core/**
+!packages/pluto-v2-runtime/
+!packages/pluto-v2-runtime/**
 packages/pluto-v2-core/node_modules/
 packages/pluto-v2-core/dist/
 packages/pluto-v2-core/.vitest-cache/
+packages/pluto-v2-runtime/node_modules/
+packages/pluto-v2-runtime/dist/
+packages/pluto-v2-runtime/.vitest-cache/
 
 .claude/
 artifacts/

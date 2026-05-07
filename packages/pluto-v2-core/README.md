@@ -29,6 +29,7 @@ machinery, or CLI behavior.
 Public core surface:
 
 - `compile`, `AuthoredSpecSchema`, `TeamContextSchema`
+- `FakeScriptStepSchema` for deterministic fake-runtime authored steps
 - `RunStateSchema`, `initialState`, `composeRequestKey`
 - `reduce`
 - `EventLogStore`, `InMemoryEventLogStore`, `SequenceGapError`, `DuplicateAppendError`
@@ -42,6 +43,10 @@ S2 boundaries:
 - No runtime adapter or CLI integration
 - No persistence beyond the in-memory `EventLogStore`
 - Determinism comes from injected id/clock providers
+
+S4 adds two strictly additive extensions used by `@pluto/v2-runtime`: optional
+`fakeScript` authoring on `AuthoredSpecSchema`, and `RunKernel.seedRunStarted(...)`
+for the system-emitted `run_started` event.
 
 ## Projections and replay (S3)
 

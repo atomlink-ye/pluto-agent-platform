@@ -1,0 +1,64 @@
+{
+  "schemaVersion": "1.0",
+  "kind": "evidence_packet",
+  "runId": "run-hello-team",
+  "status": "succeeded",
+  "summary": "hello-team fake runtime completed",
+  "startedAt": "2026-05-07T00:00:00.000Z",
+  "completedAt": "2026-05-07T00:00:00.000Z",
+  "generatedAt": "2026-05-07T00:00:00.000Z",
+  "citations": [
+    {
+      "eventId": "00000000-0000-4000-8000-000000000001",
+      "kind": "run_started",
+      "text": "Run started.",
+      "observedAt": "2026-05-07T00:00:00.000Z"
+    },
+    {
+      "eventId": "00000000-0000-4000-8000-00000000000d",
+      "kind": "run_completed",
+      "text": "Run completed.",
+      "observedAt": "2026-05-07T00:00:00.000Z"
+    }
+  ],
+  "tasks": {
+    "00000000-0000-4000-8000-000000000004": {
+      "title": "Produce the hello-team artifact",
+      "ownerActor": {
+        "kind": "role",
+        "role": "generator"
+      },
+      "state": "completed",
+      "dependsOn": [],
+      "history": [
+        {
+          "from": "queued",
+          "to": "running",
+          "eventId": "00000000-0000-4000-8000-000000000006"
+        },
+        {
+          "from": "running",
+          "to": "completed",
+          "eventId": "00000000-0000-4000-8000-00000000000b"
+        }
+      ]
+    }
+  },
+  "mailboxMessages": [
+    {
+      "messageId": "00000000-0000-4000-8000-000000000009",
+      "fromActor": {
+        "kind": "role",
+        "role": "evaluator"
+      },
+      "toActor": {
+        "kind": "role",
+        "role": "lead"
+      },
+      "kind": "completion",
+      "body": "Artifact satisfies the hello-team requirement.",
+      "sequence": 3
+    }
+  ],
+  "artifacts": []
+}

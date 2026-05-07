@@ -10,10 +10,22 @@ import {
   type ActorRole,
 } from '../actor-ref.js';
 import {
+  AppendMailboxMessageRequestPayloadSchema,
+  ChangeTaskStateRequestPayloadSchema,
+  CompleteRunRequestPayloadSchema,
+  CreateTaskRequestPayloadSchema,
+  PublishArtifactRequestPayloadSchema,
   PROTOCOL_REQUEST_INTENT_VALUES,
   type ProtocolRequestIntent,
 } from '../protocol-request.js';
-import { TASK_STATE_VALUES, type TaskState } from '../run-event.js';
+import {
+  BroadcastActorRefSchema,
+  MailboxMessageKindSchema,
+  RunCompletedStatusSchema,
+  TASK_STATE_VALUES,
+  TaskStateSchema,
+  type TaskState,
+} from '../run-event.js';
 
 export const ACTOR_KEY_MANAGER = 'manager';
 export const ACTOR_KEY_SYSTEM = 'system';
@@ -167,6 +179,87 @@ export const AuthoredInitialTaskSchema = z
   })
   .strict();
 
+export const FakeScriptStepRefSchema = z
+  .object({
+    $ref: z.string().regex(/^events\[(0|[1-9]\d*)\]\.payload\.[A-Za-z0-9_.]+$/),
+  })
+  .strict();
+
+const fakeScriptRefOr = <TSchema extends z.ZodTypeAny>(schema: TSchema) =>
+  z.union([schema, FakeScriptStepRefSchema]);
+
+const FakeScriptAppendMailboxMessagePayloadSchema = AppendMailboxMessageRequestPayloadSchema.extend({
+  fromActor: fakeScriptRefOr(AuthoredActorRefSchema),
+  toActor: fakeScriptRefOr(z.union([AuthoredActorRefSchema, BroadcastActorRefSchema])),
+  kind: fakeScriptRefOr(MailboxMessageKindSchema),
+  body: fakeScriptRefOr(z.string()),
+});
+
+const FakeScriptCreateTaskPayloadSchema = CreateTaskRequestPayloadSchema.extend({
+  title: fakeScriptRefOr(z.string()),
+  ownerActor: z.union([fakeScriptRefOr(AuthoredActorRefSchema), z.null()]),
+  dependsOn: z.array(fakeScriptRefOr(z.string())),
+});
+
+const FakeScriptChangeTaskStatePayloadSchema = ChangeTaskStateRequestPayloadSchema.extend({
+  taskId: fakeScriptRefOr(z.string()),
+  to: fakeScriptRefOr(TaskStateSchema),
+});
+
+const FakeScriptPublishArtifactPayloadSchema = PublishArtifactRequestPayloadSchema.extend({
+  kind: fakeScriptRefOr(PublishArtifactRequestPayloadSchema.shape.kind),
+  mediaType: fakeScriptRefOr(z.string()),
+  byteSize: fakeScriptRefOr(z.number().int().nonnegative()),
+});
+
+const FakeScriptCompleteRunPayloadSchema = CompleteRunRequestPayloadSchema.extend({
+  status: fakeScriptRefOr(RunCompletedStatusSchema),
+  summary: z.union([fakeScriptRefOr(z.string()), z.null()]),
+});
+
+export const FakeScriptStepSchema = z.discriminatedUnion('intent', [
+  z
+    .object({
+      actor: AuthoredActorRefSchema,
+      intent: z.literal('append_mailbox_message'),
+      payload: FakeScriptAppendMailboxMessagePayloadSchema,
+      idempotencyKey: z.string().nullable().optional(),
+    })
+    .strict(),
+  z
+    .object({
+      actor: AuthoredActorRefSchema,
+      intent: z.literal('create_task'),
+      payload: FakeScriptCreateTaskPayloadSchema,
+      idempotencyKey: z.string().nullable().optional(),
+    })
+    .strict(),
+  z
+    .object({
+      actor: AuthoredActorRefSchema,
+      intent: z.literal('change_task_state'),
+      payload: FakeScriptChangeTaskStatePayloadSchema,
+      idempotencyKey: z.string().nullable().optional(),
+    })
+    .strict(),
+  z
+    .object({
+      actor: AuthoredActorRefSchema,
+      intent: z.literal('publish_artifact'),
+      payload: FakeScriptPublishArtifactPayloadSchema,
+      idempotencyKey: z.string().nullable().optional(),
+    })
+    .strict(),
+  z
+    .object({
+      actor: AuthoredActorRefSchema,
+      intent: z.literal('complete_run'),
+      payload: FakeScriptCompleteRunPayloadSchema,
+      idempotencyKey: z.string().nullable().optional(),
+    })
+    .strict(),
+]);
+
 export const AuthoredSpecSchema = z
   .object({
     runId: z.string(),
@@ -175,6 +268,7 @@ export const AuthoredSpecSchema = z
     actors: z.record(AuthoredActorRefSchema),
     declaredActors: z.array(z.string()),
     initialTasks: z.array(AuthoredInitialTaskSchema).optional(),
+    fakeScript: z.array(FakeScriptStepSchema).optional(),
     policy: z.record(z.array(AuthoredActorMatcherSchema)).optional(),
   })
   .strict();
@@ -188,5 +282,7 @@ export type TeamContext = z.infer<typeof TeamContextSchema>;
 export type AuthoredActorRef = z.infer<typeof AuthoredActorRefSchema>;
 export type AuthoredActorMatcher = z.infer<typeof AuthoredActorMatcherSchema>;
 export type AuthoredInitialTask = z.infer<typeof AuthoredInitialTaskSchema>;
+export type FakeScriptStepRef = z.infer<typeof FakeScriptStepRefSchema>;
+export type FakeScriptStep = z.infer<typeof FakeScriptStepSchema>;
 export type AuthoredSpec = z.infer<typeof AuthoredSpecSchema>;
 export type AuthorityPolicyIntent = ProtocolRequestIntent;

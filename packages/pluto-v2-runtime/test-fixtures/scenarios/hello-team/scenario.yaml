@@ -1,0 +1,75 @@
+runId: run-hello-team
+scenarioRef: scenario/hello-team
+runProfileRef: fake-smoke
+actors:
+  manager:
+    kind: manager
+  lead:
+    kind: role
+    role: lead
+  planner:
+    kind: role
+    role: planner
+  generator:
+    kind: role
+    role: generator
+  evaluator:
+    kind: role
+    role: evaluator
+declaredActors:
+  - manager
+  - lead
+  - planner
+  - generator
+  - evaluator
+fakeScript:
+  - actor:
+      kind: role
+      role: planner
+    intent: create_task
+    payload:
+      title: Produce the hello-team artifact
+      ownerActor:
+        kind: role
+        role: generator
+      dependsOn: []
+    idempotencyKey: fake-create-task
+  - actor:
+      kind: role
+      role: generator
+    intent: change_task_state
+    payload:
+      taskId:
+        $ref: events[0].payload.taskId
+      to: running
+    idempotencyKey: fake-start-task
+  - actor:
+      kind: role
+      role: evaluator
+    intent: append_mailbox_message
+    payload:
+      fromActor:
+        kind: role
+        role: evaluator
+      toActor:
+        kind: role
+        role: lead
+      kind: completion
+      body: Artifact satisfies the hello-team requirement.
+    idempotencyKey: fake-mailbox-completion
+  - actor:
+      kind: role
+      role: generator
+    intent: change_task_state
+    payload:
+      taskId:
+        $ref: events[0].payload.taskId
+      to: completed
+    idempotencyKey: fake-complete-task
+  - actor:
+      kind: manager
+    intent: complete_run
+    payload:
+      status: succeeded
+      summary: hello-team fake runtime completed
+    idempotencyKey: fake-complete-run

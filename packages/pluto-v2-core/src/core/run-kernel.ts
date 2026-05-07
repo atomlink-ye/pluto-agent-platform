@@ -2,7 +2,13 @@ import { z } from 'zod';
 
 import { ActorRefSchema } from '../actor-ref.js';
 import { PROTOCOL_REQUEST_INTENT_VALUES, ProtocolRequestSchema, type ProtocolRequest } from '../protocol-request.js';
-import { RequestRejectedEventSchema, RunEventSchema, type RunEvent } from '../run-event.js';
+import {
+  RequestRejectedEventSchema,
+  RunEventSchema,
+  RunStartedEventSchema,
+  type RunEvent,
+  type RunStartedEvent,
+} from '../run-event.js';
 import { SCHEMA_VERSION } from '../versioning.js';
 
 import { composeRequestKey } from './authority.js';
@@ -150,6 +156,40 @@ export class RunKernel {
 
   get state(): RunState {
     return this.#state;
+  }
+
+  seedRunStarted(
+    payload: {
+      scenarioRef: string;
+      runProfileRef: string;
+      startedAt: string;
+    },
+    ctx?: RunKernelSubmitContext,
+  ): { event: RunStartedEvent } {
+    if (this.#eventLog.head >= 0) {
+      throw new Error('run_started can only be seeded into an empty event log');
+    }
+
+    const event = RunStartedEventSchema.parse({
+      eventId: this.#idProvider.next(),
+      runId: this.#state.runId,
+      sequence: this.#state.sequence + 1,
+      timestamp: this.#clockProvider.nowIso(),
+      schemaVersion: SCHEMA_VERSION,
+      actor: { kind: 'system' },
+      requestId: null,
+      causationId: null,
+      correlationId: correlationIdFor(ctx),
+      entityRef: { kind: 'run', runId: this.#state.runId },
+      outcome: 'accepted',
+      kind: 'run_started',
+      payload,
+    });
+
+    this.#eventLog.append(event);
+    this.#state = reduce(this.#state, event);
+
+    return { event };
   }
 
   submit(rawRequest: unknown, ctx?: RunKernelSubmitContext): { event: RunEvent } {

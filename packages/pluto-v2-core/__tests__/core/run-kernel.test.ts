@@ -146,6 +146,60 @@ describe('RunKernel', () => {
     });
   });
 
+  it('seeds run_started as the first event and updates state to running', () => {
+    const kernel = createKernel();
+
+    const { event } = kernel.seedRunStarted(
+      {
+        scenarioRef: 'scenario/hello-team',
+        runProfileRef: 'fake-smoke',
+        startedAt: '2026-05-07T00:00:00.000Z',
+      },
+      { correlationId: 'corr-seed' },
+    );
+
+    expect(event).toEqual({
+      eventId: uuid('1'),
+      runId: 'run-1',
+      sequence: 0,
+      timestamp: '2026-05-07T00:00:00.000Z',
+      schemaVersion: '1.0',
+      actor: { kind: 'system' },
+      requestId: null,
+      causationId: null,
+      correlationId: 'corr-seed',
+      entityRef: { kind: 'run', runId: 'run-1' },
+      outcome: 'accepted',
+      kind: 'run_started',
+      payload: {
+        scenarioRef: 'scenario/hello-team',
+        runProfileRef: 'fake-smoke',
+        startedAt: '2026-05-07T00:00:00.000Z',
+      },
+    });
+    expect(kernel.state.status).toBe('running');
+    expect(kernel.state.sequence).toBe(0);
+    expect(kernel.eventLog.read()).toEqual([event]);
+  });
+
+  it('rejects seeding run_started after the event log is non-empty', () => {
+    const kernel = createKernel();
+
+    kernel.seedRunStarted({
+      scenarioRef: 'scenario/hello-team',
+      runProfileRef: 'fake-smoke',
+      startedAt: '2026-05-07T00:00:00.000Z',
+    });
+
+    expect(() =>
+      kernel.seedRunStarted({
+        scenarioRef: 'scenario/hello-team',
+        runProfileRef: 'fake-smoke',
+        startedAt: '2026-05-07T00:00:00.000Z',
+      }),
+    ).toThrow(/empty event log/);
+  });
+
   it('accepts create_task requests with deterministic providers', () => {
     const kernel = createKernel();
 
