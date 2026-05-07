@@ -987,7 +987,7 @@ After each slice's remote return:
 |---|---|---|---|
 | S0 | In progress | `main` | this plan + legacy banners |
 | S1 | Done | `main` @ `c9bc46f` | `packages/pluto-v2-core/` (closed schemas, declarative projections, replay-fixture format, versioning, 7 files / 32 tests, README, design doc) — local OpenCode acceptance review READY_TO_MERGE 2026-05-07 |
-| S2 | Not started | — | — |
+| S2 | Done | `main` @ `41f82e9` | `packages/pluto-v2-core/src/core/` (SpecCompiler / RunState / RunStateReducer / RunEventLog + InMemoryEventLogStore / ProtocolValidator / Authority + closed matrix + transition graph + composeRequestKey / RunKernel + injected providers / 7 test files / 121 S2 tests). Local OpenCode @oracle acceptance review READY_TO_MERGE 9/9 PASS 2026-05-07 |
 | S3 | Not started | — | — |
 | S4 | Not started | — | — |
 | S5 | Not started | — | — |
