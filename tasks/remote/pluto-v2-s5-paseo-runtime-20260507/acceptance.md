@@ -378,18 +378,25 @@ Expected: zero changes.
 - `packages/pluto-v2-runtime/src/adapters/paseo/**`
 - `packages/pluto-v2-runtime/__tests__/adapters/paseo/**`
 - `packages/pluto-v2-runtime/test-fixtures/scenarios/hello-team-paseo-mock/**`
+- `packages/pluto-v2-runtime/scripts/smoke-live.ts`
 - `tests/fixtures/live-smoke/<newRunId>/**`
 - `packages/pluto-v2-runtime/src/index.ts` (additive re-exports)
 - `package.json` (additive `smoke:live` script if missing)
 - `pnpm-lock.yaml` (only if root `package.json` changes)
 - `docs/design-docs/v2-paseo-adapter.md` (new)
+- `docs/plans/active/v2-rewrite.md` — additive contract refinements
+  to the S5 section that surface during implementation (e.g. fields
+  the closed surface needs but the discovery review missed) AND the
+  S5 status row update at merge time.
+- `tasks/remote/pluto-v2-s5-paseo-runtime-20260507/**` — bundle docs
+  (HANDOFF, prompt, acceptance, context-index, env-contract,
+  commands.sh, artifacts/) iterate during the slice; the bundle is
+  source-controlled and committed alongside the implementation.
 
 NO edits to: v1.6 `src/`, `tests/`, `evals/`, `docker/`, `playbooks/`,
 `scenarios/`, `run-profiles/`, `agents/`; ANY file under
 `packages/pluto-v2-core/`; ANY file under
-`packages/pluto-v2-runtime/src/{runtime,loader,evidence,legacy,adapters/fake}/`;
-`docs/plans/active/v2-rewrite.md` (S5 status row updated by local
-manager post-merge).
+`packages/pluto-v2-runtime/src/{runtime,loader,evidence,legacy,adapters/fake}/`.
 
 ### Gate 12 — Branch is committed AND pushed (S5 binding)
 

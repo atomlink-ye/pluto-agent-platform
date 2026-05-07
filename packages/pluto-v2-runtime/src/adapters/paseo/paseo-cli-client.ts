@@ -4,6 +4,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Readable } from 'node:stream';
 
+export type PaseoLabel = `${string}=${string}`;
+
 export interface PaseoAgentSpec {
   readonly provider: string;
   readonly model: string;
@@ -11,7 +13,7 @@ export interface PaseoAgentSpec {
   readonly thinking?: string;
   readonly title: string;
   readonly initialPrompt: string;
-  readonly labels?: ReadonlyArray<string>;
+  readonly labels?: ReadonlyArray<PaseoLabel>;
   readonly cwd?: string;
 }
 

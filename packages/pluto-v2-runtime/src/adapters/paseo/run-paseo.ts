@@ -20,6 +20,8 @@ import { kernelViewOf, RunNotCompletedError } from '../../runtime/runner.js';
 import type { KernelView } from '../../runtime/kernel-view.js';
 import type { RuntimeAdapter } from '../../runtime/runtime-adapter.js';
 
+export type PaseoLabel = `${string}=${string}`;
+
 export interface PaseoAgentSpec {
   readonly provider: string;
   readonly model: string;
@@ -27,7 +29,7 @@ export interface PaseoAgentSpec {
   readonly thinking?: string;
   readonly title: string;
   readonly initialPrompt: string;
-  readonly labels?: ReadonlyArray<string>;
+  readonly labels?: ReadonlyArray<PaseoLabel>;
   readonly cwd?: string;
 }
 
