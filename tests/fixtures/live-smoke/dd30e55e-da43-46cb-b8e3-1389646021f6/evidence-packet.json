@@ -1,0 +1,147 @@
+{
+  "schemaVersion": "1.0",
+  "kind": "evidence_packet",
+  "runId": "dd30e55e-da43-46cb-b8e3-1389646021f6",
+  "status": "succeeded",
+  "summary": "Deterministic paseo phase plan completed.",
+  "startedAt": "2026-05-07T15:07:00.538Z",
+  "completedAt": "2026-05-07T15:08:57.072Z",
+  "generatedAt": "2026-05-07T15:08:57.072Z",
+  "citations": [
+    {
+      "eventId": "7fc4ee0a-0c5d-4738-a345-f1b20fce68c0",
+      "kind": "run_started",
+      "text": "Run started.",
+      "observedAt": "2026-05-07T15:07:00.539Z"
+    },
+    {
+      "eventId": "a6e810bf-d480-4a80-8b2c-2bd1771b3dd2",
+      "kind": "run_completed",
+      "text": "Run completed.",
+      "observedAt": "2026-05-07T15:08:57.072Z"
+    }
+  ],
+  "tasks": {
+    "e0cedfea-2d67-47dc-a934-ec85d5c5c50d": {
+      "title": "Implement the requested runtime change",
+      "ownerActor": {
+        "kind": "role",
+        "role": "generator"
+      },
+      "state": "completed",
+      "dependsOn": [],
+      "history": [
+        {
+          "from": "queued",
+          "to": "running",
+          "eventId": "af4b74c6-a302-411e-ad2e-782be9ec42b1"
+        },
+        {
+          "from": "running",
+          "to": "completed",
+          "eventId": "119fddf2-78ea-4d2f-b776-bbf5b310cf66"
+        }
+      ]
+    }
+  },
+  "mailboxMessages": [
+    {
+      "messageId": "d7671f5e-f783-4bba-ba0d-db4933dc45df",
+      "fromActor": {
+        "kind": "manager"
+      },
+      "toActor": {
+        "kind": "role",
+        "role": "planner"
+      },
+      "kind": "final",
+      "body": "Directive parse failure: directive JSON parse failed: Unexpected token 'b', \"block and \"... is not valid JSON. Return exactly one fenced json block of the expected kind.",
+      "sequence": 1
+    },
+    {
+      "messageId": "795ef0c7-2019-40fe-ac91-dc63c24347c0",
+      "fromActor": {
+        "kind": "manager"
+      },
+      "toActor": {
+        "kind": "role",
+        "role": "generator"
+      },
+      "kind": "final",
+      "body": "Directive parse failure: directive JSON parse failed: Unexpected token 'b', \"block and \"... is not valid JSON. Return exactly one fenced json block of the expected kind.",
+      "sequence": 3
+    },
+    {
+      "messageId": "ed13d8b9-849e-4e54-8003-f8598b32c3f7",
+      "fromActor": {
+        "kind": "manager"
+      },
+      "toActor": {
+        "kind": "role",
+        "role": "generator"
+      },
+      "kind": "final",
+      "body": "Directive parse failure: directive JSON parse failed: Unexpected token 'b', \"block and \"... is not valid JSON. Return exactly one fenced json block of the expected kind.",
+      "sequence": 5
+    },
+    {
+      "messageId": "ef110b81-d8f1-4560-a358-e0755804d2e3",
+      "fromActor": {
+        "kind": "manager"
+      },
+      "toActor": {
+        "kind": "role",
+        "role": "evaluator"
+      },
+      "kind": "final",
+      "body": "Directive parse failure: directive JSON parse failed: Unexpected token 'b', \"block and \"... is not valid JSON. Return exactly one fenced json block of the expected kind.",
+      "sequence": 7
+    },
+    {
+      "messageId": "4745897c-b6ee-4e28-84e4-25a5bc8afd7b",
+      "fromActor": {
+        "kind": "role",
+        "role": "evaluator"
+      },
+      "toActor": {
+        "kind": "manager"
+      },
+      "kind": "final",
+      "body": "Artifact reviewed. Ready to complete the run.",
+      "sequence": 8
+    },
+    {
+      "messageId": "d42aad57-c7fa-4a48-b98a-8edc335ea05d",
+      "fromActor": {
+        "kind": "manager"
+      },
+      "toActor": {
+        "kind": "role",
+        "role": "generator"
+      },
+      "kind": "final",
+      "body": "Directive parse failure: directive JSON parse failed: Unexpected token 'b', \"block and \"... is not valid JSON. Return exactly one fenced json block of the expected kind.",
+      "sequence": 9
+    },
+    {
+      "messageId": "ce3dae38-1995-433b-8ad1-abd037b756e1",
+      "fromActor": {
+        "kind": "manager"
+      },
+      "toActor": {
+        "kind": "manager"
+      },
+      "kind": "final",
+      "body": "Directive parse failure: directive JSON parse failed: Unexpected token 'b', \"block and \"... is not valid JSON. Return exactly one fenced json block of the expected kind.",
+      "sequence": 11
+    }
+  ],
+  "artifacts": [
+    {
+      "artifactId": "99b442c5-a928-44f3-a60c-7a2897ba04a6",
+      "kind": "final",
+      "mediaType": "text/markdown",
+      "byteSize": 256
+    }
+  ]
+}

@@ -1,0 +1,282 @@
+{
+  "runId": "dd30e55e-da43-46cb-b8e3-1389646021f6",
+  "scenarioRef": "scenario/hello-team-real",
+  "runProfileRef": "paseo-live-smoke",
+  "status": "succeeded",
+  "finalSummary": "Deterministic paseo phase plan completed.",
+  "totalTurns": 12,
+  "totalInputTokens": 0,
+  "totalOutputTokens": 0,
+  "totalTokens": 0,
+  "totalCostUsd": 0,
+  "byActor": {
+    "role:planner": {
+      "turns": 2,
+      "inputTokens": 0,
+      "outputTokens": 0,
+      "totalTokens": 0,
+      "costUsd": 0,
+      "provider": "opencode",
+      "model": "openai/gpt-5.4-mini",
+      "mode": "build",
+      "thinking": null
+    },
+    "role:generator": {
+      "turns": 6,
+      "inputTokens": 0,
+      "outputTokens": 0,
+      "totalTokens": 0,
+      "costUsd": 0,
+      "provider": "opencode",
+      "model": "openai/gpt-5.4-mini",
+      "mode": "build",
+      "thinking": null
+    },
+    "role:evaluator": {
+      "turns": 2,
+      "inputTokens": 0,
+      "outputTokens": 0,
+      "totalTokens": 0,
+      "costUsd": 0,
+      "provider": "opencode",
+      "model": "openai/gpt-5.4-mini",
+      "mode": "build",
+      "thinking": null
+    },
+    "manager": {
+      "turns": 2,
+      "inputTokens": 0,
+      "outputTokens": 0,
+      "totalTokens": 0,
+      "costUsd": 0,
+      "provider": "opencode",
+      "model": "openai/gpt-5.4-mini",
+      "mode": "build",
+      "thinking": null
+    }
+  },
+  "perTurn": [
+    {
+      "turnIndex": 0,
+      "actor": {
+        "kind": "role",
+        "role": "planner"
+      },
+      "actorKey": "role:planner",
+      "provider": "opencode",
+      "model": "openai/gpt-5.4-mini",
+      "mode": "build",
+      "thinking": null,
+      "inputTokens": 0,
+      "outputTokens": 0,
+      "totalTokens": 0,
+      "costUsd": 0,
+      "waitExitCode": 0
+    },
+    {
+      "turnIndex": 0,
+      "actor": {
+        "kind": "role",
+        "role": "planner"
+      },
+      "actorKey": "role:planner",
+      "provider": "opencode",
+      "model": "openai/gpt-5.4-mini",
+      "mode": "build",
+      "thinking": null,
+      "inputTokens": 0,
+      "outputTokens": 0,
+      "totalTokens": 0,
+      "costUsd": 0,
+      "waitExitCode": 0
+    },
+    {
+      "turnIndex": 1,
+      "actor": {
+        "kind": "role",
+        "role": "generator"
+      },
+      "actorKey": "role:generator",
+      "provider": "opencode",
+      "model": "openai/gpt-5.4-mini",
+      "mode": "build",
+      "thinking": null,
+      "inputTokens": 0,
+      "outputTokens": 0,
+      "totalTokens": 0,
+      "costUsd": 0,
+      "waitExitCode": 0
+    },
+    {
+      "turnIndex": 1,
+      "actor": {
+        "kind": "role",
+        "role": "generator"
+      },
+      "actorKey": "role:generator",
+      "provider": "opencode",
+      "model": "openai/gpt-5.4-mini",
+      "mode": "build",
+      "thinking": null,
+      "inputTokens": 0,
+      "outputTokens": 0,
+      "totalTokens": 0,
+      "costUsd": 0,
+      "waitExitCode": 0
+    },
+    {
+      "turnIndex": 2,
+      "actor": {
+        "kind": "role",
+        "role": "generator"
+      },
+      "actorKey": "role:generator",
+      "provider": "opencode",
+      "model": "openai/gpt-5.4-mini",
+      "mode": "build",
+      "thinking": null,
+      "inputTokens": 0,
+      "outputTokens": 0,
+      "totalTokens": 0,
+      "costUsd": 0,
+      "waitExitCode": 0
+    },
+    {
+      "turnIndex": 2,
+      "actor": {
+        "kind": "role",
+        "role": "generator"
+      },
+      "actorKey": "role:generator",
+      "provider": "opencode",
+      "model": "openai/gpt-5.4-mini",
+      "mode": "build",
+      "thinking": null,
+      "inputTokens": 0,
+      "outputTokens": 0,
+      "totalTokens": 0,
+      "costUsd": 0,
+      "waitExitCode": 0
+    },
+    {
+      "turnIndex": 3,
+      "actor": {
+        "kind": "role",
+        "role": "evaluator"
+      },
+      "actorKey": "role:evaluator",
+      "provider": "opencode",
+      "model": "openai/gpt-5.4-mini",
+      "mode": "build",
+      "thinking": null,
+      "inputTokens": 0,
+      "outputTokens": 0,
+      "totalTokens": 0,
+      "costUsd": 0,
+      "waitExitCode": 0
+    },
+    {
+      "turnIndex": 3,
+      "actor": {
+        "kind": "role",
+        "role": "evaluator"
+      },
+      "actorKey": "role:evaluator",
+      "provider": "opencode",
+      "model": "openai/gpt-5.4-mini",
+      "mode": "build",
+      "thinking": null,
+      "inputTokens": 0,
+      "outputTokens": 0,
+      "totalTokens": 0,
+      "costUsd": 0,
+      "waitExitCode": 0
+    },
+    {
+      "turnIndex": 4,
+      "actor": {
+        "kind": "role",
+        "role": "generator"
+      },
+      "actorKey": "role:generator",
+      "provider": "opencode",
+      "model": "openai/gpt-5.4-mini",
+      "mode": "build",
+      "thinking": null,
+      "inputTokens": 0,
+      "outputTokens": 0,
+      "totalTokens": 0,
+      "costUsd": 0,
+      "waitExitCode": 0
+    },
+    {
+      "turnIndex": 4,
+      "actor": {
+        "kind": "role",
+        "role": "generator"
+      },
+      "actorKey": "role:generator",
+      "provider": "opencode",
+      "model": "openai/gpt-5.4-mini",
+      "mode": "build",
+      "thinking": null,
+      "inputTokens": 0,
+      "outputTokens": 0,
+      "totalTokens": 0,
+      "costUsd": 0,
+      "waitExitCode": 0
+    },
+    {
+      "turnIndex": 5,
+      "actor": {
+        "kind": "manager"
+      },
+      "actorKey": "manager",
+      "provider": "opencode",
+      "model": "openai/gpt-5.4-mini",
+      "mode": "build",
+      "thinking": null,
+      "inputTokens": 0,
+      "outputTokens": 0,
+      "totalTokens": 0,
+      "costUsd": 0,
+      "waitExitCode": 0
+    },
+    {
+      "turnIndex": 5,
+      "actor": {
+        "kind": "manager"
+      },
+      "actorKey": "manager",
+      "provider": "opencode",
+      "model": "openai/gpt-5.4-mini",
+      "mode": "build",
+      "thinking": null,
+      "inputTokens": 0,
+      "outputTokens": 0,
+      "totalTokens": 0,
+      "costUsd": 0,
+      "waitExitCode": 0
+    }
+  ],
+  "byModel": {
+    "opencode:openai/gpt-5.4-mini": {
+      "provider": "opencode",
+      "model": "openai/gpt-5.4-mini",
+      "mode": "build",
+      "thinking": null,
+      "turns": 12,
+      "inputTokens": 0,
+      "outputTokens": 0,
+      "totalTokens": 0,
+      "costUsd": 0,
+      "actors": [
+        "role:planner",
+        "role:generator",
+        "role:evaluator",
+        "manager"
+      ]
+    }
+  },
+  "evidencePacketPath": "tests/fixtures/live-smoke/dd30e55e-da43-46cb-b8e3-1389646021f6/evidence-packet.json"
+}

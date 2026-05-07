@@ -52,16 +52,18 @@ const MAX_TURNS = 20;
 const MAX_COST_USD = 0.5;
 const TRANSCRIPT_TAIL_LINES = 200;
 const DEFAULT_PROVIDER = 'opencode';
-const DEFAULT_MODEL = 'openai/gpt-4o-mini';
+const DEFAULT_MODEL = 'openai/gpt-5.4-mini';
 const DEFAULT_MODE = 'build';
 const DEFAULT_WAIT_TIMEOUT_SEC = 600;
 
-function actorKey(actor: ActorRef): string {
+function actorKey(actor: ActorRef | { readonly kind: 'broadcast' }): string {
   switch (actor.kind) {
     case 'manager':
       return 'manager';
     case 'system':
       return 'system';
+    case 'broadcast':
+      return 'broadcast';
     case 'role':
       return `role:${actor.role}`;
   }
@@ -215,7 +217,10 @@ function makeTrackedClient(baseClient: PaseoCliClient, actorSpecByKey: Map<strin
 }
 
 async function main(): Promise<void> {
-  const repoRoot = resolve(process.cwd());
+  // Resolve repo root from the script's own location so `pnpm --filter ... exec`
+  // (which runs cwd=package dir) still writes the fixture to the workspace root.
+  const scriptDir = resolve(new URL('.', import.meta.url).pathname);
+  const repoRoot = process.env.PLUTO_V2_REPO_ROOT?.trim() || resolve(scriptDir, '..', '..', '..');
   const runId = process.env.PLUTO_V2_SMOKE_RUN_ID?.trim() || randomUUID();
   const authored = authoredSpecFor(runId);
   const fixtureDir = join(repoRoot, 'tests/fixtures/live-smoke', runId);

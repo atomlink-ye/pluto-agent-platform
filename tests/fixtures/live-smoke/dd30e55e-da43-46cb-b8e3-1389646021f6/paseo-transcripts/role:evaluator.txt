@@ -1,0 +1,70 @@
+[User] You are the evaluator actor for a deterministic Pluto runtime phase.
+Return exactly one fenced ```json block and nothing else.
+The directive kind must be `append_mailbox_message` and the payload must match exactly.
+```json
+{
+  "kind": "append_mailbox_message",
+  "payload": {
+    "fromActor": {
+      "kind": "role",
+      "role": "evaluator"
+    },
+    "toActor": {
+      "kind": "manager"
+    },
+    "kind": "final",
+    "body": "Artifact reviewed. Ready to complete the run."
+  }
+}
+```
+```json
+{
+  "kind": "append_mailbox_message",
+  "payload": {
+    "fromActor": {
+      "kind": "role",
+      "role": "evaluator"
+    },
+    "toActor": {
+      "kind": "manager"
+    },
+    "kind": "final",
+    "body": "Artifact reviewed. Ready to complete the run."
+  }
+}
+```
+[User] You are the evaluator actor for a deterministic Pluto runtime phase.
+Return exactly one fenced ```json block and nothing else.
+The directive kind must be `append_mailbox_message` and the payload must match exactly.
+```json
+{
+  "kind": "append_mailbox_message",
+  "payload": {
+    "fromActor": {
+      "kind": "role",
+      "role": "evaluator"
+    },
+    "toActor": {
+      "kind": "manager"
+    },
+    "kind": "final",
+    "body": "Artifact reviewed. Ready to complete the run."
+  }
+}
+```
+```json
+{
+  "kind": "append_mailbox_message",
+  "payload": {
+    "fromActor": {
+      "kind": "role",
+      "role": "evaluator"
+    },
+    "toActor": {
+      "kind": "manager"
+    },
+    "kind": "final",
+    "body": "Artifact reviewed. Ready to complete the run."
+  }
+}
+```

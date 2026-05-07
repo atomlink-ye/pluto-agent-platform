@@ -119,7 +119,14 @@ function makeMockClient(script: readonly ClientScriptEntry[], deleteImpl?: (agen
   }
 
   return {
-    spawnAgent: vi.fn(async (spec) => ({ agentId: `mock-${spec.title}` })),
+    spawnAgent: vi.fn(async (spec) => {
+      const agentId = `mock-${spec.title}`;
+      const key = agentId.slice('mock-'.length);
+      // spawn-with-initialPrompt consumes the first turn's slot, so advance
+      // the cursor here just like sendPrompt does for subsequent turns.
+      cursors.set(key, (cursors.get(key) ?? -1) + 1);
+      return { agentId };
+    }),
     sendPrompt: vi.fn(async (agentId: string) => {
       const key = agentId.slice('mock-'.length);
       cursors.set(key, (cursors.get(key) ?? -1) + 1);
