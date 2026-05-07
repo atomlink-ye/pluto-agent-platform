@@ -1770,73 +1770,143 @@ No other S1/S2/S3 mutations.
 ### Outcome
 
 Drop a real-LLM `PaseoRuntimeAdapter` into the closed `RuntimeAdapter<S>`
-slot established in S4, plus a thin `PaseoCliClient` transport, plus
+slot established in S4, plus a CLI-shell-out `PaseoCliClient`, plus
 ONE bounded live-smoke run that produces a captured fixture under
 `tests/fixtures/live-smoke/<newRunId>/` for use by future v2 work.
 
-This is the first slice where v2 hits a real LLM. The Paseo adapter is
-provider-agnostic at the type level: the model name comes from
-`runProfile`. The S4 runner (`runScenario`) and the v2 kernel are
-**unchanged** — Paseo is just another `RuntimeAdapter<S>` implementation.
+This is the first slice where v2 hits a real LLM. **All LLM access in
+v2 goes through Paseo** — Paseo is the unified agent-management surface
+(it aggregates OpenCode / Claude / etc. behind one CLI). v2 has NO
+provider-specific adapters: there is exactly ONE runtime adapter
+(`PaseoRuntimeAdapter`) that talks to the paseo CLI; per-agent provider
+/ model differences are configured at the Paseo level via
+`paseo run --provider X --model Y` arguments derived from the run
+profile. The S4 runner (`runScenario`) and the v2 kernel are
+**unchanged**.
+
+### Transport contract (BINDING — discovery-grounded)
+
+The paseo daemon does NOT expose a chat-completion HTTP endpoint
+(panel probe found only `GET /api/health` + `GET /api/status`). The
+v1.6 codebase already integrates paseo via the **CLI agent lifecycle**
+in `src/adapters/paseo-opencode/paseo-cli-client.ts`. S5 mirrors that
+shape under the v2 package surface:
+
+```
+paseo run --detach --json --provider <P> --model <M> --mode <Mo> \
+          --title <T> [--label k=v ...] [--cwd <dir>] [--host H]
+  → spawn an agent; stdout JSON contains the agent ID
+
+paseo send <agentId> --no-wait --prompt-file <path> [--host H]
+  → deliver a prompt via temp file (avoids CLI length limits)
+
+paseo wait <agentId> --timeout <sec> --json [--host H]
+  → wait for the agent to become idle (one assistant turn complete)
+
+paseo logs <agentId> --filter text --tail <N> [--host H]
+  → read the agent's transcript text (filtered to assistant output)
+
+paseo ls --json [--host H]
+  → list current sessions; used for session-existence checks
+
+paseo delete <agentId> [--host H]
+  → cleanup at run end (best-effort; failure does not abort the run)
+```
+
+These exact commands and flag names are confirmed against
+`/Users/.../paseo` binary on the local box AND `daytona exec paseo ...`
+on the sandbox. The v2 client re-implements a small subset (no v1.6
+src/ edits) — the v1.6 client is the reference oracle, not a
+dependency.
+
+**There is NO HTTP transport in v2.** The "no-HTTP" gate becomes
+"no `node:http` / `node:https` / direct `fetch(` anywhere under
+`packages/pluto-v2-runtime/src/**`". The "no-process-spawn" gate
+becomes "`child_process.spawn` allowed ONLY inside
+`packages/pluto-v2-runtime/src/adapters/paseo/paseo-cli-client.ts`".
 
 ### S5 scope is narrow on purpose
 
 - ONE new adapter directory `packages/pluto-v2-runtime/src/adapters/paseo/`
   (S4 already reserved this path in the no-runtime-leak grep exception).
 - ZERO S1/S2/S3/S4 surface mutations. If the adapter cannot be expressed
-  inside the closed S4 RuntimeAdapter contract, S5 STOPS and the slice
-  is reopened.
+  inside the closed S4 RuntimeAdapter contract (extended via a Paseo
+  sub-interface), S5 STOPS and the slice is reopened.
 - ONE bounded live-smoke run (per R8). Captured fixture is the slice's
   primary evidence artifact.
-- ONE new runtime dep at most (an HTTP client) — and only if Node's
-  built-in `fetch` is insufficient. Plan currently assumes built-in
-  `fetch` is enough.
+- ZERO new runtime deps. Uses Node built-in `child_process` for paseo
+  CLI invocation; uses Zod (already a dep) for directive parsing.
 
 ### Concrete deliverables
 
-1. **PaseoCliClient (transport).**
+1. **PaseoCliClient (CLI transport).**
 
    `packages/pluto-v2-runtime/src/adapters/paseo/paseo-cli-client.ts`
 
-   Thin wrapper around the paseo daemon HTTP API exposed at
-   `127.0.0.1:6767` (sandbox) or a configurable host:port. Sync interface
-   from the adapter's perspective is impossible (HTTP is async); the
-   adapter reconciles by buffering the model response between
-   `runScenario` steps via `nextState` (S4 RuntimeAdapter is sync at the
-   v1.0 contract level). See deliverable 2.
+   Wraps the paseo CLI binary via `child_process.spawn`. THIS IS THE
+   ONLY file in `packages/pluto-v2-runtime/src/**` allowed to import
+   `node:child_process`.
 
    Closed surface:
 
    ```ts
-   export interface PaseoModelRequest {
-     readonly model: string;
-     readonly messages: ReadonlyArray<{ role: 'system' | 'user' | 'assistant'; content: string }>;
-     readonly maxTokens?: number;
-     readonly temperature?: number;
-     readonly stop?: ReadonlyArray<string>;
+   export interface PaseoAgentSpec {
+     readonly provider: string;       // e.g. 'opencode'
+     readonly model: string;          // e.g. 'openai/gpt-5.4'
+     readonly mode: string;           // e.g. 'build'
+     readonly thinking?: string;      // e.g. 'high'
+     readonly title: string;
+     readonly labels?: ReadonlyArray<string>;
+     readonly cwd?: string;
    }
 
-   export interface PaseoModelResponse {
-     readonly content: string;
-     readonly stopReason: 'stop' | 'length' | 'tool_use' | 'error';
-     readonly usage: { inputTokens: number; outputTokens: number };
+   export interface PaseoAgentSession {
+     readonly agentId: string;
+   }
+
+   export interface PaseoLogsResult {
+     readonly transcriptText: string;  // assistant-filtered, tail-bounded
+     readonly waitExitCode: number;
+   }
+
+   export interface PaseoUsageEstimate {
+     // From `paseo inspect <id> --json`. Optional — best-effort.
+     readonly inputTokens?: number;
+     readonly outputTokens?: number;
+     readonly costUsd?: number;
    }
 
    export interface PaseoCliClient {
-     complete(request: PaseoModelRequest): Promise<PaseoModelResponse>;
+     spawnAgent(spec: PaseoAgentSpec): Promise<PaseoAgentSession>;
+     sendPrompt(agentId: string, prompt: string): Promise<void>;
+     waitIdle(agentId: string, timeoutSec: number): Promise<{ exitCode: number }>;
+     readTranscript(agentId: string, tailLines: number): Promise<string>;
+     usageEstimate(agentId: string): Promise<PaseoUsageEstimate>;
+     deleteAgent(agentId: string): Promise<void>;  // best-effort
    }
 
    export function makePaseoCliClient(deps: {
-     host: string;             // e.g. '127.0.0.1:6767'
-     fetchImpl?: typeof fetch; // injectable for tests
-     timeoutMs?: number;       // default 60_000
+     bin?: string;                  // default 'paseo'
+     host?: string;                 // optional --host
+     cwd: string;                   // working dir for spawned processes
+     processSpawn?: typeof spawn;   // injectable for tests (default node:child_process spawn)
+     timeoutDefaultSec?: number;    // default 60
    }): PaseoCliClient;
    ```
 
-   The transport is `async` (HTTP), but it is NOT called inside
-   `RuntimeAdapter.step` — see deliverable 2 for the buffering pattern.
+   Implementation notes:
+   - Long prompts go through a temp file via
+     `paseo send --no-wait --prompt-file <path>` (mirrors v1.6 client).
+   - Transcript reading uses `paseo logs --filter text --tail <N>`.
+     `<N>` defaults to 200; the adapter requests only the diff since
+     the previous read by tracking the last-seen suffix length.
+   - `waitIdle` returns the exit code WITHOUT throwing so the adapter
+     can distinguish timeout (non-zero) from completion (zero).
+   - `deleteAgent` swallows failures; cleanup is best-effort.
+   - `usageEstimate` parses `paseo inspect <id> --json`'s `LastUsage`
+     field if present; missing usage is acceptable (returns `{}`).
 
-2. **PaseoRuntimeAdapter (the closed v1.0 sync surface stays sync).**
+2. **PaseoRuntimeAdapter (Paseo-specific sub-interface).**
 
    `packages/pluto-v2-runtime/src/adapters/paseo/paseo-adapter.ts`
 
@@ -1845,81 +1915,93 @@ provider-agnostic at the type level: the model name comes from
    without mutating it. The base `init`/`step` surface stays
    byte-identical to S4 table E. The sub-interface adds two
    pure-state methods that the driver inspects to decide whether to
-   fire an HTTP call BEFORE the next `step`:
+   make a paseo CLI round-trip BEFORE the next `step`:
 
    ```ts
    import type { RuntimeAdapter, KernelView } from '../../runtime/runtime-adapter.js';
+   import type { ActorRef } from '@pluto/v2-core';
+
+   export interface PaseoTurnRequest {
+     readonly actor: ActorRef;
+     readonly prompt: string;       // built by adapter from transcript + system prompt
+   }
+
+   export interface PaseoTurnResponse {
+     readonly actor: ActorRef;
+     readonly transcriptText: string;
+     readonly usage: PaseoUsageEstimate;
+   }
 
    export interface PaseoRuntimeAdapter<S> extends RuntimeAdapter<S> {
-     /** Returns a model request iff the adapter is "awaiting model".
+     /** Returns the next paseo turn iff the adapter is "awaiting model".
       *  Pure inspection — does NOT mutate state. */
-     pendingModelCall(state: S, view: KernelView): PaseoModelRequest | null;
+     pendingPaseoTurn(state: S, view: KernelView): PaseoTurnRequest | null;
 
-     /** Folds a model response into a new state. Pure; sync. */
-     withModelResponse(state: S, response: PaseoModelResponse): S;
+     /** Folds a paseo response into a new state. Pure; sync. */
+     withPaseoResponse(state: S, response: PaseoTurnResponse): S;
    }
    ```
 
    This is **strictly additive** at the type level: S4 `RuntimeAdapter`
    is unchanged, S4 `runScenario` (which only knows `init`/`step`)
-   keeps working with any adapter that does NOT extend
-   `PaseoRuntimeAdapter`. The Paseo driver (`runPaseo`, deliverable 3)
-   knows how to call the two extension methods in the right order.
-   No new ProtocolRequest intent is introduced — the model call is
-   transport, not a kernel event.
+   keeps working with any non-Paseo adapter. The Paseo driver
+   (`runPaseo`, deliverable 3) knows how to call the two extension
+   methods in the right order.
 
    Closed `PaseoAdapterState`:
 
    ```ts
-   interface PaseoAdapterState {
+   export interface PaseoAdapterState {
      readonly turnIndex: number;
      readonly maxTurns: number;
      readonly currentActor: ActorRef;
-     readonly transcript: ReadonlyArray<{
-       actor: ActorRef;
+     readonly transcriptByActor: ReadonlyMap<string /* actorKey */, ReadonlyArray<{
        role: 'system' | 'user' | 'assistant';
        content: string;
-     }>;
-     readonly awaitingModelFor: ActorRef | null;
-     readonly bufferedResponse: PaseoModelResponse | null;
+     }>>;
+     readonly awaitingResponseFor: ActorRef | null;
+     readonly bufferedResponse: PaseoTurnResponse | null;
+     readonly parseFailureCount: number;   // for the current actor's pending request
+     readonly maxParseFailuresPerTurn: number;  // default 2
    }
    ```
 
    Adapter behavior summary:
 
    - `init(teamContext, view)` → initial state with `turnIndex = 0`,
-     `currentActor = teamContext.leadActor` (or first declared role),
-     `awaitingModelFor = null`, `bufferedResponse = null`,
-     `transcript = [<system prompt>]`.
-   - `pendingModelCall(state, view)` → if
-     `awaitingModelFor !== null && bufferedResponse === null`, return
-     a `PaseoModelRequest` built from `state.transcript`. Else `null`.
-   - `withModelResponse(state, response)` → return a new state with
-     `bufferedResponse = response` AND `awaitingModelFor = null`.
+     `currentActor = <lead role from teamContext>`,
+     `awaitingResponseFor = null`, `bufferedResponse = null`,
+     `transcriptByActor = { lead: [<system prompt>] }`, etc.
+   - `pendingPaseoTurn(state, view)` → if
+     `awaitingResponseFor === null && bufferedResponse === null &&
+     turnIndex < maxTurns`, build the next prompt for `currentActor`
+     from `transcriptByActor[currentActor]` and return
+     `{ actor, prompt }`. Otherwise `null`.
+   - `withPaseoResponse(state, response)` → return a new state with
+     `bufferedResponse = response`, `awaitingResponseFor = null`,
+     append the assistant message to `transcriptByActor[response.actor]`.
    - `step(state, view)`:
-     - If `bufferedResponse === null && awaitingModelFor === null`:
-       set `awaitingModelFor = state.currentActor` and append a
-       "<actor X is thinking>" transcript marker; return
-       `{ kind: 'request', request: <a no-op heartbeat OR the
-       transcript-bearing request from the previous turn> }` —
-       see resolution rule below.
-     - If `bufferedResponse !== null`: parse it into a structured
-       output (deliverable 4), emit the corresponding
-       `ProtocolRequest` (one of S4's 5 intents), advance `turnIndex`,
-       reset `bufferedResponse` and `awaitingModelFor`, and rotate
-       `currentActor` per the playbook.
-     - If `turnIndex >= maxTurns` OR the parsed structured output is
-       a `complete_run` directive: return
-       `{ kind: 'done', completion }`.
-
-   **Heartbeat-vs-no-emit resolution.** Because S4's `runScenario`
-   loop expects a `step` to return either `request` OR `done` on
-   every call, the Paseo driver is responsible for short-circuiting
-   the call to `step` when `pendingModelCall` is non-null. The driver
-   never invokes `step` on a state that needs a model call — it
-   handles `pendingModelCall → client.complete → withModelResponse`
-   first, THEN re-invokes `step`. As a result, `step` itself never
-   has to emit a placeholder request.
+     - If `bufferedResponse !== null`: parse it via
+       `PaseoDirectiveSchema` (deliverable 4), construct the
+       corresponding `ProtocolRequest`, advance `turnIndex`, reset
+       `bufferedResponse`, rotate `currentActor` per the playbook.
+       Return `{ kind: 'request', request, nextState }`.
+     - If parse fails: append the parse error to the actor's
+       transcript, increment `parseFailureCount`. If
+       `parseFailureCount > maxParseFailuresPerTurn`: return
+       `{ kind: 'done', completion: { status: 'failed', summary:
+       'parse failure budget exhausted for actor X at turn Y' },
+       nextState }`. Otherwise reset `bufferedResponse` to null and
+       set `awaitingResponseFor = currentActor` (driver will fire
+       another paseo turn on the next outer iteration).
+     - If `turnIndex >= maxTurns`: return `{ kind: 'done',
+       completion: { status: 'failed', summary: 'maxTurns exhausted' },
+       nextState }`.
+     - If a previous parsed directive was `complete_run`: return
+       `{ kind: 'done', completion: <from directive> }`.
+     - Else (no buffered response, no completion): the driver MUST
+       have called `pendingPaseoTurn` first; reaching `step` in this
+       state is a bug. Throw a typed `PaseoAdapterStateError`.
 
 3. **runPaseo driver (async sibling of runFake).**
 
@@ -1933,61 +2015,136 @@ provider-agnostic at the type level: the model name comes from
        client: PaseoCliClient;
        idProvider: IdProvider;
        clockProvider: ClockProvider;
+       paseoAgentSpec: (actor: ActorRef) => PaseoAgentSpec;  // map role → provider/model/mode
        correlationId?: string | null;
-       maxSteps?: number;        // default 1000
+       maxSteps?: number;          // default 1000; counts step phases ONLY
+       waitTimeoutSec?: number;    // default 600
      },
    ): Promise<{
      events: ReadonlyArray<RunEvent>;
      views: ProjectionViews;
      evidencePacket: EvidencePacket;
-     usage: { totalInputTokens: number; totalOutputTokens: number };
+     usage: {
+       totalInputTokens: number;
+       totalOutputTokens: number;
+       totalCostUsd: number;
+       byActor: ReadonlyMap<string /* actorKey */, {
+         turns: number;
+         inputTokens: number;
+         outputTokens: number;
+         costUsd: number;
+       }>;
+       perTurn: ReadonlyArray<{
+         turnIndex: number;
+         actor: ActorRef;
+         inputTokens: number;
+         outputTokens: number;
+         costUsd: number;
+         waitExitCode: number;
+       }>;
+     };
    }>;
    ```
 
-   Async loop that reuses S4's kernel, replayAll, and
-   `assembleEvidencePacket` unchanged. **Does NOT modify or call**
-   S4's `runScenario`. It re-implements the 9-step algorithm with one
-   extra phase between steps:
+   Algorithm (re-implemented; does NOT call S4's `runScenario`):
 
    ```text
    1. teamContext = compileTeamContext(authored)
-   2. kernel = new RunKernel({ initialState: initialState(teamContext), ... })
-   3. kernel.seedRunStarted({ scenarioRef, runProfileRef, startedAt })
+   2. kernel = new RunKernel({ initialState: initialState(teamContext),
+                                idProvider, clockProvider })
+   3. kernel.seedRunStarted({ scenarioRef, runProfileRef,
+                              startedAt: clockProvider.nowIso() })
    4. let s = adapter.init(teamContext, kernelViewOf(kernel))
-   5. for stepIdx in [0, maxSteps):
-        // -- model phase (NEW; only fires if adapter signals it)
-        const pending = adapter.pendingModelCall(s, kernelViewOf(kernel))
-        if pending !== null:
-          const response = await client.complete(pending)
-          accumulate usage
-          s = adapter.withModelResponse(s, response)
-          continue   // re-check before stepping
-        // -- step phase (same as runScenario)
+   5. const agentByActorKey = new Map<string, string>()  // ActorRef → agentId
+      const usage = empty accumulator
+      let stepCount = 0
+   6. loop indefinitely:
+        // -- model phase (does NOT consume stepCount)
+        const turn = adapter.pendingPaseoTurn(s, kernelViewOf(kernel))
+        if turn !== null:
+          const actorKey = actorKeyOf(turn.actor)
+          let agentId = agentByActorKey.get(actorKey)
+          if agentId === undefined:
+            const session = await client.spawnAgent(
+              options.paseoAgentSpec(turn.actor))
+            agentId = session.agentId
+            agentByActorKey.set(actorKey, agentId)
+          const lastSeenLen = transcriptLengthBefore(s, turn.actor)
+          await client.sendPrompt(agentId, turn.prompt)
+          const wait = await client.waitIdle(agentId, options.waitTimeoutSec)
+          const fullText = await client.readTranscript(agentId, 200)
+          const newSlice = fullText.slice(lastSeenLen)
+          const usageEst = await client.usageEstimate(agentId)
+          usage.accumulate({ turn: s.turnIndex, actor: turn.actor,
+                              waitExitCode: wait.exitCode, ...usageEst })
+          s = adapter.withPaseoResponse(s, {
+            actor: turn.actor, transcriptText: newSlice, usage: usageEst
+          })
+          continue   // re-check pendingPaseoTurn before stepping
+        // -- step phase (consumes stepCount)
+        if stepCount >= (options.maxSteps ?? 1000):
+          throw new RunNotCompletedError('maxSteps exceeded')
+        stepCount += 1
         const step = adapter.step(s, kernelViewOf(kernel))
         if step.kind === 'done':
-          submit complete_run with manager actor; s = step.nextState; break
-        kernel.submit(step.request); s = step.nextState
-   6. if loop exits without 'done': throw RunNotCompletedError
-   7. events = kernel.eventLog.read(0, head + 1)
-   8. views = replayAll(events)
-   9. evidencePacket = assembleEvidencePacket(views, events, kernel.state.runId)
-      return { events, views, evidencePacket, usage }
+          // build complete_run with manager actor
+          kernel.submit({
+            requestId: idProvider.next(),
+            runId: kernel.state.runId,
+            schemaVersion: SCHEMA_VERSION,
+            actor: { kind: 'manager' },
+            intent: 'complete_run',
+            payload: step.completion,
+            idempotencyKey: null,
+          }, { correlationId: options.correlationId ?? null })
+          s = step.nextState
+          break
+        kernel.submit(step.request, { correlationId: options.correlationId ?? null })
+        s = step.nextState
+   7. // best-effort cleanup
+      for [, agentId] of agentByActorKey: await client.deleteAgent(agentId)
+   8. const events = stripAcceptedRequestKey(kernel.eventLog.read(0, kernel.eventLog.head + 1))
+      // matches runScenario's public event-shape contract — see runner.ts:64-68
+   9. const views = replayAll(events)
+      const evidencePacket = assembleEvidencePacket(views, events, kernel.state.runId)
+      return { events, views, evidencePacket, usage: usage.finalize() }
    ```
 
-   The model phase NEVER goes through the kernel. It is pure
-   transport between adapter state and the LLM. Only the step phase
-   produces RunEvents.
+   Key invariants:
+   - **Model phase does NOT consume `maxSteps`.** Only `step` calls do.
+   - **`maxTurns` is owned by the adapter** (`PaseoAdapterState.maxTurns`)
+     and surfaces as a `done.completion.status='failed'` when exhausted.
+   - **`runPaseo` events match `runScenario`'s public event-shape**:
+     `acceptedRequestKey` is stripped before return (call into the
+     same helper used by S4's `runner.ts` if exposed; otherwise
+     reimplement the strip locally — it is one line).
+   - **Best-effort cleanup**: `deleteAgent` failures are swallowed.
+   - **No HTTP** anywhere. All paseo communication is via CLI.
 
 4. **Structured-output protocol.**
 
-   The adapter parses the LLM response into one of a closed set of
-   structured directives. The protocol is enforced by the system
-   prompt and a JSON-schema instruction in the user message footer.
+   `packages/pluto-v2-runtime/src/adapters/paseo/paseo-directive.ts`
+
+   The adapter parses each LLM response into one of a closed set of
+   directives. The protocol is enforced by the system prompt and a
+   JSON-schema instruction in the user-message footer. v1.0 uses
+   client-side Zod parse with bounded re-prompting; provider-enforced
+   JSON schema (e.g. OpenAI `response_format: { type: 'json_schema' }`)
+   is DEFERRED to S5+ to avoid provider lock-in (Paseo is the
+   abstraction).
 
    Closed directive grammar (Zod):
 
    ```ts
-   const PaseoDirectiveSchema = z.discriminatedUnion('kind', [
+   import {
+     MailboxMessageAppendedPayloadSchema,
+     TaskCreatedPayloadSchema,
+     TaskStateChangedPayloadSchema,
+     ArtifactPublishedPayloadSchema,
+     RunCompletedPayloadSchema,
+   } from '@pluto/v2-core';
+
+   export const PaseoDirectiveSchema = z.discriminatedUnion('kind', [
      z.object({ kind: z.literal('append_mailbox_message'),
                 payload: MailboxMessageAppendedPayloadSchema.omit({ messageId: true }) }),
      z.object({ kind: z.literal('create_task'),
@@ -1999,115 +2156,186 @@ provider-agnostic at the type level: the model name comes from
      z.object({ kind: z.literal('complete_run'),
                 payload: RunCompletedPayloadSchema.omit({ completedAt: true }) }),
    ]);
+
+   export function extractDirective(text: string):
+     | { ok: true; directive: PaseoDirective }
+     | { ok: false; reason: string };
    ```
 
-   The adapter extracts a JSON block from the LLM response, parses
-   via `PaseoDirectiveSchema`, then constructs the corresponding
-   ProtocolRequest. **Parse failures are recovered**: the adapter
-   appends the parse error to the transcript and re-asks the model
-   on the next turn (counts against `maxTurns`).
+   The extractor:
+   - Searches for a fenced ```json ... ``` block (preferred) or the
+     first balanced JSON object in the text.
+   - Parses via `PaseoDirectiveSchema`.
+   - Returns `{ ok: false, reason }` on any failure (no JSON block
+     found / JSON parse error / Zod validation error). The adapter
+     uses `reason` to compose the next user message asking for a
+     correctly-formatted directive.
 
-5. **Pure invariants (carry-forward from S4 plus paseo-specific).**
+5. **Pure invariants.**
 
-   - PaseoCliClient is the ONLY place under `packages/pluto-v2-runtime/src/`
-     that may import HTTP (`node:http`/`node:https`/`fetch`).
-     Acceptance grep enforces.
-   - `PaseoRuntimeAdapter.step` itself is sync (S4 contract).
+   - PaseoCliClient is the ONLY place under `packages/pluto-v2-runtime/src/**`
+     that may import `node:child_process`. Acceptance grep enforces.
+   - NO HTTP imports anywhere under `packages/pluto-v2-runtime/src/**`
+     (`node:http`, `node:https`, `fetch(` direct usage). v2 talks to
+     paseo only via CLI.
+   - PaseoCliClient and runPaseo are async; **`PaseoRuntimeAdapter.step`
+     stays sync** (S4 contract).
    - All ID generation goes through injected `idProvider`; all
      timestamps go through injected `clockProvider`.
-   - No network I/O outside `PaseoCliClient.complete`.
 
 6. **Tests.**
 
    Under `packages/pluto-v2-runtime/__tests__/adapters/paseo/`:
 
-   - `paseo-cli-client.test.ts` — mock `fetchImpl`; happy path returns
-     parsed `PaseoModelResponse`; HTTP error → throws typed error;
-     timeout → throws typed error.
-   - `paseo-adapter.test.ts` — adapter `step` is sync; `pendingModelCall`
-     returns non-null only when awaiting; `withModelResponse` is pure;
-     given a stubbed `bufferedResponse`, `step` emits the expected
-     ProtocolRequest; deterministic given fixed providers; parse-failure
-     recovery branch counts against `maxTurns`.
-   - `run-paseo.test.ts` — `runPaseo(hello-team, mockAdapter, { client })`
-     end-to-end with a deterministic mock transport that returns
-     scripted responses; events match `expected-paseo-mock-events.jsonl`;
-     evidence packet matches `expected-paseo-mock-evidence.json`;
-     `usage` accumulates across turns.
+   - `paseo-cli-client.test.ts` — inject a mock `processSpawn`; happy
+     path constructs the correct argv for each method (`run`/`send`/
+     `wait`/`logs`/`ls`/`delete`); spawn failure → typed error;
+     `waitIdle` returns exit code without throwing on non-zero;
+     `deleteAgent` swallows failures.
+   - `paseo-directive.test.ts` — `extractDirective` round-trips for
+     each of the 5 directive kinds (with fenced JSON block); rejects
+     missing JSON block, malformed JSON, schema-invalid payload;
+     prefers fenced block over inline JSON.
+   - `paseo-adapter.test.ts` — `step` is sync; `pendingPaseoTurn`
+     returns non-null only when awaiting; `withPaseoResponse` is
+     pure; given a stubbed `bufferedResponse`, `step` emits the
+     expected ProtocolRequest; deterministic given fixed providers;
+     parse-failure recovery counts against
+     `maxParseFailuresPerTurn`; surfaces `done` with `status='failed'`
+     when exhausted.
+   - `run-paseo.test.ts` — `runPaseo(hello-team, mockAdapter, {
+     client: mockClient })` end-to-end with a deterministic mock
+     `PaseoCliClient` that returns scripted transcripts; events
+     match `expected-events.jsonl`; evidence packet matches
+     `expected-evidence-packet.json`; `usage.byActor` and
+     `usage.perTurn` populate correctly; model phases do NOT consume
+     `maxSteps`.
 
-   New test fixture (mock-transport, deterministic):
-   `packages/pluto-v2-runtime/test-fixtures/scenarios/hello-team-paseo-mock/{scenario.yaml,expected-events.jsonl,expected-evidence-packet.json}`.
+   New deterministic mock-transport fixture:
+   `packages/pluto-v2-runtime/test-fixtures/scenarios/hello-team-paseo-mock/{scenario.yaml, mock-script.json, expected-events.jsonl, expected-evidence-packet.json}`.
 
-   Total S5 unit-test count: ≥ 12 across the 3 files.
+   `mock-script.json` is a sequence of scripted paseo CLI responses
+   keyed by `(turnIndex, actor)`. Each entry has:
+
+   ```ts
+   {
+     turnIndex: number,
+     actor: ActorRef,
+     transcriptText: string,        // raw assistant text including a fenced ```json
+                                    // block matching PaseoDirectiveSchema
+     usage: { inputTokens, outputTokens, costUsd },
+     waitExitCode: 0,
+   }
+   ```
+
+   The mock `PaseoCliClient.spawnAgent` returns deterministic
+   `agentId = 'mock-<role>'`. `sendPrompt` is a no-op.
+   `waitIdle` returns `{ exitCode: scripted.waitExitCode }`.
+   `readTranscript` returns the cumulative `transcriptText` for the
+   actor's prior + current turn. `usageEstimate` returns the
+   scripted usage. The mapping from `mock-script.json` to
+   `expected-events.jsonl` is **mechanical**: each scripted directive
+   becomes one v2 ProtocolRequest, which becomes one v2 RunEvent
+   per the kernel's normal `submit` path.
+
+   Total S5 unit-test count: ≥ 16 across the 4 test files.
 
    **Live smoke (gated by env, runs ONCE per slice — R8):**
 
-   `pnpm smoke:live` invokes `runPaseo(hello-team-real, options)`
-   against a real Paseo daemon on a small/cheap model
-   (`openai/gpt-4o-mini` or equivalent — bounded by `runProfile`).
-   The captured artifacts (events.jsonl, evidence-packet.json,
-   final-report.md, usage summary) are saved under
+   `pnpm smoke:live` invokes `runPaseo(hello-team-real, adapter,
+   options)` against a real Paseo daemon on a small/cheap model
+   (e.g. `openai/gpt-4o-mini` or equivalent — bounded by `runProfile`
+   in the authored spec). The captured artifacts are saved under
    `tests/fixtures/live-smoke/<newRunId>/` and committed in the slice
    branch.
 
+   Captured artifacts:
+   - `events.jsonl` (v2 `RunEvent[]` from `kernel.eventLog`)
+   - `evidence-packet.json` (v2 EvidencePacketShape)
+   - `final-report.md` (rendered from EvidenceProjectionView)
+   - `usage-summary.json` (totals + per-actor + per-turn)
+   - `paseo-transcripts/<actorKey>.txt` (raw paseo logs per role)
+
    Live-smoke acceptance:
    - Total turns ≤ 20.
-   - Total cost ≤ $0.50 (tracked via `usage` and recorded in REPORT).
-   - Event stream is well-formed: `replayAll(events)` succeeds and
-     `assembleEvidencePacket(views, events, runId)` produces a packet
-     that parses through `EvidencePacketShape`.
-   - Run reaches `run_completed` (NOT `RunNotCompletedError`).
+   - Total cost ≤ $0.50 (tracked via `usage.totalCostUsd`).
+   - Run reaches `run_completed` (status `'succeeded'` OR `'failed'`,
+     either is acceptable; it must not throw `RunNotCompletedError`).
+   - `replayAll(events)` succeeds; `assembleEvidencePacket` produces
+     a packet that parses through `EvidencePacketShape`.
+   - `commit_and_push` happens **only after** smoke:live exits 0
+     AND all captured artifacts exist on disk. If smoke:live fails,
+     the slice is BLOCKED — do NOT commit a partial fixture.
 
 7. **Out of scope for S5.**
 
    - CLI changes (S6).
-   - v1.6 file-lineage edits.
-   - Multi-run live-smoke (R8: ONCE per slice).
-   - Streaming responses (the contract uses non-streaming `complete`).
-   - Tool-use / function-calling support (deferred to S5+).
+   - v1.6 file-lineage edits (the v1.6 paseo client is a reference
+     oracle, not a dependency).
+   - Multi-run live smoke (R8: ONCE per slice).
+   - Streaming responses.
+   - Tool-use / function-calling (deferred; v1.0 directive grammar
+     is closed at the 5 v2 intents).
+   - HTTP transport to paseo (paseo daemon does not expose a
+     completion endpoint; this slice does not add one).
+   - Provider-side JSON-schema enforcement (deferred to avoid
+     provider lock-in).
+   - **No row-by-row parity test** between the new v2 live-smoke
+     fixture and the v1.6 fixture `86557df1-...`. The two are
+     fundamentally different runtime semantics; the live-smoke
+     fixture is evidence-only, NOT a parity gate.
 
 8. **S5 dependency graph.**
 
    S5 imports `@pluto/v2-core` (read-only) and `@pluto/v2-runtime`'s
-   own runtime/loader/evidence modules. NO S1/S2/S3/S4 mutations.
+   own `runtime/`/`loader/`/`evidence/` modules. NO S1/S2/S3/S4
+   mutations.
 
 ### S5 acceptance bar
 
 - **Package-scoped typecheck** for both v2-core and v2-runtime: clean.
-- **Package-scoped vitest** for both: green; v2-runtime adds ≥ 12 unit
-  tests (3 new files); total v2-runtime tests ≥ 45 (S4) + 12 = 57.
+- **Package-scoped vitest** for both: green; v2-runtime adds ≥ 16 unit
+  tests (4 new test files); total v2-runtime tests ≥ 45 (S4) + 16 = 61.
 - **Package-scoped build** for both: clean.
 - **Root regression** `pnpm test`: green.
 - **Live smoke**: ONE captured fixture under
-  `tests/fixtures/live-smoke/<newRunId>/`. Cost / turns / tokens
-  recorded in `artifacts/live-smoke-summary.json`. Within bounds
-  (≤ 20 turns, ≤ $0.50).
-- **No-runtime-leak grep refinement**: paseo/opencode/claude allowed
-  ONLY under `packages/pluto-v2-runtime/src/adapters/paseo/**`. Every
-  other v2-runtime path stays clean.
-- **No-HTTP-outside-client grep**: `node:http` / `node:https` / direct
-  `fetch(` usage allowed ONLY in
+  `tests/fixtures/live-smoke/<newRunId>/`. `usage-summary.json`
+  records totals + per-actor + per-turn. Within bounds (≤ 20 turns,
+  ≤ $0.50 cost, reaches `run_completed`).
+- **No-runtime-leak grep refinement**: paseo / opencode / claude
+  allowed ONLY under `packages/pluto-v2-runtime/src/adapters/paseo/**`.
+  Every other v2-runtime path stays clean.
+- **No-HTTP grep**: `node:http` / `node:https` / direct `fetch(` MUST
+  NOT appear under `packages/pluto-v2-runtime/src/**` at all
+  (v2 talks to paseo via CLI only). Test directories are NOT scoped
+  by this grep.
+- **No-process-spawn-outside-cli-client grep**: `child_process` may
+  be imported ONLY in
   `packages/pluto-v2-runtime/src/adapters/paseo/paseo-cli-client.ts`.
-- **No-S2-mutation**: `git diff --stat main..origin/<branch> --
-  packages/pluto-v2-core/` reports zero changes.
+- **No-S2/S3/S4-mutation**: `git diff --stat
+  main..origin/<branch> --
+  packages/pluto-v2-core/ packages/pluto-v2-runtime/src/{runtime,loader,evidence,legacy}`
+  reports zero changes outside the new `adapters/paseo/` subtree.
 - **Diff hygiene**: scope confined to
   - `packages/pluto-v2-runtime/src/adapters/paseo/**`
   - `packages/pluto-v2-runtime/__tests__/adapters/paseo/**`
   - `packages/pluto-v2-runtime/test-fixtures/scenarios/hello-team-paseo-mock/**`
   - `tests/fixtures/live-smoke/<newRunId>/**` (the live-smoke capture)
   - `packages/pluto-v2-runtime/src/index.ts` (additive re-exports)
-  - `packages/pluto-v2-runtime/package.json` (only if a new dep is
-    actually needed)
-  - `pnpm-lock.yaml` (only if `package.json` changes)
   - `package.json` (additive `smoke:live` script if missing)
   - `docs/design-docs/v2-paseo-adapter.md` (new)
   - `docs/plans/active/v2-rewrite.md` — S5 status row only.
-- **Branch is committed AND pushed**: `commit_and_push` step.
-- A reviewer sub-agent confirms (a) `PaseoRuntimeAdapter` matches S4
-  table E byte-for-byte (sync surface), (b) `PaseoCliClient` is the
-  only HTTP entry point, (c) `runPaseo` does not modify S4
-  `runScenario` or the kernel, (d) live-smoke fixture is well-formed
-  and bounded, (e) no S2/S3/S4 surface mutations.
+- **Branch is committed AND pushed**: `commit_and_push` step. **S5
+  binding addition**: commit_and_push runs ONLY after smoke:live
+  exits 0 AND the live-smoke fixture/usage-summary artifacts exist.
+- A reviewer sub-agent confirms (a) `PaseoRuntimeAdapter` matches
+  S4 table E byte-for-byte at the base interface (sync surface),
+  (b) `PaseoCliClient` is the only `child_process` user, (c)
+  `runPaseo` does not modify S4 `runScenario` or the kernel and
+  produces events that match `runScenario`'s public event shape
+  (no `acceptedRequestKey`), (d) live-smoke fixture is well-formed
+  and bounded, (e) no S2/S3/S4 surface mutations, (f) per-turn /
+  per-actor usage diagnostics are emitted in `usage-summary.json`.
 
 ## Discovery gate (per slice)
 
