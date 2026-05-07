@@ -1765,6 +1765,255 @@ No other S1/S2/S3 mutations.
   to drop in a Paseo adapter implementing the same `RuntimeAdapter`
   without changing `runScenario` or the kernel.
 
+## S5 — Phase 5: Paseo runtime adapter + bounded live smoke (next slice)
+
+### Outcome
+
+Drop a real-LLM `PaseoRuntimeAdapter` into the closed `RuntimeAdapter<S>`
+slot established in S4, plus a thin `PaseoCliClient` transport, plus
+ONE bounded live-smoke run that produces a captured fixture under
+`tests/fixtures/live-smoke/<newRunId>/` for use by future v2 work.
+
+This is the first slice where v2 hits a real LLM. The Paseo adapter is
+provider-agnostic at the type level: the model name comes from
+`runProfile`. The S4 runner (`runScenario`) and the v2 kernel are
+**unchanged** — Paseo is just another `RuntimeAdapter<S>` implementation.
+
+### S5 scope is narrow on purpose
+
+- ONE new adapter directory `packages/pluto-v2-runtime/src/adapters/paseo/`
+  (S4 already reserved this path in the no-runtime-leak grep exception).
+- ZERO S1/S2/S3/S4 surface mutations. If the adapter cannot be expressed
+  inside the closed S4 RuntimeAdapter contract, S5 STOPS and the slice
+  is reopened.
+- ONE bounded live-smoke run (per R8). Captured fixture is the slice's
+  primary evidence artifact.
+- ONE new runtime dep at most (an HTTP client) — and only if Node's
+  built-in `fetch` is insufficient. Plan currently assumes built-in
+  `fetch` is enough.
+
+### Concrete deliverables
+
+1. **PaseoCliClient (transport).**
+
+   `packages/pluto-v2-runtime/src/adapters/paseo/paseo-cli-client.ts`
+
+   Thin wrapper around the paseo daemon HTTP API exposed at
+   `127.0.0.1:6767` (sandbox) or a configurable host:port. Sync interface
+   from the adapter's perspective is impossible (HTTP is async); the
+   adapter reconciles by buffering the model response between
+   `runScenario` steps via `nextState` (S4 RuntimeAdapter is sync at the
+   v1.0 contract level). See deliverable 2.
+
+   Closed surface:
+
+   ```ts
+   export interface PaseoModelRequest {
+     readonly model: string;
+     readonly messages: ReadonlyArray<{ role: 'system' | 'user' | 'assistant'; content: string }>;
+     readonly maxTokens?: number;
+     readonly temperature?: number;
+     readonly stop?: ReadonlyArray<string>;
+   }
+
+   export interface PaseoModelResponse {
+     readonly content: string;
+     readonly stopReason: 'stop' | 'length' | 'tool_use' | 'error';
+     readonly usage: { inputTokens: number; outputTokens: number };
+   }
+
+   export interface PaseoCliClient {
+     complete(request: PaseoModelRequest): Promise<PaseoModelResponse>;
+   }
+
+   export function makePaseoCliClient(deps: {
+     host: string;             // e.g. '127.0.0.1:6767'
+     fetchImpl?: typeof fetch; // injectable for tests
+     timeoutMs?: number;       // default 60_000
+   }): PaseoCliClient;
+   ```
+
+   The transport is `async` (HTTP), but it is NOT called inside
+   `RuntimeAdapter.step` — see deliverable 2 for the buffering pattern.
+
+2. **PaseoRuntimeAdapter (the closed v1.0 sync surface stays sync).**
+
+   `packages/pluto-v2-runtime/src/adapters/paseo/paseo-adapter.ts`
+
+   Implements `RuntimeAdapter<PaseoAdapterState>` (S4 table E,
+   sync-only). State carries: turn counter, the buffered LLM response
+   for the current actor, the next intended ProtocolRequest, and the
+   conversation transcript per actor.
+
+   Closed `PaseoAdapterState`:
+
+   ```ts
+   interface PaseoAdapterState {
+     readonly turnIndex: number;
+     readonly maxTurns: number;
+     readonly currentActor: ActorRef;
+     readonly transcript: ReadonlyArray<{ actor: ActorRef; role: 'system'|'user'|'assistant'; content: string }>;
+     readonly bufferedResponse: PaseoModelResponse | null;
+     readonly pendingRequest: ProtocolRequest | null;
+   }
+   ```
+
+   The adapter follows a **two-phase step pattern** to fit the sync
+   `RuntimeAdapter` contract:
+
+   - When `bufferedResponse === null`, the adapter **synchronously**
+     emits a `ProtocolRequest` that records "I am about to call the
+     model for actor X turn Y". `runScenario` accepts that request via
+     `kernel.submit` and proceeds. (This is the same pattern S4 uses
+     for `append_mailbox_message` — the request itself is just an
+     event log entry; no out-of-band side effect.) The adapter's
+     `nextState` carries a sentinel marking "awaiting model".
+   - Between `runScenario` calls to `step`, the **driver** (a new
+     `runPaseo(authored, options)` wrapper) intercepts the "awaiting
+     model" sentinel, calls `client.complete(...)` ASYNCHRONOUSLY, and
+     stuffs the response back into `bufferedResponse` before invoking
+     `step` again.
+   - Once `bufferedResponse !== null`, the adapter's next `step` parses
+     the response and emits the corresponding ProtocolRequest
+     (`append_mailbox_message`, `create_task`, `change_task_state`, or
+     `complete_run`), or `done` if the run is over.
+
+   This keeps the `RuntimeAdapter` contract sync while moving async
+   I/O into the driver. The driver `runPaseo` is parallel to S4's
+   `runFake` but its loop body is async.
+
+3. **runPaseo driver (async sibling of runFake).**
+
+   `packages/pluto-v2-runtime/src/adapters/paseo/run-paseo.ts`
+
+   ```ts
+   export async function runPaseo(
+     authored: AuthoredSpec,
+     options: {
+       client: PaseoCliClient;
+       idProvider: IdProvider;
+       clockProvider: ClockProvider;
+       correlationId?: string | null;
+       maxTurns?: number;        // default 50
+       maxSteps?: number;        // default 1000
+     }
+   ): Promise<{
+     events: ReadonlyArray<RunEvent>;
+     views: ProjectionViews;
+     evidencePacket: EvidencePacket;
+     usage: { totalInputTokens: number; totalOutputTokens: number };
+   }>;
+   ```
+
+   Internally constructs a `PaseoRuntimeAdapter`, then runs an async
+   variant of S4's `runScenario` 9-step algorithm where between
+   `step` calls the driver may call `client.complete(...)` if the
+   adapter signaled "awaiting model".
+
+   This driver does NOT modify `runScenario`. It is a new async loop
+   that reuses `kernel`, `replayAll`, and `assembleEvidencePacket`
+   from S4.
+
+4. **Pure invariants (carry-forward from S4 plus paseo-specific).**
+
+   - PaseoCliClient is the ONLY place under `packages/pluto-v2-runtime/src/`
+     that may import HTTP (`node:http`/`node:https`/`fetch`).
+     Acceptance grep enforces.
+   - `PaseoRuntimeAdapter.step` itself is sync (S4 contract).
+   - All ID generation goes through injected `idProvider`; all
+     timestamps go through injected `clockProvider`.
+   - No network I/O outside `PaseoCliClient.complete`.
+
+5. **Tests.**
+
+   Under `packages/pluto-v2-runtime/__tests__/adapters/paseo/`:
+
+   - `paseo-cli-client.test.ts` — mock `fetchImpl`; happy path returns
+     parsed `PaseoModelResponse`; HTTP error → throws typed error;
+     timeout → throws typed error.
+   - `paseo-adapter.test.ts` — adapter is sync; given a stubbed
+     `bufferedResponse`, emits the expected ProtocolRequest;
+     deterministic given fixed providers; "awaiting model" sentinel
+     surfaces correctly.
+   - `run-paseo.test.ts` — `runPaseo(hello-team, { client: mockClient })`
+     end-to-end with a deterministic mock transport that returns
+     scripted responses; events match `expected-paseo-mock-events.jsonl`;
+     evidence packet matches `expected-paseo-mock-evidence.json`.
+
+   New test fixture (mock-transport, deterministic):
+   `packages/pluto-v2-runtime/test-fixtures/scenarios/hello-team-paseo-mock/{scenario.yaml,expected-events.jsonl,expected-evidence-packet.json}`.
+
+   Total S5 unit-test count: ≥ 12 across the 3 files.
+
+   **Live smoke (gated by env, runs ONCE per slice — R8):**
+
+   `pnpm smoke:live` invokes `runPaseo(hello-team-real, options)`
+   against a real Paseo daemon on a small/cheap model
+   (`openai/gpt-4o-mini` or equivalent — bounded by `runProfile`).
+   The captured artifacts (events.jsonl, evidence-packet.json,
+   final-report.md, usage summary) are saved under
+   `tests/fixtures/live-smoke/<newRunId>/` and committed in the slice
+   branch.
+
+   Live-smoke acceptance:
+   - Total turns ≤ 20.
+   - Total cost ≤ $0.50 (tracked via `usage` and recorded in REPORT).
+   - Event stream is well-formed: `replayAll(events)` succeeds and
+     `assembleEvidencePacket(views, events, runId)` produces a packet
+     that parses through `EvidencePacketShape`.
+   - Run reaches `run_completed` (NOT `RunNotCompletedError`).
+
+6. **Out of scope for S5.**
+
+   - CLI changes (S6).
+   - v1.6 file-lineage edits.
+   - Multi-run live-smoke (R8: ONCE per slice).
+   - Streaming responses (the contract uses non-streaming `complete`).
+   - Tool-use / function-calling support (deferred to S5+).
+
+7. **S5 dependency graph.**
+
+   S5 imports `@pluto/v2-core` (read-only) and `@pluto/v2-runtime`'s
+   own runtime/loader/evidence modules. NO S1/S2/S3/S4 mutations.
+
+### S5 acceptance bar
+
+- **Package-scoped typecheck** for both v2-core and v2-runtime: clean.
+- **Package-scoped vitest** for both: green; v2-runtime adds ≥ 12 unit
+  tests (3 new files); total v2-runtime tests ≥ 45 (S4) + 12 = 57.
+- **Package-scoped build** for both: clean.
+- **Root regression** `pnpm test`: green.
+- **Live smoke**: ONE captured fixture under
+  `tests/fixtures/live-smoke/<newRunId>/`. Cost / turns / tokens
+  recorded in `artifacts/live-smoke-summary.json`. Within bounds
+  (≤ 20 turns, ≤ $0.50).
+- **No-runtime-leak grep refinement**: paseo/opencode/claude allowed
+  ONLY under `packages/pluto-v2-runtime/src/adapters/paseo/**`. Every
+  other v2-runtime path stays clean.
+- **No-HTTP-outside-client grep**: `node:http` / `node:https` / direct
+  `fetch(` usage allowed ONLY in
+  `packages/pluto-v2-runtime/src/adapters/paseo/paseo-cli-client.ts`.
+- **No-S2-mutation**: `git diff --stat main..origin/<branch> --
+  packages/pluto-v2-core/` reports zero changes.
+- **Diff hygiene**: scope confined to
+  - `packages/pluto-v2-runtime/src/adapters/paseo/**`
+  - `packages/pluto-v2-runtime/__tests__/adapters/paseo/**`
+  - `packages/pluto-v2-runtime/test-fixtures/scenarios/hello-team-paseo-mock/**`
+  - `tests/fixtures/live-smoke/<newRunId>/**` (the live-smoke capture)
+  - `packages/pluto-v2-runtime/src/index.ts` (additive re-exports)
+  - `packages/pluto-v2-runtime/package.json` (only if a new dep is
+    actually needed)
+  - `pnpm-lock.yaml` (only if `package.json` changes)
+  - `package.json` (additive `smoke:live` script if missing)
+  - `docs/design-docs/v2-paseo-adapter.md` (new)
+  - `docs/plans/active/v2-rewrite.md` — S5 status row only.
+- **Branch is committed AND pushed**: `commit_and_push` step.
+- A reviewer sub-agent confirms (a) `PaseoRuntimeAdapter` matches S4
+  table E byte-for-byte (sync surface), (b) `PaseoCliClient` is the
+  only HTTP entry point, (c) `runPaseo` does not modify S4
+  `runScenario` or the kernel, (d) live-smoke fixture is well-formed
+  and bounded, (e) no S2/S3/S4 surface mutations.
+
 ## Discovery gate (per slice)
 
 Before each slice is dispatched to remote implementation:
