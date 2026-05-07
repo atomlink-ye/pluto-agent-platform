@@ -67,11 +67,11 @@ describe('replayAll', () => {
     });
   });
 
-  it('matches the basic-run fixture expectedViews by stable byte-equal JSON serialization', () => {
-    const actual = stableJson(replayAll(basicRunFixture.events));
-    const expected = stableJson(basicRunFixture.expectedViews);
+  it('matches the basic-run fixture expectedViews by direct deep-equal AND stable byte-equal JSON', () => {
+    const views = replayAll(basicRunFixture.events);
 
-    expect(actual).toBe(expected);
+    expect(views).toEqual(basicRunFixture.expectedViews);
+    expect(stableJson(views)).toBe(stableJson(basicRunFixture.expectedViews));
   });
 
   it('is deterministic across repeated stable JSON serializations', () => {

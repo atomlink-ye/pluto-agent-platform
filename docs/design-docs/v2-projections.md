@@ -33,17 +33,28 @@ artifact_published => all no-op except evidence still no-op
 request_rejected => all no-op
 ```
 
-## Reducer behavior
+## Per-kind reducer behavior + fixture coverage
 
-| event kind | task | mailbox | evidence |
-|---|---|---|---|
-| `run_started` | no-op | no-op | citation `"Run started."` + `pendingStartedAt` |
-| `run_completed` | no-op | no-op | citation `"Run completed."` + populate `view.run` + reset `pendingStartedAt` |
-| `mailbox_message_appended` | no-op | append with `messageId` dedup | no-op |
-| `task_created` | insert queued task with `taskId` dedup | no-op | no-op |
-| `task_state_changed` | update task state + append history with `eventId` dedup | no-op | no-op |
-| `artifact_published` | no-op | no-op | no-op |
-| `request_rejected` | no-op | no-op | no-op |
+This is the binding fixture-coverage table referenced by the S3 acceptance bar
+(plan deliverable 7). Every `RunEvent.kind` declared in S1 maps to a specific
+behavior in each of the three v1.0 projection reducers, and every cell is
+exercised by at least one test in
+`packages/pluto-v2-core/__tests__/projections/`.
+
+| event kind | task | mailbox | evidence | covered by fixture / test |
+|---|---|---|---|---|
+| `run_started` | no-op | no-op | citation `"Run started."` + `pendingStartedAt` | `basic-run.json` events[0]; `evidence-projection.test.ts`, `replay-all.test.ts` |
+| `run_completed` | no-op | no-op | citation `"Run completed."` + populate `view.run` + reset `pendingStartedAt` | `basic-run.json` events[4]; `evidence-projection.test.ts`, `replay-all.test.ts` |
+| `mailbox_message_appended` | no-op | append with `messageId` dedup | no-op | `basic-run.json` events[1]; `mailbox-projection.test.ts`, `evidence-projection.test.ts` (no-view-delta) |
+| `task_created` | insert queued task with `taskId` dedup | no-op | no-op | `basic-run.json` events[2]; `task-projection.test.ts`, `evidence-projection.test.ts` (no-view-delta) |
+| `task_state_changed` | update task state + append history with `eventId` dedup | no-op | no-op | `basic-run.json` events[3]; `task-projection.test.ts`, `evidence-projection.test.ts` (no-view-delta) |
+| `artifact_published` | no-op | no-op | no-op | `task-projection.test.ts` (no-input no-op); `evidence-projection.test.ts` (no-view-delta) |
+| `request_rejected` | no-op | no-op | no-op | `evidence-projection.test.ts` (no-view-delta) |
+
+The basic-run fixture exercises 5 of 7 kinds end-to-end through `replayAll`;
+the remaining 2 (`artifact_published`, `request_rejected`) are exercised by
+synthetic events in the unit tests since the v1.0 fixture doesn't include
+them. All cells map to at least one assertion.
 
 Additional binding notes:
 
