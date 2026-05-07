@@ -549,130 +549,275 @@ runtime adapter wiring.
 ### Concrete deliverables
 
 1. **Module layout under `packages/pluto-v2-core/src/core/`** (extends the
-   existing S1 package; do NOT introduce a new package):
-   - `core/spec-compiler.ts` — compiles a four-layer spec (Agent / Playbook /
-     Scenario / RunProfile authored objects) into a `TeamContext` value
-     consumed by the kernel. Loads the four-layer YAML / JSON authored
-     content; emits typed compile errors as a closed taxonomy.
-   - `core/team-context.ts` — `TeamContext` zod schema + types. Closed shape
-     covering: `runId`, `scenarioRef`, `runProfileRef`, declared `actors`
-     (closed ActorRef set for this run), `tasks` initial spec (optional),
-     `policies` (authority rules — see deliverable 4).
-   - `core/run-state.ts` — `RunState` zod schema + types. The current
-     in-memory projection of the event log, used **only** by the kernel for
-     authority validation; consumers use S3 projections, not `RunState`. Fields
-     include: `runId`, `sequence`, `status`, `tasks` (`Record<TaskId, TaskState>`
-     with state machine), `mailbox` (small head-only summary for idempotency
-     checking), `acceptedRequestKeys` (`Set<idempotencyKey>` for
-     `idempotency_replay` detection), `actors` (allowed ActorRef set).
-   - `core/run-state-reducer.ts` — pure `reduce(state, event): RunState`
-     function. Consumes only `RunEvent` (any kind, accepted or rejected).
-     Idempotent under replay. Total over the closed kind set; throws on
-     unexpected kind only as a defensive assertion.
-   - `core/run-event-log.ts` — append-only log abstraction with strict
-     monotonic `sequence` and an `appendOnly` invariant. Pluggable backing
-     store interface (`EventLogStore`); ships an in-memory implementation
-     for unit tests. NO file/database I/O. The kernel uses `EventLogStore`
-     to commit events and re-derive `RunState`.
-   - `core/protocol-validator.ts` — pure `validate(state, request, ctx):
-     ValidationResult`. Performs schema validation (already covered by
-     `ProtocolRequestSchema.parse`) plus the authority checks below.
-     Returns `{ ok: true, accept: AcceptedDecision } | { ok: false,
-     reject: RejectionReason, detail }`.
-   - `core/authority.ts` — closed authority predicates:
-     - `actorAuthorizedForIntent(actor, intent)` — maps each
-       `ProtocolRequest.intent` to the closed set of `ActorRef.kind` /
-       `role` allowed to issue it.
-     - `entityResolvable(state, request)` — confirms task/mailbox/artifact
-       refs in the payload exist in `RunState`.
-     - `transitionLegal(state, request)` — for `change_task_state`, enforces
-       the closed task-state transition graph (`queued → running → completed
-       | blocked | failed`; `running → blocked → running`; `* → cancelled`;
-       NO arbitrary transitions).
-     - `idempotencyClear(state, request)` — `(runId, actor, intent,
-       idempotencyKey)` not yet in `acceptedRequestKeys`.
-     - The S2 design doc fixes the closed authority matrix (which intent
-       requires which role); see deliverable 7.
-   - `core/run-kernel.ts` — single entry point.
-     `RunKernel.submit(request): { event: RunEvent }` — synchronous, pure
-     except for the side-effecting append-to-log. Steps: schema parse →
-     `protocol-validator.validate` → if accepted, construct accepted
-     `RunEvent` with server-assigned fields; if rejected, construct
-     `request_rejected` event. Append to log. Update `RunState`. Return
-     event.
-   - `core/index.ts` — re-exports the public core surface.
+   existing S1 package; do NOT introduce a new package).
 
-2. **Authority matrix (binding for S2).**
+   1.1 `core/spec-compiler.ts` — `compile(authored: AuthoredSpec): TeamContext`.
+   Consumes **already-parsed** authored objects (Agent / Playbook / Scenario /
+   RunProfile shaped TypeScript values); does NOT read YAML/JSON files itself.
+   YAML/JSON file loading is the runtime adapter's job (S4+). This keeps core
+   pure and no-I/O. Emits typed compile errors as a closed taxonomy:
+   `unknown_actor`, `duplicate_task`, `policy_invalid`, `intent_payload_mismatch`,
+   `actor_role_unknown`. `AuthoredSpec` is a zod-validated input type defined
+   alongside `TeamContext`.
 
-   For each `ProtocolRequest.intent`, list the closed `ActorRef.kind` /
-   `role` set authorized to issue it:
+   1.2 `core/team-context.ts` — `TeamContext` zod schema + types. Closed shape:
+   `runId`, `scenarioRef`, `runProfileRef`, `declaredActors: ActorRef[]` (the
+   closed set of actors authorized to participate in this run; subset of the
+   global `ActorRef` union), `initialTasks: Array<{taskId, title, ownerActor,
+   dependsOn[]}>` (optional), `policy: AuthorityPolicy` (the matrix from
+   deliverable 2; same shape across all runs at v1.0 — runtime cannot widen
+   it).
+
+   1.3 `core/run-state.ts` — `RunState` zod schema + types. **Authority-internal
+   only**. The kernel's minimum-shape view used solely to validate the next
+   request. Closed shape:
+   - `runId: string`
+   - `sequence: number` — highest applied event sequence; `-1` before the run
+     starts.
+   - `status: 'initialized' | 'running' | 'completed' | 'failed' | 'cancelled'`
+   - `tasks: Record<TaskId, { state: TaskState, ownerActor: ActorRef | null }>`
+     — **only** the data authority needs for `entity_unknown` / `state_conflict`
+     / ownership checks. NO `title`, NO `dependsOn`, NO state-history. Those
+     reside in S3's `TaskProjectionView`.
+   - `acceptedRequestKeys: Set<string>` — composite key set for idempotency.
+     Each key is the canonical string `${runId}|${actorKey(actor)}|${intent}|${idempotencyKey}`
+     where `actorKey` is a stable serialization of `ActorRef`. Requests with
+     `idempotencyKey === null` are NEVER added to the set and never trigger
+     `idempotency_replay` (null = "no dedup requested by client; treat every
+     such request as fresh"). The canonical key formula is exported as
+     `composeRequestKey(runId, actor, intent, idempotencyKey): string | null`
+     where the function returns `null` when `idempotencyKey` is null.
+   - `declaredActors: Set<string>` — `actorKey()`-stringified set of
+     `TeamContext.declaredActors`; an actor not in this set fails
+     `actor_not_authorized` regardless of role.
+
+   `RunState` MUST NOT contain mailbox content, artifact lists, evidence-shaped
+   data, full task histories, or anything that is the legitimate output of an
+   S3 projection. The S2 acceptance bar grep-checks for these absent fields.
+
+   1.4 `core/run-state-reducer.ts` — `reduce(state, event): RunState`.
+   Pure. Total over the closed `RunEvent` kind set (six accepted +
+   `request_rejected`). Each kind's reducer is a small switch arm. The reducer
+   updates: `sequence` (always advances by exactly 1), `status` (run_started
+   → running; run_completed → status from payload), `tasks` (task_created
+   inserts; task_state_changed updates state), and `acceptedRequestKeys` (every
+   accepted event adds its composite key if `requestId !== null` and the request
+   carried a non-null `idempotencyKey`). For `request_rejected` and unrecognized
+   future kinds the reducer is a **no-op except for `sequence` advance**;
+   schema rejects unknown kinds at parse time, so the reducer never sees them.
+   The reducer NEVER throws; defensive assertions are explicit `assert` calls
+   that are removed by the build for releases (or behind a `// istanbul ignore`).
+
+   1.5 `core/run-event-log.ts` — pluggable `EventLogStore` interface + in-memory
+   implementation `InMemoryEventLogStore`. Interface (binding):
+
+   ```ts
+   interface EventLogStore {
+     /** Highest sequence stored, or -1 when empty. Sync because in-memory only in S2. */
+     readonly head: number;
+     /** Append must be called with event.sequence === head + 1, else throws SequenceGapError. */
+     append(event: RunEvent): void;
+     /** Read events with sequence in [from, to). `to` defaults to head+1. Returns a snapshot. */
+     read(from?: number, to?: number): readonly RunEvent[];
+     /** Lookup by eventId; throws DuplicateAppendError if the same eventId appears twice in append. */
+     hasEventId(eventId: string): boolean;
+   }
+   ```
+
+   Sequence is assigned by the **kernel** (deliverable 1.7), not the store; the
+   store enforces monotonicity by checking `event.sequence === head + 1` on
+   append. Duplicate `eventId` (same uuid in two different events) throws
+   `DuplicateAppendError`. Replay is `read(0, head + 1)`. No file / DB / network
+   I/O. S4+ may add a durable implementation behind the same interface.
+
+   1.6 `core/protocol-validator.ts` — `validate(state, request, ctx):
+   ValidationResult`. Pure. Two-stage:
+   - **Stage 1: schema parse.** Already done by `ProtocolRequestSchema.parse`
+     (S1). If the input never parsed, the kernel never calls `validate`; see
+     deliverable 1.7 for malformed-input handling.
+   - **Stage 2: authority checks** in this fixed precedence (first failure
+     wins):
+     1. `actor_not_authorized` — actor not in `state.declaredActors` OR not
+        in the matrix row for `request.intent`.
+     2. `entity_unknown` — payload references task / artifact / mailbox-message
+        ids not in `state.tasks` etc., OR (for `change_task_state`) `from`
+        does not match the current task state, OR `dependsOn` references an
+        unknown task.
+     3. `state_conflict` — for `change_task_state`, the (from, to) transition
+        is not in the closed graph (deliverable 3).
+     4. `idempotency_replay` — `composeRequestKey(state.runId, request.actor,
+        request.intent, request.idempotencyKey)` is non-null AND already in
+        `state.acceptedRequestKeys`.
+
+   Returns `{ ok: true } | { ok: false, reason: RejectionReason, detail: string }`.
+
+   1.7 `core/run-kernel.ts` — `RunKernel.submit(rawRequest: unknown): {
+   event: RunEvent }`. Single synchronous entry point. Steps:
+   1. Schema parse `rawRequest` via `ProtocolRequestSchema.parse`. On parse
+      failure: emit `request_rejected` with `rejectionReason: 'schema_invalid'`
+      and `rejectedRequestId: extractRequestIdSafely(rawRequest) ?? '<unknown>'`,
+      `detail: <zod issues summary>`. Append + reduce + return.
+   2. Call `protocol-validator.validate(state, request)`.
+   3. If accepted: construct accepted `RunEvent` with kernel-assigned envelope
+      fields (`eventId = idProvider.next()`, `sequence = state.sequence + 1`,
+      `timestamp = clockProvider.nowIso()`, `requestId = request.requestId`,
+      `causationId = state.lastEventId ?? null`, `correlationId =
+      ctx.correlationId ?? null`, `actor = request.actor`, `entityRef = ...
+      derived from intent's payload`, `outcome: 'accepted'`, `kind` per the
+      intent→event mapping in S1, `payload` derived from request payload plus
+      server-assigned ids from `idProvider.next()` for new `messageId` /
+      `taskId` / `artifactId`).
+   4. If rejected: construct `request_rejected` event with the rejection reason
+      and detail.
+   5. `eventLog.append(event)`.
+   6. `state = reducer.reduce(state, event)`.
+   7. Return `{ event }`.
+
+   The kernel takes injected `idProvider: { next: () => string }` and
+   `clockProvider: { nowIso: () => string }` as constructor params. Default
+   providers (using `crypto.randomUUID()` and `new Date().toISOString()`) are
+   exported from `core/providers.ts` BUT marked deprecated for tests; tests
+   MUST inject deterministic providers (counter-based UUID, fixed-Date clock).
+   `core/**` files OTHER than `core/providers.ts` MUST NOT call
+   `crypto.randomUUID()` or `new Date()` directly; this is enforced by a
+   no-ambient-randomness grep in the S2 acceptance bar.
+
+   1.8 `core/index.ts` — re-exports the public core surface.
+
+2. **Authority matrix (binding for S2; major-bump to change).**
+
+   Authority matrix membership is part of the closed v1.0 contract surface:
+   per S1 versioning policy, ANY change to which `(actor, intent)` pairs
+   accept is a major-version bump. Documented in `core/authority.ts` and
+   the S2 design doc.
 
    | intent | allowed actors |
    |---|---|
-   | `append_mailbox_message` | manager, role=lead, role=planner, role=generator, role=evaluator |
-   | `create_task` | role=lead, role=planner |
-   | `change_task_state` | role=lead, role=generator, role=evaluator (each only for tasks they own); manager (any task) |
-   | `publish_artifact` | role=generator (intermediate + final), role=lead (final) |
-   | `complete_run` | manager only |
+   | `append_mailbox_message` | `kind: 'manager'`, `role: 'lead'`, `role: 'planner'`, `role: 'generator'`, `role: 'evaluator'`, `kind: 'system'` |
+   | `create_task` | `kind: 'manager'`, `role: 'lead'`, `role: 'planner'` |
+   | `change_task_state` | `kind: 'manager'` (any task); `role: 'lead'` (any task); `role: 'generator'` / `role: 'evaluator'` only for tasks where `state.tasks[taskId].ownerActor` matches the requesting actor; `role: 'planner'` only for `to: 'cancelled'` and `to: 'blocked'` (replanning hooks) |
+   | `publish_artifact` | `role: 'generator'` (any artifact); `role: 'lead'` (any artifact); `kind: 'manager'` (any artifact) |
+   | `complete_run` | `kind: 'manager'` |
 
-   The mapping is encoded in `core/authority.ts` as a closed table, NOT
-   open-ended policy. Roles are checked via `ActorRef.role`; manager via
-   `ActorRef.kind === 'manager'`.
+   Null-owner behavior: if `state.tasks[taskId].ownerActor === null`,
+   `change_task_state` is allowed for `kind: 'manager'` and `role: 'lead'`
+   only; other actors fail `actor_not_authorized`.
 
-3. **Task-state transition graph (binding).**
+   `kind: 'system'` events (e.g. `run_started`) are emitted directly by the
+   kernel WITHOUT going through `submit`; they do not appear in the matrix.
+
+   The matrix is encoded in `core/authority.ts` as a constant `AUTHORITY_MATRIX:
+   Readonly<Record<Intent, ReadonlyArray<ActorMatcher>>>` where `ActorMatcher`
+   is a closed union: `{ kind: 'manager' } | { kind: 'role'; role: Role } |
+   { kind: 'system' } | { kind: 'role-owns-task'; role: Role } | { kind:
+   'role-bounded-transitions'; role: Role; transitions: Array<TaskState> }`.
+   Tests cover every (actor, intent) pair both inside and outside the matrix.
+
+3. **Task-state transition graph (binding; major-bump to change).**
 
    Closed graph encoded in `core/authority.ts`:
 
    ```
-   queued    → running, cancelled
+   queued    → running, blocked, completed, failed, cancelled
    running   → completed, blocked, failed, cancelled
-   blocked   → running, cancelled
-   completed → (terminal)
-   failed    → (terminal)
-   cancelled → (terminal)
+   blocked   → running, completed, failed, cancelled
+   completed → (terminal — no outgoing)
+   failed    → (terminal — no outgoing)
+   cancelled → (terminal — no outgoing)
    ```
 
-   Any transition outside this graph is `state_conflict`.
+   `queued → completed` is permitted (covers instant-completion tasks per
+   `test-fixtures/replay/basic-run.json`). Terminals are absolute: once a
+   task reaches `completed`, `failed`, or `cancelled`, no further
+   `change_task_state` is legal.
 
-4. **Pure-core invariants (encoded in tests).**
+   Any transition outside this graph is `state_conflict`. The graph is
+   encoded as a constant `TRANSITION_GRAPH: Readonly<Record<TaskState,
+   ReadonlyArray<TaskState>>>` and tested table-driven over all 6×6 = 36
+   pairs.
 
-   - **Determinism**: same `(initial state, request sequence) → same event
-     sequence`.
-   - **Idempotency under replay**: replaying the kernel's emitted event
-     stream through `run-state-reducer.reduce` from genesis yields the same
-     final `RunState`.
-   - **No I/O**: `core/**` MUST NOT import `node:fs`, `node:path`, `node:net`,
-     any HTTP/WS client, or anything outside the package itself. The
+4. **Pure-core invariants (encoded in tests + acceptance grep).**
+
+   - **Determinism with injected providers.** The kernel takes
+     `idProvider` and `clockProvider`. Tests inject deterministic
+     providers (counter-based UUIDs, fixed clock) so `(initial state,
+     request sequence) → same event sequence` holds exactly.
+   - **No ambient randomness/time in core.** Everywhere under `core/**`
+     other than `core/providers.ts`, `crypto.randomUUID`, `Math.random`,
+     `Date.now`, `new Date()`, `performance.now()` are FORBIDDEN. The
+     S2 acceptance bar greps for these patterns and fails on any match.
+   - **Idempotency under replay.** Replaying `eventLog.read(0, head+1)`
+     through `run-state-reducer.reduce` from `initialState(teamContext)`
+     yields the same final `RunState` as the live kernel produced.
+   - **No I/O.** `core/**` MUST NOT import `node:fs`, `node:path`,
+     `node:net`, `node:http`, `node:https`, `node:child_process`,
+     `node:worker_threads`, `node:dgram`, `node:dns`, `node:tls`, any
+     HTTP/WS client, or anything outside the package itself. The
      `EventLogStore` interface is the only abstraction-of-side-effect
-     boundary, and the in-memory implementation MUST be pure.
-   - **No runtime concepts**: no Paseo, no OpenCode, no helper-CLI, no
-     adapter, no CLI strings — same no-runtime-leak grep as S1, applied to
-     `core/**`.
+     boundary, and `InMemoryEventLogStore` MUST be pure.
+   - **No runtime concepts.** No Paseo, no OpenCode, no helper-CLI, no
+     adapter, no CLI strings — same no-runtime-leak grep as S1, applied
+     to `core/**`.
+   - **`RunState` minimality.** Acceptance grep verifies `core/run-state.ts`
+     does NOT contain the strings `history`, `body:`, `messages:`,
+     `artifacts:`, `evidence`, `summary` (anywhere outside type
+     references like `RunStateField` or doc comments). Those shapes are
+     S3's territory.
 
 5. **Tests.**
 
    Under `packages/pluto-v2-core/__tests__/core/`:
 
-   - `__tests__/core/spec-compiler.test.ts` — happy-path compile +
-     compile-error taxonomy (`unknown_actor`, `duplicate_task`,
-     `policy_invalid`, etc.; closed enum).
-   - `__tests__/core/run-state-reducer.test.ts` — reducer purity tests:
-     reduce twice = same state; reducer is total over the closed kind set.
-   - `__tests__/core/run-event-log.test.ts` — in-memory log append-only,
-     monotonic sequence, replay yields same events.
-   - `__tests__/core/protocol-validator.test.ts` — one parse-success +
-     authority-accept per intent (5); one rejection test per
-     `RejectionReason` (6). Tests use canonical fixture states
-     (re-using `test-fixtures/replay/basic-run.json` where applicable).
-   - `__tests__/core/authority.test.ts` — authority matrix table-driven
-     test: every `(actor, intent)` pair in the matrix accepts; every pair
-     OUTSIDE the matrix rejects with `actor_not_authorized`.
-   - `__tests__/core/transition-graph.test.ts` — task-state transition
-     graph table-driven: every legal transition accepts; every illegal
-     transition rejects with `state_conflict`.
-   - `__tests__/core/run-kernel.test.ts` — end-to-end kernel scenarios
-     producing event streams that match expected snapshots; covers all 5
-     intents + all 6 rejection reasons.
+   - `__tests__/core/spec-compiler.test.ts` — happy-path compile per
+     well-formed `AuthoredSpec`; one negative test per closed compile-error
+     (`unknown_actor`, `duplicate_task`, `policy_invalid`,
+     `intent_payload_mismatch`, `actor_role_unknown`).
+   - `__tests__/core/run-state-reducer.test.ts` — reducer purity:
+     `reduce(reduce(s, e), e)` MUST equal `reduce(s, e)` for an idempotent
+     event sequence (replay equality); table-driven over each kind.
+   - `__tests__/core/run-event-log.test.ts` — `InMemoryEventLogStore`
+     append+read+monotonic-sequence; `SequenceGapError` on out-of-order
+     append; `DuplicateAppendError` on duplicate eventId; `read(from, to)`
+     bounds; `replay` equality.
+   - `__tests__/core/protocol-validator.test.ts` — one accept test per
+     intent (5); one reject test per `RejectionReason` (6); rejection
+     precedence: a request that violates BOTH `actor_not_authorized` and
+     `state_conflict` returns `actor_not_authorized` (precedence 1 < 3).
+   - `__tests__/core/authority.test.ts` — authority matrix table-driven:
+     every `(actor, intent)` pair in the matrix accepts; every pair
+     OUTSIDE the matrix rejects with `actor_not_authorized`. Includes the
+     `role-owns-task` matchers (test with matching + non-matching owner).
+   - `__tests__/core/transition-graph.test.ts` — full 6×6 = 36 table-driven
+     coverage: legal transitions accept (matched against the constant);
+     illegal transitions reject with `state_conflict`; terminals reject ALL
+     outgoing transitions.
+   - `__tests__/core/run-kernel.test.ts` — end-to-end kernel scenarios with
+     deterministic `idProvider` (counter UUID) + `clockProvider` (fixed
+     ISO). Includes:
+     - basic-run replay: kernel applied to the request sequence implied by
+       `test-fixtures/replay/basic-run.json` produces the SAME events the
+       fixture records (modulo ids assigned by counter providers; tests
+       compare sequences, kinds, payloads, and actor / outcome).
+     - one rejection scenario per `RejectionReason` (6 sub-tests).
+     - malformed-input scenario: kernel.submit({garbage}) returns
+       `request_rejected` with `schema_invalid` and continues to accept
+       subsequent valid requests.
+
+   Total S2 test count target: ≥ 35 across the 7 files (final exact count
+   is up to the implementer; the acceptance bar checks ≥ 35).
+
+6. **No-runtime-leak + no-ambient-randomness (S2 scope).**
+
+   - Same no-runtime-leak grep as S1, applied to
+     `packages/pluto-v2-core/src/core/**` and
+     `packages/pluto-v2-core/__tests__/core/**`. Zero matches expected
+     (design doc narrative references are still allowed).
+   - **Additional grep**: `packages/pluto-v2-core/src/core/**` MUST NOT
+     contain `crypto\.randomUUID|Math\.random|Date\.now|new Date\(|performance\.now`
+     OUTSIDE `core/providers.ts`. Test files MAY use them only inside
+     deterministic-provider helpers; the grep allows
+     `__tests__/core/**/*` to use them but the assertion failure rate must
+     be zero in production code paths.
 
 6. **No-runtime-leak (S2 scope).**
 
@@ -706,21 +851,26 @@ The S1 remote run lost working-tree files between gate completion and the
 self-review loop, forcing the local manager to reconstruct from
 `artifacts/diff.patch`. To prevent recurrence:
 
-- The remote root manager MUST `git add -A && git commit` AS SOON AS gate
+- The remote bundle's `commands.sh` MUST include a `commit_and_push` step
+  that runs `git add -A && git commit -m "<slice>: <gate-artifact-pointer>"
+  && git push origin <branch>` and writes the resulting commit SHA + remote
+  ref to `artifacts/branch-pushed-sha.txt`.
+- The remote root manager MUST run `commit_and_push` AS SOON AS gate
   artifacts are written (i.e. immediately after `gate_test_suite` returns
   zero), BEFORE the self-review loop begins.
-- The remote root manager MUST `git push origin <branch>` after the commit,
-  so the work is durable and addressable from the local manager regardless
-  of working-tree state.
-- The self-review loop runs against the committed branch, not the working
-  tree. The reviewer reads the diff via `git show` / `git diff main..HEAD`,
-  not via uncommitted files.
-- If the review loop produces fix rounds, each fix is a NEW commit on the
-  branch. The branch grows; nothing is reverted in working tree.
+- The self-review loop runs against the **committed and pushed** branch,
+  not the working tree. The reviewer reads the diff via `git show` /
+  `git diff main..HEAD`, not via uncommitted files.
+- Each fix round is a NEW commit + a fresh `commit_and_push`. The branch
+  grows monotonically; nothing is reverted in working tree.
+- Acceptance time: the local manager verifies that
+  `git rev-parse origin/<branch>` equals the SHA recorded in
+  `artifacts/branch-pushed-sha.txt`, AND that `git status --porcelain`
+  inside the integration worktree is empty. If either check fails, the
+  slice is BLOCKED until resolved.
 
-This rule is enforced by the S2 acceptance bar's diff-hygiene check (the
-branch HEAD MUST be ahead of `main` by at least one commit at acceptance
-time).
+This rule is enforced by the S2 acceptance bar's diff-hygiene check
+described below.
 
 ### S2 dependency graph
 
@@ -731,29 +881,58 @@ depend on S3, S4, or any later slice.
 
 - **Package-scoped typecheck**: `pnpm --filter @pluto/v2-core typecheck` clean.
 - **Package-scoped vitest**: `pnpm --filter @pluto/v2-core exec vitest run`
-  green; the new `core/` test suite ≥ 7 files; total package test count ≥
-  S1 baseline (32) + S2 additions; finishes < 90 s.
+  green; the new `core/` test suite ≥ 7 files; package test count ≥ S1
+  baseline (32) + 35 S2 additions; finishes < 90 s.
 - **Package-scoped build**: `pnpm --filter @pluto/v2-core build` clean.
-- **Root regression**: `pnpm test` green (single full-suite at slice end;
-  R7).
-- All authority predicates table-driven and prove closure over the matrix.
-- Reducer purity test passes (reduce-twice equality).
-- No-runtime-leak grep clean over `core/**`.
-- Diff hygiene: edits limited to `packages/pluto-v2-core/src/core/**`,
-  `packages/pluto-v2-core/__tests__/core/**`,
-  `packages/pluto-v2-core/src/index.ts` (additive re-exports for `core/*`),
-  `packages/pluto-v2-core/README.md` (additive S2 section),
-  `docs/design-docs/v2-core.md` (new), and the S2 row of the Status
-  tracker. NO edits to S1 schema files. NO edits to root `package.json` /
-  `pnpm-workspace.yaml` / `.gitignore` / lockfile. NO edits to `src/`,
-  `tests/` (root), `evals/`, `docker/`, `playbooks/`, `scenarios/`,
-  `run-profiles/`, `agents/`, or any v1.6 contract file.
-- **Branch must be committed and pushed**: at acceptance time, branch HEAD
-  is at least one commit ahead of `main`, and the remote review loop ran
-  against the committed branch (not uncommitted working-tree state).
-- A reviewer sub-agent confirms (a) authority matrix membership, (b) closed
-  task-state transition graph, (c) reducer purity, (d) no-I/O assertion,
-  (e) no-runtime-leak.
+- **Root regression**: `pnpm test` green (single full-suite at slice end; R7).
+- **Authority closure**: every (actor, intent) pair in the matrix accepts;
+  every pair OUTSIDE the matrix rejects with `actor_not_authorized`.
+- **Transition closure**: full 6×6 grid covered; legal cells accept, illegal
+  cells reject with `state_conflict`.
+- **Reducer purity**: replay-equality test passes.
+- **Idempotency closure**: composite key `(runId, actor, intent,
+  idempotencyKey)` test passes; null-key behavior test (no dedup) passes.
+- **Determinism**: end-to-end kernel test using counter+fixed-clock providers
+  produces byte-equal event streams across two runs.
+- **No-I/O grep**: `core/**` does not import any `node:*` I/O module other
+  than the type-level deps already in S1.
+- **No-runtime-leak grep**: clean over `core/**` source + tests.
+- **No-ambient-randomness grep**: `core/**` outside `core/providers.ts`
+  contains zero matches for `crypto\.randomUUID|Math\.random|Date\.now|new Date\(|performance\.now`.
+- **`RunState` minimality grep**: `core/run-state.ts` does not contain
+  `history`, `body:`, `messages:`, `artifacts:`, `evidence`, `summary`
+  outside doc comments.
+- **basic-run fixture compatibility**: `run-kernel.test.ts` includes a
+  scenario that drives the kernel with the request sequence implied by
+  `test-fixtures/replay/basic-run.json` and asserts the output event stream
+  matches the fixture's `events` array (sequence, kind, outcome, actor,
+  payload — eventId/timestamp may differ because counter providers).
+- **Diff hygiene**: edits limited to:
+  - `packages/pluto-v2-core/src/core/**`,
+  - `packages/pluto-v2-core/__tests__/core/**`,
+  - `packages/pluto-v2-core/src/index.ts` (additive re-exports),
+  - `packages/pluto-v2-core/README.md` (additive S2 section),
+  - `docs/design-docs/v2-core.md` (new),
+  - `docs/plans/active/v2-rewrite.md` — S2 status row only.
+  - **NO edits** to S1 schema files (`run-event.ts`, `protocol-request.ts`,
+    `authority-outcome.ts`, `actor-ref.ts`, `entity-ref.ts`, `projections.ts`,
+    `replay-fixture.ts`, `versioning.ts`, S1 test files, S1 fixture).
+  - **NO edits** to root `package.json` / `pnpm-workspace.yaml` /
+    `.gitignore` / `pnpm-lock.yaml`.
+  - **NO edits** to `src/`, `tests/` (root), `evals/`, `docker/`,
+    `playbooks/`, `scenarios/`, `run-profiles/`, `agents/`, or any v1.6
+    contract file.
+- **Branch is committed AND pushed**: at acceptance time,
+  `git rev-parse origin/<branch>` equals the SHA recorded in
+  `artifacts/branch-pushed-sha.txt`; `git status --porcelain` in the
+  integration worktree is empty; `git log main..origin/<branch>` is
+  non-empty.
+- A reviewer sub-agent confirms (a) authority matrix membership matches
+  deliverable 2 verbatim, (b) transition graph matches deliverable 3
+  verbatim, (c) reducer purity test exists and passes, (d) no-I/O grep
+  passes, (e) no-runtime-leak grep passes, (f) no-ambient-randomness
+  grep passes, (g) `RunState` minimality grep passes, (h) basic-run
+  fixture compatibility test exists and passes.
 
 ## Discovery gate (per slice)
 
