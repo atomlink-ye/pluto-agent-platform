@@ -1,0 +1,70 @@
+{
+  "schemaVersion": "1.0",
+  "kind": "evidence_packet",
+  "runId": "029db445-aa2b-406e-ad16-fde7fb45e51d",
+  "status": "succeeded",
+  "summary": "Deterministic paseo phase plan completed.",
+  "startedAt": "2026-05-07T15:29:28.981Z",
+  "completedAt": "2026-05-07T15:30:36.993Z",
+  "generatedAt": "2026-05-07T15:30:36.993Z",
+  "citations": [
+    {
+      "eventId": "abf37bb9-b950-4558-8a09-1908b7d4ddd7",
+      "kind": "run_started",
+      "text": "Run started.",
+      "observedAt": "2026-05-07T15:29:28.982Z"
+    },
+    {
+      "eventId": "002c50a3-f19c-491b-bf67-cad843935f2c",
+      "kind": "run_completed",
+      "text": "Run completed.",
+      "observedAt": "2026-05-07T15:30:36.993Z"
+    }
+  ],
+  "tasks": {
+    "441632bc-09cc-41a8-953d-e1333985fbbb": {
+      "title": "Implement the requested runtime change",
+      "ownerActor": {
+        "kind": "role",
+        "role": "generator"
+      },
+      "state": "completed",
+      "dependsOn": [],
+      "history": [
+        {
+          "from": "queued",
+          "to": "running",
+          "eventId": "b2738763-f9d6-4e1d-8dfd-5bd524a10531"
+        },
+        {
+          "from": "running",
+          "to": "completed",
+          "eventId": "a998b45e-c2b0-46b4-a329-5a242144b83b"
+        }
+      ]
+    }
+  },
+  "mailboxMessages": [
+    {
+      "messageId": "48e72b8b-5094-46f1-bf40-1b96c383bdd4",
+      "fromActor": {
+        "kind": "role",
+        "role": "evaluator"
+      },
+      "toActor": {
+        "kind": "manager"
+      },
+      "kind": "final",
+      "body": "Artifact reviewed. Ready to complete the run.",
+      "sequence": 4
+    }
+  ],
+  "artifacts": [
+    {
+      "artifactId": "91c02e65-b10f-4c4d-a524-e84047e01bc6",
+      "kind": "final",
+      "mediaType": "text/markdown",
+      "byteSize": 256
+    }
+  ]
+}

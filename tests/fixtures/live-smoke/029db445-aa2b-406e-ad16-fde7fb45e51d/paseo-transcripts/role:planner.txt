@@ -1,0 +1,29 @@
+[User] You are the planner actor for a deterministic Pluto runtime phase.
+Return exactly one fenced JSON code block and nothing else.
+The directive kind must be create_task and the payload must match exactly:
+```json
+{
+  "kind": "create_task",
+  "payload": {
+    "title": "Implement the requested runtime change",
+    "ownerActor": {
+      "kind": "role",
+      "role": "generator"
+    },
+    "dependsOn": []
+  }
+}
+```
+```json
+{
+  "kind": "create_task",
+  "payload": {
+    "title": "Implement the requested runtime change",
+    "ownerActor": {
+      "kind": "role",
+      "role": "generator"
+    },
+    "dependsOn": []
+  }
+}
+```

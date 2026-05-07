@@ -1,0 +1,65 @@
+[User] You are the generator actor for a deterministic Pluto runtime phase.
+Return exactly one fenced JSON code block and nothing else.
+The directive kind must be change_task_state and the payload must match exactly:
+```json
+{
+  "kind": "change_task_state",
+  "payload": {
+    "taskId": "441632bc-09cc-41a8-953d-e1333985fbbb",
+    "to": "running"
+  }
+}
+```
+```json
+{
+  "kind": "change_task_state",
+  "payload": {
+    "taskId": "441632bc-09cc-41a8-953d-e1333985fbbb",
+    "to": "running"
+  }
+}
+```
+[User] You are the generator actor for a deterministic Pluto runtime phase.
+Return exactly one fenced JSON code block and nothing else.
+The directive kind must be publish_artifact and the payload must match exactly:
+```json
+{
+  "kind": "publish_artifact",
+  "payload": {
+    "kind": "final",
+    "mediaType": "text/markdown",
+    "byteSize": 256
+  }
+}
+```
+```json
+{
+  "kind": "publish_artifact",
+  "payload": {
+    "kind": "final",
+    "mediaType": "text/markdown",
+    "byteSize": 256
+  }
+}
+```
+[User] You are the generator actor for a deterministic Pluto runtime phase.
+Return exactly one fenced JSON code block and nothing else.
+The directive kind must be change_task_state and the payload must match exactly:
+```json
+{
+  "kind": "change_task_state",
+  "payload": {
+    "taskId": "441632bc-09cc-41a8-953d-e1333985fbbb",
+    "to": "completed"
+  }
+}
+```
+```json
+{
+  "kind": "change_task_state",
+  "payload": {
+    "taskId": "441632bc-09cc-41a8-953d-e1333985fbbb",
+    "to": "completed"
+  }
+}
+```

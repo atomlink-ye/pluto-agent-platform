@@ -106,8 +106,8 @@ function latestCreatedTaskId(view: KernelView): string {
 function buildDirectivePrompt(actor: ActorRef, directiveKind: string, payload: Record<string, unknown>): string {
   return [
     `You are the ${actorPromptLabel(actor)} actor for a deterministic Pluto runtime phase.`,
-    `Return exactly one fenced \`\`\`json block and nothing else.`,
-    `The directive kind must be \`${directiveKind}\` and the payload must match exactly.`,
+    `Return exactly one fenced JSON code block and nothing else.`,
+    `The directive kind must be ${directiveKind} and the payload must match exactly:`,
     '```json',
     JSON.stringify({ kind: directiveKind, payload }, null, 2),
     '```',

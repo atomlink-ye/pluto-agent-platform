@@ -56,7 +56,7 @@ describe('makePaseoAdapter', () => {
     const pending = adapter.pendingPaseoTurn(state, kernelViewOf(kernel));
 
     expect(pending?.actor).toEqual({ kind: 'role', role: 'planner' });
-    expect(pending?.prompt).toContain('Return exactly one fenced ```json block and nothing else.');
+    expect(pending?.prompt).toContain('Return exactly one fenced JSON code block and nothing else.');
     expect(pending?.prompt).toContain('"kind": "create_task"');
   });
 

@@ -1852,12 +1852,14 @@ becomes "`child_process.spawn` allowed ONLY inside
    ```ts
    export interface PaseoAgentSpec {
      readonly provider: string;       // e.g. 'opencode'
-     readonly model: string;          // e.g. 'openai/gpt-5.4'
+     readonly model: string;          // e.g. 'openai/gpt-5.4-mini'
      readonly mode: string;           // e.g. 'build'
      readonly thinking?: string;      // e.g. 'high'
      readonly title: string;
-     readonly labels?: ReadonlyArray<string>;
-     readonly cwd?: string;
+     readonly initialPrompt: string;  // positional <prompt> arg for `paseo run`;
+                                      // becomes the first user turn for the actor
+     readonly labels?: ReadonlyArray<`${string}=${string}`>;  // paseo CLI rejects bare ids
+     readonly cwd?: string;            // sandbox-side path when --host targets a remote daemon
    }
 
    export interface PaseoAgentSession {
