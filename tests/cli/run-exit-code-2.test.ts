@@ -25,6 +25,7 @@ describe("src/cli/run.ts exit code 2", () => {
         [
           "tsx",
           join(process.cwd(), "src/cli/run.ts"),
+          "--runtime=v1",
           "--scenario",
           "hello-team",
           "--run-profile",

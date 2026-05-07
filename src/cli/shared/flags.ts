@@ -30,7 +30,10 @@ export function parseKeyValueFlags<T extends object>(
       continue;
     }
 
-    const definition = arg ? spec.flags[arg] : undefined;
+    const inlineValueIndex = arg?.indexOf("=") ?? -1;
+    const flagName = inlineValueIndex > 0 ? arg?.slice(0, inlineValueIndex) : arg;
+    const inlineValue = inlineValueIndex > 0 ? arg?.slice(inlineValueIndex + 1) : undefined;
+    const definition = flagName ? spec.flags[flagName] : undefined;
     if (!definition) {
       if (arg?.startsWith("--")) {
         throw new Error(`unknown_flag:${arg}`);
@@ -38,9 +41,11 @@ export function parseKeyValueFlags<T extends object>(
       continue;
     }
 
-    const value = argv[index + 1];
+    const value = inlineValue ?? argv[index + 1];
     parsed[definition.key] = definition.parse ? definition.parse(value) : value as T[keyof T];
-    index += 1;
+    if (inlineValue === undefined) {
+      index += 1;
+    }
   }
 
   for (const key of spec.required ?? []) {
@@ -66,6 +71,12 @@ export function parseSubcommandArgs(argv: string[]): ParsedSubcommandArgs {
       if (arg) {
         positional.push(arg);
       }
+      continue;
+    }
+
+    const inlineValueIndex = arg.indexOf("=");
+    if (inlineValueIndex > -1) {
+      flags[arg.slice(2, inlineValueIndex)] = arg.slice(inlineValueIndex + 1);
       continue;
     }
 

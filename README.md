@@ -30,6 +30,8 @@ pnpm pluto:package -- --scenario hello-team --run-profile fake-smoke
 pnpm pluto:run --scenario hello-team --run-profile fake-smoke --workspace .tmp/pluto-cli
 ```
 
+Short deprecation note: `--runtime=v1` remains available for the legacy v1.6 manager-run harness, but it now prints a deprecation warning and will be archived in S7. See `docs/design-docs/v2-cli-default-switch.md` for migration details.
+
 Outputs:
 
 - `./.pluto/runs/<runId>/mailbox.jsonl`

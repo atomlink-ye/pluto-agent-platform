@@ -33,6 +33,7 @@
     "publish": "tsx src/cli/publish.ts",
     "pluto:package": "tsx src/cli/package.ts",
     "pluto:run": "tsx src/cli/run.ts",
+    "pluto:run:v1": "tsx src/cli/run.ts --runtime=v1",
     "release": "tsx src/cli/release.ts",
     "review": "tsx src/cli/review.ts",
     "runs": "tsx src/cli/runs.ts",

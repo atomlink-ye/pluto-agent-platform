@@ -24,6 +24,7 @@ describe("src/cli/run.ts", () => {
       [
         "tsx",
         join(process.cwd(), "src/cli/run.ts"),
+        "--runtime=v1",
         "--scenario",
         "hello-team",
         "--run-profile",
