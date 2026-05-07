@@ -104,7 +104,13 @@ describe("src/cli/run.ts default v2 runtime", () => {
       },
     );
 
-    expect(stderr).toBe("");
+    // Filter out pnpm/npm env warnings ("npm warn Unknown env config ...") that
+    // can appear on some host pnpm versions and aren't part of the CLI surface.
+    const filteredStderr = stderr
+      .split("\n")
+      .filter((line) => !line.startsWith("npm warn") && line.trim() !== "")
+      .join("\n");
+    expect(filteredStderr).toBe("");
     const output = JSON.parse(stdout) as { status: string; evidencePacketPath: string; transcriptPaths: string[] };
     expect(output.status).toBe("succeeded");
     expect(output.evidencePacketPath).toBe(join(dataDir, "runs", "scenario", "evidence-packet.json"));
