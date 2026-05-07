@@ -1,0 +1,70 @@
+{
+  "schemaVersion": "1.0",
+  "kind": "evidence_packet",
+  "runId": "run-hello-team-paseo-mock",
+  "status": "succeeded",
+  "summary": "Deterministic paseo phase plan completed.",
+  "startedAt": "2026-05-07T00:00:00.000Z",
+  "completedAt": "2026-05-07T00:00:00.000Z",
+  "generatedAt": "2026-05-07T00:00:00.000Z",
+  "citations": [
+    {
+      "eventId": "00000000-0000-4000-8000-000000000001",
+      "kind": "run_started",
+      "text": "Run started.",
+      "observedAt": "2026-05-07T00:00:00.000Z"
+    },
+    {
+      "eventId": "00000000-0000-4000-8000-00000000000b",
+      "kind": "run_completed",
+      "text": "Run completed.",
+      "observedAt": "2026-05-07T00:00:00.000Z"
+    }
+  ],
+  "tasks": {
+    "00000000-0000-4000-8000-000000000003": {
+      "title": "Implement the requested runtime change",
+      "ownerActor": {
+        "kind": "role",
+        "role": "generator"
+      },
+      "state": "completed",
+      "dependsOn": [],
+      "history": [
+        {
+          "from": "queued",
+          "to": "running",
+          "eventId": "00000000-0000-4000-8000-000000000004"
+        },
+        {
+          "from": "running",
+          "to": "completed",
+          "eventId": "00000000-0000-4000-8000-000000000009"
+        }
+      ]
+    }
+  },
+  "mailboxMessages": [
+    {
+      "messageId": "00000000-0000-4000-8000-000000000008",
+      "fromActor": {
+        "kind": "role",
+        "role": "evaluator"
+      },
+      "toActor": {
+        "kind": "manager"
+      },
+      "kind": "final",
+      "body": "Artifact reviewed. Ready to complete the run.",
+      "sequence": 4
+    }
+  ],
+  "artifacts": [
+    {
+      "artifactId": "00000000-0000-4000-8000-000000000006",
+      "kind": "final",
+      "mediaType": "text/markdown",
+      "byteSize": 256
+    }
+  ]
+}

@@ -1,0 +1,20 @@
+runId: run-hello-team-paseo-mock
+scenarioRef: scenario/hello-team-paseo-mock
+runProfileRef: paseo-mock
+actors:
+  manager:
+    kind: manager
+  planner:
+    kind: role
+    role: planner
+  generator:
+    kind: role
+    role: generator
+  evaluator:
+    kind: role
+    role: evaluator
+declaredActors:
+  - manager
+  - planner
+  - generator
+  - evaluator

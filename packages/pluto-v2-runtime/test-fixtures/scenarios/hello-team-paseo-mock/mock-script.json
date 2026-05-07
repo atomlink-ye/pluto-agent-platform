@@ -1,0 +1,85 @@
+[
+  {
+    "turnIndex": 0,
+    "actor": {
+      "kind": "role",
+      "role": "planner"
+    },
+    "transcriptText": "```json\n{\n  \"kind\": \"create_task\",\n  \"payload\": {\n    \"title\": \"Implement the requested runtime change\",\n    \"ownerActor\": {\n      \"kind\": \"role\",\n      \"role\": \"generator\"\n    },\n    \"dependsOn\": []\n  }\n}\n```",
+    "usage": {
+      "inputTokens": 120,
+      "outputTokens": 32,
+      "costUsd": 0.01
+    },
+    "waitExitCode": 0
+  },
+  {
+    "turnIndex": 1,
+    "actor": {
+      "kind": "role",
+      "role": "generator"
+    },
+    "transcriptText": "```json\n{\n  \"kind\": \"change_task_state\",\n  \"payload\": {\n    \"taskId\": \"00000000-0000-4000-8000-000000000003\",\n    \"to\": \"running\"\n  }\n}\n```",
+    "usage": {
+      "inputTokens": 110,
+      "outputTokens": 24,
+      "costUsd": 0.009
+    },
+    "waitExitCode": 0
+  },
+  {
+    "turnIndex": 2,
+    "actor": {
+      "kind": "role",
+      "role": "generator"
+    },
+    "transcriptText": "```json\n{\n  \"kind\": \"publish_artifact\",\n  \"payload\": {\n    \"kind\": \"final\",\n    \"mediaType\": \"text/markdown\",\n    \"byteSize\": 256\n  }\n}\n```",
+    "usage": {
+      "inputTokens": 90,
+      "outputTokens": 20,
+      "costUsd": 0.008
+    },
+    "waitExitCode": 0
+  },
+  {
+    "turnIndex": 3,
+    "actor": {
+      "kind": "role",
+      "role": "evaluator"
+    },
+    "transcriptText": "```json\n{\n  \"kind\": \"append_mailbox_message\",\n  \"payload\": {\n    \"fromActor\": {\n      \"kind\": \"role\",\n      \"role\": \"evaluator\"\n    },\n    \"toActor\": {\n      \"kind\": \"manager\"\n    },\n    \"kind\": \"final\",\n    \"body\": \"Artifact reviewed. Ready to complete the run.\"\n  }\n}\n```",
+    "usage": {
+      "inputTokens": 100,
+      "outputTokens": 18,
+      "costUsd": 0.007
+    },
+    "waitExitCode": 0
+  },
+  {
+    "turnIndex": 4,
+    "actor": {
+      "kind": "role",
+      "role": "generator"
+    },
+    "transcriptText": "```json\n{\n  \"kind\": \"change_task_state\",\n  \"payload\": {\n    \"taskId\": \"00000000-0000-4000-8000-000000000003\",\n    \"to\": \"completed\"\n  }\n}\n```",
+    "usage": {
+      "inputTokens": 95,
+      "outputTokens": 21,
+      "costUsd": 0.0085
+    },
+    "waitExitCode": 0
+  },
+  {
+    "turnIndex": 5,
+    "actor": {
+      "kind": "manager"
+    },
+    "transcriptText": "```json\n{\n  \"kind\": \"complete_run\",\n  \"payload\": {\n    \"status\": \"succeeded\",\n    \"summary\": \"Deterministic paseo phase plan completed.\"\n  }\n}\n```",
+    "usage": {
+      "inputTokens": 80,
+      "outputTokens": 16,
+      "costUsd": 0.006
+    },
+    "waitExitCode": 0
+  }
+]
