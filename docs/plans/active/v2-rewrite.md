@@ -1840,10 +1840,33 @@ provider-agnostic at the type level: the model name comes from
 
    `packages/pluto-v2-runtime/src/adapters/paseo/paseo-adapter.ts`
 
-   Implements `RuntimeAdapter<PaseoAdapterState>` (S4 table E,
-   sync-only). State carries: turn counter, the buffered LLM response
-   for the current actor, the next intended ProtocolRequest, and the
-   conversation transcript per actor.
+   Implements **`PaseoRuntimeAdapter<S>`**, a Paseo-specific
+   sub-interface that **extends** S4's closed `RuntimeAdapter<S>`
+   without mutating it. The base `init`/`step` surface stays
+   byte-identical to S4 table E. The sub-interface adds two
+   pure-state methods that the driver inspects to decide whether to
+   fire an HTTP call BEFORE the next `step`:
+
+   ```ts
+   import type { RuntimeAdapter, KernelView } from '../../runtime/runtime-adapter.js';
+
+   export interface PaseoRuntimeAdapter<S> extends RuntimeAdapter<S> {
+     /** Returns a model request iff the adapter is "awaiting model".
+      *  Pure inspection — does NOT mutate state. */
+     pendingModelCall(state: S, view: KernelView): PaseoModelRequest | null;
+
+     /** Folds a model response into a new state. Pure; sync. */
+     withModelResponse(state: S, response: PaseoModelResponse): S;
+   }
+   ```
+
+   This is **strictly additive** at the type level: S4 `RuntimeAdapter`
+   is unchanged, S4 `runScenario` (which only knows `init`/`step`)
+   keeps working with any adapter that does NOT extend
+   `PaseoRuntimeAdapter`. The Paseo driver (`runPaseo`, deliverable 3)
+   knows how to call the two extension methods in the right order.
+   No new ProtocolRequest intent is introduced — the model call is
+   transport, not a kernel event.
 
    Closed `PaseoAdapterState`:
 
@@ -1852,51 +1875,67 @@ provider-agnostic at the type level: the model name comes from
      readonly turnIndex: number;
      readonly maxTurns: number;
      readonly currentActor: ActorRef;
-     readonly transcript: ReadonlyArray<{ actor: ActorRef; role: 'system'|'user'|'assistant'; content: string }>;
+     readonly transcript: ReadonlyArray<{
+       actor: ActorRef;
+       role: 'system' | 'user' | 'assistant';
+       content: string;
+     }>;
+     readonly awaitingModelFor: ActorRef | null;
      readonly bufferedResponse: PaseoModelResponse | null;
-     readonly pendingRequest: ProtocolRequest | null;
    }
    ```
 
-   The adapter follows a **two-phase step pattern** to fit the sync
-   `RuntimeAdapter` contract:
+   Adapter behavior summary:
 
-   - When `bufferedResponse === null`, the adapter **synchronously**
-     emits a `ProtocolRequest` that records "I am about to call the
-     model for actor X turn Y". `runScenario` accepts that request via
-     `kernel.submit` and proceeds. (This is the same pattern S4 uses
-     for `append_mailbox_message` — the request itself is just an
-     event log entry; no out-of-band side effect.) The adapter's
-     `nextState` carries a sentinel marking "awaiting model".
-   - Between `runScenario` calls to `step`, the **driver** (a new
-     `runPaseo(authored, options)` wrapper) intercepts the "awaiting
-     model" sentinel, calls `client.complete(...)` ASYNCHRONOUSLY, and
-     stuffs the response back into `bufferedResponse` before invoking
-     `step` again.
-   - Once `bufferedResponse !== null`, the adapter's next `step` parses
-     the response and emits the corresponding ProtocolRequest
-     (`append_mailbox_message`, `create_task`, `change_task_state`, or
-     `complete_run`), or `done` if the run is over.
+   - `init(teamContext, view)` → initial state with `turnIndex = 0`,
+     `currentActor = teamContext.leadActor` (or first declared role),
+     `awaitingModelFor = null`, `bufferedResponse = null`,
+     `transcript = [<system prompt>]`.
+   - `pendingModelCall(state, view)` → if
+     `awaitingModelFor !== null && bufferedResponse === null`, return
+     a `PaseoModelRequest` built from `state.transcript`. Else `null`.
+   - `withModelResponse(state, response)` → return a new state with
+     `bufferedResponse = response` AND `awaitingModelFor = null`.
+   - `step(state, view)`:
+     - If `bufferedResponse === null && awaitingModelFor === null`:
+       set `awaitingModelFor = state.currentActor` and append a
+       "<actor X is thinking>" transcript marker; return
+       `{ kind: 'request', request: <a no-op heartbeat OR the
+       transcript-bearing request from the previous turn> }` —
+       see resolution rule below.
+     - If `bufferedResponse !== null`: parse it into a structured
+       output (deliverable 4), emit the corresponding
+       `ProtocolRequest` (one of S4's 5 intents), advance `turnIndex`,
+       reset `bufferedResponse` and `awaitingModelFor`, and rotate
+       `currentActor` per the playbook.
+     - If `turnIndex >= maxTurns` OR the parsed structured output is
+       a `complete_run` directive: return
+       `{ kind: 'done', completion }`.
 
-   This keeps the `RuntimeAdapter` contract sync while moving async
-   I/O into the driver. The driver `runPaseo` is parallel to S4's
-   `runFake` but its loop body is async.
+   **Heartbeat-vs-no-emit resolution.** Because S4's `runScenario`
+   loop expects a `step` to return either `request` OR `done` on
+   every call, the Paseo driver is responsible for short-circuiting
+   the call to `step` when `pendingModelCall` is non-null. The driver
+   never invokes `step` on a state that needs a model call — it
+   handles `pendingModelCall → client.complete → withModelResponse`
+   first, THEN re-invokes `step`. As a result, `step` itself never
+   has to emit a placeholder request.
 
 3. **runPaseo driver (async sibling of runFake).**
 
    `packages/pluto-v2-runtime/src/adapters/paseo/run-paseo.ts`
 
    ```ts
-   export async function runPaseo(
+   export async function runPaseo<S>(
      authored: AuthoredSpec,
+     adapter: PaseoRuntimeAdapter<S>,
      options: {
        client: PaseoCliClient;
        idProvider: IdProvider;
        clockProvider: ClockProvider;
        correlationId?: string | null;
-       maxTurns?: number;        // default 50
        maxSteps?: number;        // default 1000
-     }
+     },
    ): Promise<{
      events: ReadonlyArray<RunEvent>;
      views: ProjectionViews;
@@ -1905,16 +1944,70 @@ provider-agnostic at the type level: the model name comes from
    }>;
    ```
 
-   Internally constructs a `PaseoRuntimeAdapter`, then runs an async
-   variant of S4's `runScenario` 9-step algorithm where between
-   `step` calls the driver may call `client.complete(...)` if the
-   adapter signaled "awaiting model".
+   Async loop that reuses S4's kernel, replayAll, and
+   `assembleEvidencePacket` unchanged. **Does NOT modify or call**
+   S4's `runScenario`. It re-implements the 9-step algorithm with one
+   extra phase between steps:
 
-   This driver does NOT modify `runScenario`. It is a new async loop
-   that reuses `kernel`, `replayAll`, and `assembleEvidencePacket`
-   from S4.
+   ```text
+   1. teamContext = compileTeamContext(authored)
+   2. kernel = new RunKernel({ initialState: initialState(teamContext), ... })
+   3. kernel.seedRunStarted({ scenarioRef, runProfileRef, startedAt })
+   4. let s = adapter.init(teamContext, kernelViewOf(kernel))
+   5. for stepIdx in [0, maxSteps):
+        // -- model phase (NEW; only fires if adapter signals it)
+        const pending = adapter.pendingModelCall(s, kernelViewOf(kernel))
+        if pending !== null:
+          const response = await client.complete(pending)
+          accumulate usage
+          s = adapter.withModelResponse(s, response)
+          continue   // re-check before stepping
+        // -- step phase (same as runScenario)
+        const step = adapter.step(s, kernelViewOf(kernel))
+        if step.kind === 'done':
+          submit complete_run with manager actor; s = step.nextState; break
+        kernel.submit(step.request); s = step.nextState
+   6. if loop exits without 'done': throw RunNotCompletedError
+   7. events = kernel.eventLog.read(0, head + 1)
+   8. views = replayAll(events)
+   9. evidencePacket = assembleEvidencePacket(views, events, kernel.state.runId)
+      return { events, views, evidencePacket, usage }
+   ```
 
-4. **Pure invariants (carry-forward from S4 plus paseo-specific).**
+   The model phase NEVER goes through the kernel. It is pure
+   transport between adapter state and the LLM. Only the step phase
+   produces RunEvents.
+
+4. **Structured-output protocol.**
+
+   The adapter parses the LLM response into one of a closed set of
+   structured directives. The protocol is enforced by the system
+   prompt and a JSON-schema instruction in the user message footer.
+
+   Closed directive grammar (Zod):
+
+   ```ts
+   const PaseoDirectiveSchema = z.discriminatedUnion('kind', [
+     z.object({ kind: z.literal('append_mailbox_message'),
+                payload: MailboxMessageAppendedPayloadSchema.omit({ messageId: true }) }),
+     z.object({ kind: z.literal('create_task'),
+                payload: TaskCreatedPayloadSchema.omit({ taskId: true }) }),
+     z.object({ kind: z.literal('change_task_state'),
+                payload: TaskStateChangedPayloadSchema.omit({ from: true }) }),
+     z.object({ kind: z.literal('publish_artifact'),
+                payload: ArtifactPublishedPayloadSchema.omit({ artifactId: true }) }),
+     z.object({ kind: z.literal('complete_run'),
+                payload: RunCompletedPayloadSchema.omit({ completedAt: true }) }),
+   ]);
+   ```
+
+   The adapter extracts a JSON block from the LLM response, parses
+   via `PaseoDirectiveSchema`, then constructs the corresponding
+   ProtocolRequest. **Parse failures are recovered**: the adapter
+   appends the parse error to the transcript and re-asks the model
+   on the next turn (counts against `maxTurns`).
+
+5. **Pure invariants (carry-forward from S4 plus paseo-specific).**
 
    - PaseoCliClient is the ONLY place under `packages/pluto-v2-runtime/src/`
      that may import HTTP (`node:http`/`node:https`/`fetch`).
@@ -1924,21 +2017,23 @@ provider-agnostic at the type level: the model name comes from
      timestamps go through injected `clockProvider`.
    - No network I/O outside `PaseoCliClient.complete`.
 
-5. **Tests.**
+6. **Tests.**
 
    Under `packages/pluto-v2-runtime/__tests__/adapters/paseo/`:
 
    - `paseo-cli-client.test.ts` — mock `fetchImpl`; happy path returns
      parsed `PaseoModelResponse`; HTTP error → throws typed error;
      timeout → throws typed error.
-   - `paseo-adapter.test.ts` — adapter is sync; given a stubbed
-     `bufferedResponse`, emits the expected ProtocolRequest;
-     deterministic given fixed providers; "awaiting model" sentinel
-     surfaces correctly.
-   - `run-paseo.test.ts` — `runPaseo(hello-team, { client: mockClient })`
+   - `paseo-adapter.test.ts` — adapter `step` is sync; `pendingModelCall`
+     returns non-null only when awaiting; `withModelResponse` is pure;
+     given a stubbed `bufferedResponse`, `step` emits the expected
+     ProtocolRequest; deterministic given fixed providers; parse-failure
+     recovery branch counts against `maxTurns`.
+   - `run-paseo.test.ts` — `runPaseo(hello-team, mockAdapter, { client })`
      end-to-end with a deterministic mock transport that returns
      scripted responses; events match `expected-paseo-mock-events.jsonl`;
-     evidence packet matches `expected-paseo-mock-evidence.json`.
+     evidence packet matches `expected-paseo-mock-evidence.json`;
+     `usage` accumulates across turns.
 
    New test fixture (mock-transport, deterministic):
    `packages/pluto-v2-runtime/test-fixtures/scenarios/hello-team-paseo-mock/{scenario.yaml,expected-events.jsonl,expected-evidence-packet.json}`.
@@ -1963,7 +2058,7 @@ provider-agnostic at the type level: the model name comes from
      that parses through `EvidencePacketShape`.
    - Run reaches `run_completed` (NOT `RunNotCompletedError`).
 
-6. **Out of scope for S5.**
+7. **Out of scope for S5.**
 
    - CLI changes (S6).
    - v1.6 file-lineage edits.
@@ -1971,7 +2066,7 @@ provider-agnostic at the type level: the model name comes from
    - Streaming responses (the contract uses non-streaming `complete`).
    - Tool-use / function-calling support (deferred to S5+).
 
-7. **S5 dependency graph.**
+8. **S5 dependency graph.**
 
    S5 imports `@pluto/v2-core` (read-only) and `@pluto/v2-runtime`'s
    own runtime/loader/evidence modules. NO S1/S2/S3/S4 mutations.
