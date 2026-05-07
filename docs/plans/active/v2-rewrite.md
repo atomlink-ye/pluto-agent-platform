@@ -2365,143 +2365,225 @@ the default; v1.6 is the deprecated transition fallback.
 - The `--runtime=v1` opt-in continues to call the existing v1.6
   manager-run-harness for one transition window.
 
-### Concrete deliverables
+### Concrete deliverables (revised after discovery R1)
 
-1. **CLI flag and runtime selection.**
+The discovery review surfaced two blockers: (a) v2's loader takes a
+file path while v1.6's CLI takes scenario/run-profile/playbook
+NAMES; (b) v1.6-only features live in four-layer fields that aren't
+in v2's `AuthoredSpecSchema` so Zod-rejection cannot detect them.
+Resolution: v2 does NOT synthesize an AuthoredSpec from v1.6's
+four-layer pieces. v2 takes a single `--spec=<path>` file. Name-
+based selection stays a v1.6-only feature reachable only via
+`--runtime=v1`.
+
+1. **CLI flag and runtime selection (revised).**
 
    - Add `--runtime <v1|v2>` flag to the existing CLI parser. Default
-     value is **`v2`**.
+     value is **`v2`**. The flags parser also accepts the inline
+     `--runtime=v2` syntax.
    - Also accept `PLUTO_RUNTIME` env var with the same closed values.
-   - Precedence: CLI flag > env var > default (v2).
+   - Precedence: CLI flag > env var > default (v2). Precedence
+     enforcement is confined to the CLI router; the bridge does NOT
+     re-read `PLUTO_RUNTIME`.
    - When `--runtime=v1`, the CLI emits a one-line **deprecation
      warning** to stderr: "v1.6 runtime is deprecated; will be
-     archived in S7. Switch to --runtime=v2 (default) when ready."
-   - When `--runtime=v2`, the CLI routes through the new bridge
-     (deliverable 2) without warning.
+     archived in S7. See docs/design-docs/v2-cli-default-switch.md
+     for migration." (No date claim beyond "S7".) The warning fires
+     exactly once per CLI invocation.
+   - Add a new `--spec <path>` flag. Required when `--runtime=v2`
+     (or default); points to a v2 `AuthoredSpec` YAML/JSON file.
+     Mutually exclusive with v1.6's name-selectors
+     (`--scenario` / `--playbook` / `--run-profile`).
+   - When `--runtime=v2` (or default) is selected AND v1.6 name-
+     selectors are passed without `--spec`, the CLI exits with
+     code 1 and stderr message: "v1.6 name-based selection
+     (--scenario/--playbook/--run-profile) requires --runtime=v1.
+     For v2, pass a single --spec=<path> AuthoredSpec file. v1.6
+     will be archived in S7."
 
-2. **`src/cli/v2-cli-bridge.ts` — routing layer.**
-
-   Adapts the v1.6 CLI's `RunOptions` (parsed args / scenario refs /
-   workspace cwd / output format) to v2's `runPaseo` contract.
-
-   Closed surface:
+2. **`src/cli/v2-cli-bridge.ts` — routing layer (revised).**
 
    ```ts
-   import type { RunOptions } from './run.js';
+   import type { ChildProcess } from 'node:child_process';
+   import type { IdProvider, ClockProvider } from '@pluto/v2-core';
+   import type {
+     PaseoCliClient,
+     PaseoRuntimeAdapter,
+   } from '@pluto/v2-runtime';
+
+   export interface V2BridgeInput {
+     readonly specPath: string;             // resolved from --spec
+     readonly workspaceCwd: string;          // existing CLI knows this
+     readonly evidenceOutputDir: string;     // = `<dataDir>/runs/<runId>`
+     readonly paseoHost?: string;            // env PASEO_HOST passthrough
+     readonly paseoBin?: string;             // env PASEO_BIN passthrough
+     readonly stderr: NodeJS.WritableStream;
+   }
 
    export interface V2BridgeResult {
      readonly status: 'succeeded' | 'failed' | 'cancelled';
      readonly summary: string | null;
-     readonly evidencePacketPath: string | null;
+     readonly evidencePacketPath: string;
      readonly transcriptPaths: ReadonlyArray<string>;
-     readonly exitCode: 0 | 1 | 2;       // matches v1.6 exit-code policy
+     readonly exitCode: 0 | 1 | 2;
    }
 
    export interface V2BridgeDeps {
-     readonly loadAuthoredSpec: typeof loadAuthoredSpec;
-     readonly runPaseo: typeof runPaseo;
-     readonly makePaseoCliClient: typeof makePaseoCliClient;
-     readonly makePaseoAdapter: typeof makePaseoAdapter;
-     readonly defaultIdProvider: IdProvider;
-     readonly defaultClockProvider: ClockProvider;
-     readonly write: (path: string, content: string) => Promise<void>;
-     readonly stderr: NodeJS.WritableStream;
+     readonly loadAuthoredSpec: typeof loadAuthoredSpec;       // v2-runtime
+     readonly runPaseo: typeof runPaseo;                       // v2-runtime
+     readonly makePaseoCliClient: typeof makePaseoCliClient;   // v2-runtime
+     readonly makePaseoAdapter: typeof makePaseoAdapter;       // v2-runtime
+     readonly defaultIdProvider: IdProvider;                   // v2-core
+     readonly defaultClockProvider: ClockProvider;             // v2-core
    }
 
    export async function runViaV2Bridge(
-     options: RunOptions,
+     input: V2BridgeInput,
      deps: V2BridgeDeps,
    ): Promise<V2BridgeResult>;
    ```
 
    Behavior:
-   - Loads the authored spec via the v2 loader.
-   - Builds `paseoAgentSpec(actor)` from `options.runProfile` (or
-     defaults: provider `opencode`, model `openai/gpt-5.4-mini`,
-     mode `build`).
-   - Calls `runPaseo(authored, makePaseoAdapter(...), { ... })`.
-   - Writes the v2 `EvidencePacket` to the v1.6 CLI's expected
-     output path so existing tooling (status panes, evidence
-     dashboards) keeps working.
-   - Maps `runPaseo`'s `RunNotCompletedError` and other thrown errors
-     to v1.6's exit-code policy: 0 succeeded, 1 generic failure, 2
-     paseo-capability-probe failure (preserved per existing tests).
+   - Loads the authored spec via `deps.loadAuthoredSpec(input.specPath)`.
+     If the file is missing or fails Zod validation, exit 1 with the
+     loader's error message.
+   - Synthetic `paseoAgentSpec(actor)` defaults — provider
+     `opencode`, model `openai/gpt-5.4-mini`, mode `build`, title
+     `pluto-${actorKey}`, labels `["slice=v2-cli"]`, initialPrompt
+     synthesized from a static system prompt per actor role. Env
+     overrides: `PASEO_PROVIDER`, `PASEO_MODEL`, `PASEO_MODE`,
+     `PASEO_THINKING`. The bridge does NOT read these from
+     `runProfile` (run-profile YAML files don't carry these fields
+     in v1.6).
+   - Calls `runPaseo(authored, makePaseoAdapter(...), { client,
+     idProvider, clockProvider, paseoAgentSpec, waitTimeoutSec: 600 })`.
+   - Wraps any thrown errors via `classifyPaseoError(err)` (deliverable
+     3) to map paseo binary / capability failures to exit code 2.
+   - Writes the v2 `EvidencePacket` to
+     `<evidenceOutputDir>/evidence-packet.json` (PATH continuity
+     with v1.6; JSON SHAPE is the new v2 shape — documented break,
+     see deliverable 7).
+   - Writes per-actor transcripts to
+     `<evidenceOutputDir>/paseo-transcripts/<actorKey>.txt`.
+   - Returns `V2BridgeResult` with `exitCode 0` on success, `1` on
+     parse / runtime errors, `2` on paseo capability failures.
 
-3. **Unsupported-scenario fallback.**
+3. **`classifyPaseoError(err)` — exit-code-2 compatibility shim.**
 
-   v2 does not yet support all v1.6 scenarios (custom playbooks,
-   teamlead chat orchestration, multi-task dependency graphs). The
-   bridge MUST detect unsupported shapes early and:
+   `src/cli/v2-cli-bridge-error.ts`
 
-   - Emit a stderr message: "Scenario '<scenarioRef>' uses v1.6-only
-     features (`<feature>`); v2 default runtime cannot handle it.
-     Re-run with `--runtime=v1` for the legacy path. v1.6 will be
-     archived in S7."
-   - Exit with code 1 (NOT silently fall back, per operator's
-     "completely replace v1" instruction).
+   The existing `tests/cli/run-exit-code-2.test.ts` asserts that the
+   CLI exits with code `2` when paseo's chat-transport capability is
+   unavailable (e.g. `PASEO_BIN` points at a non-existent binary).
+   v2's `runPaseo` throws generic errors. The shim:
 
-   The set of "unsupported v1.6 features" is closed at v1.0 of the
-   bridge:
-   - Authored specs that reference v1.6-only payload fields
-     (`teamleadChat`, `helperCli`, `runtimeHelpers`, etc.) — detect
-     by Zod-rejecting the spec against `AuthoredSpecSchema`.
-   - Authored specs that include more than 4 declared actors beyond
-     manager (S5's bounded surface).
-   - Playbooks with more than 20 turns (S5's `maxTurns`).
+   ```ts
+   export type PaseoErrorClass =
+     | 'capability_unavailable'      // -> exit 2 (matches v1)
+     | 'spec_invalid'                 // -> exit 1
+     | 'run_not_completed'            // -> exit 1
+     | 'agent_failed_to_start'        // -> exit 1
+     | 'unknown';                     // -> exit 1
 
-   The bridge does NOT auto-fall-back to v1. The user explicitly
-   passes `--runtime=v1` to re-engage v1.6.
+   export function classifyPaseoError(err: unknown): PaseoErrorClass;
+   ```
 
-4. **Scripts changes.**
+   Detection rules (closed at v1.0):
+   - `capability_unavailable` if the error message matches:
+     - `paseo run failed with exit code` AND stderr contains
+       `command not found` / `ENOENT` / `not executable`
+     - OR `Failed to spawn paseo CLI`
+   - `spec_invalid` if Zod parse error from `loadAuthoredSpec`.
+   - `run_not_completed` if `RunNotCompletedError`.
+   - `agent_failed_to_start` if error message contains
+     "Agent ... failed to start".
+   - `unknown` for everything else.
+
+4. **Unsupported-scenario detection (revised).**
+
+   v1.6-only features cannot be detected from v2's strict
+   `AuthoredSpecSchema` (those features are FIELDS THAT WOULD BE
+   REJECTED if present). So the strategy is structural:
+
+   - The v2 AuthoredSpec format does NOT have v1.6 four-layer
+     fields (worktree, approvalGates, concurrency,
+     runtime.dispatchMode, helperCli, runtimeHelpers, teamleadChat).
+     If a user wrote those into a `--spec=<path>` YAML, Zod parse
+     fails → exit 1 with message including "v2 AuthoredSpec does
+     not support v1.6-only field <field>; use --runtime=v1 for
+     legacy specs."
+   - For users who pass v1.6 NAME-SELECTORS without `--spec`, the
+     CLI router rejects upfront with the deliverable-1 error
+     message — no resolution attempted.
+
+   Bridge does NOT enumerate v1.6 fields explicitly. The strict
+   Zod schema does that for us; the user-facing error message
+   surfaces the field name from Zod.
+
+5. **Scripts changes.**
 
    - Root `package.json`'s `"pluto:run"` script body unchanged at
-     the script level; the CLI's behavior changes via the new flag
-     default.
-   - Add a new convenience script `"pluto:run:v1"` that invokes
+     the script level; behavior changes via the new flag default.
+   - Add convenience script `"pluto:run:v1"` that invokes
      `pluto:run --runtime=v1` for users who want the legacy path
      without typing the flag.
+   - The flags parser at `src/cli/shared/flags.ts` MUST be extended
+     to support `--flag=value` inline syntax (currently only split-
+     token `--flag value` works). This is a small additive change.
 
-5. **Tests.**
+6. **Tests (revised).**
 
    Under `tests/cli/`:
-   - `run-runtime-v2-default.test.ts` — `pluto:run` with no flags
-     defaults to v2; bridge invoked once; CLI exits 0 on a fixture
-     scenario; evidence packet written to expected path.
-   - `run-runtime-v1-opt-in.test.ts` — `pluto:run --runtime=v1`
-     invokes the legacy v1.6 manager-run-harness; deprecation warning
-     printed to stderr; CLI exits 0.
+   - `run-runtime-v2-default.test.ts` — `pluto:run --spec
+     packages/pluto-v2-runtime/test-fixtures/scenarios/hello-team-paseo-mock/scenario.yaml`
+     (no `--runtime` flag → defaults to v2) exits 0 with mock paseo
+     client; evidence packet written to expected path; per-actor
+     transcripts present.
+   - `run-runtime-v1-opt-in.test.ts` — `pluto:run --runtime=v1
+     --scenario hello-team --playbook research-review --run-profile fake-smoke`
+     invokes the legacy v1.6 manager-run-harness; deprecation
+     warning printed to stderr exactly once; CLI exits 0.
    - `run-runtime-precedence.test.ts` — flag > env var > default;
      all three combinations exercised.
-   - `run-unsupported-scenario.test.ts` — a v1.6-only scenario
-     produces the documented stderr message and exit code 1; user
-     can re-run with `--runtime=v1` to get past the gate.
-   - Existing v1.6 CLI tests under `tests/cli/run.test.ts` and
-     `tests/cli/run-exit-code-2.test.ts` continue to pass with the
-     `--runtime=v1` path (or by setting `PLUTO_RUNTIME=v1` in test
-     setup if convenient).
+   - `run-unsupported-scenario.test.ts` — two paths:
+     - User passes `--scenario foo` without `--spec` and no
+       `--runtime=v1` → exit 1 with the documented stderr.
+     - User passes a `--spec=<path>` YAML containing a v1.6-only
+       field (e.g. `helperCli`) → Zod fails → exit 1 with field-
+       name in stderr.
+   - `run-exit-code-2-v2.test.ts` — `pluto:run --spec=<path>` with
+     `PASEO_BIN=/nonexistent` exits with code 2 via the shim.
 
-   Total S6 test count: ≥ 8 across the 4 new files. Existing CLI
-   tests unchanged.
+   Existing `tests/cli/run.test.ts` and `run-exit-code-2.test.ts`
+   ARE updated additively to pass `--runtime=v1` explicitly. This
+   is a documented change to the test surface, NOT a v1.6 behavior
+   change.
 
-6. **Pure invariants.**
+   Total S6 test count: ≥ 8 new tests across 5 new files; existing
+   2 v1.6 CLI tests updated to pass `--runtime=v1`.
 
-   - The CLI itself remains the only network/I-O entry point; no
-     new I/O is added outside `src/cli/v2-cli-bridge.ts` (which
-     delegates I/O to the v2-runtime loader and the paseo CLI
-     client).
+7. **Pure invariants + documented breaks.**
+
+   - The bridge's only I/O entry points are the v2 loader (file
+     read) and the paseo CLI (process spawn) and the
+     `evidence-packet.json` / transcript writes.
+   - **Documented break**: the JSON shape of `evidence-packet.json`
+     changes from v1.6's four-layer shape to v2's
+     `EvidencePacketShape`. Tooling that reads the v1.6 shape will
+     break. Documented in `docs/design-docs/v2-cli-default-switch.md`;
+     migration window is until S7 archives v1.6.
    - No S1–S5 source mutations.
-   - No v1.6 src/ mutations EXCEPT the existing CLI router files
-     under `src/cli/` (which are the legitimate target of S6).
+   - v1.6 src/ mutations limited to `src/cli/**` only.
 
-7. **Docs.**
+8. **Docs.**
 
    - `docs/design-docs/v2-cli-default-switch.md` (new) — explains
-     the routing layer, the unsupported-scenario detection rules,
-     the deprecation timeline (S6 ships → S7 archives v1.6).
-   - `README.md` (additive note about `--runtime=v1` opt-in for the
-     transition window).
-   - `docs/plans/active/v2-rewrite.md` — S6 status row only.
-
+     routing, the `--spec` requirement, the closed
+     `classifyPaseoError` rules, the documented JSON-shape break,
+     and the deprecation timeline (S6 ships → S7 archives).
+   - `README.md` (additive note about `--runtime=v1` opt-in).
+   - `docs/plans/active/v2-rewrite.md` — S6 status row + this
+     deliverables revision.
 ### Out of scope for S6
 
 - Archiving / removing v1.6 mainline runtime (S7).
@@ -2524,26 +2606,41 @@ surface.
   all clean.
 - **`pnpm test`** root regression green: existing 737 tests + ≥ 8
   S6 tests (target ≥ 745).
-- **`pluto:run` defaults to v2**: a sanity test exercises this end
-  to end against `tests/fixtures/scenarios/hello-team-paseo-mock`.
-- **`--runtime=v1` opt-in works**: a sanity test exercises the
-  legacy path; deprecation warning hits stderr exactly once per
-  invocation.
-- **Unsupported-scenario detection**: the closed set of "v1.6-only
-  features" is documented in
-  `docs/design-docs/v2-cli-default-switch.md` and tested.
+- **`pluto:run` defaults to v2**: sanity test runs `pluto:run --spec
+  packages/pluto-v2-runtime/test-fixtures/scenarios/hello-team-paseo-mock/scenario.yaml`
+  against a mock paseo client and asserts evidence-packet path
+  continuity (`<dataDir>/runs/<runId>/evidence-packet.json`) plus
+  exit code 0.
+- **`--runtime=v1` opt-in works**: sanity test runs `pluto:run
+  --runtime=v1 --scenario hello-team --playbook research-review
+  --run-profile fake-smoke` against the legacy v1.6 manager-run-
+  harness; deprecation warning hits stderr exactly once.
+- **`--spec` requirement enforced**: when default-v2 is selected and
+  v1.6 name-selectors are passed without `--spec`, CLI exits with
+  code 1 and the documented stderr message.
+- **Exit-code-2 shim works**: `tests/cli/run-exit-code-2-v2.test.ts`
+  exercises `PASEO_BIN=/nonexistent` and asserts exit code 2 via
+  `classifyPaseoError`. Existing v1.6 `run-exit-code-2.test.ts`
+  continues to pass with `--runtime=v1`.
+- **AuthoredSpec strict-Zod rejects v1.6-only fields**: a test
+  passes a `--spec=<path>` YAML with `helperCli` (or any v1.6 four-
+  layer field) and asserts exit 1 with the field name in stderr.
+- **Flags parser supports `--flag=value`**: tested by both v1 and
+  v2 paths.
 - **No S1–S5 mutation**: `git diff --stat main..origin/<branch> --
   packages/` reports zero changes.
 - **No v1.6 src/ mutation outside `src/cli/`**: enforced by diff
   hygiene.
 - **Diff hygiene**: scope confined to
   - `src/cli/v2-cli-bridge.ts` (new)
-  - `src/cli/run.ts` (additive runtime-flag routing)
-  - `src/cli/<other CLI files>` if needed for argv parsing
-  - `tests/cli/run-runtime-v2-default.test.ts` (new)
-  - `tests/cli/run-runtime-v1-opt-in.test.ts` (new)
-  - `tests/cli/run-runtime-precedence.test.ts` (new)
-  - `tests/cli/run-unsupported-scenario.test.ts` (new)
+  - `src/cli/v2-cli-bridge-error.ts` (new)
+  - `src/cli/run.ts` (additive runtime-flag + spec-flag routing)
+  - `src/cli/shared/flags.ts` (additive `--flag=value` syntax)
+  - `src/cli/shared/run-selection.ts` (additive — if needed for
+    v1 vs v2 selection routing; otherwise read-only)
+  - 5 new test files under `tests/cli/`
+  - existing 2 v1.6 CLI test files updated additively to pass
+    `--runtime=v1`
   - root `package.json` (additive `pluto:run:v1` script)
   - `docs/design-docs/v2-cli-default-switch.md` (new)
   - `README.md` (additive deprecation note)
@@ -2552,11 +2649,12 @@ surface.
   - `tasks/remote/pluto-v2-s6-cli-default-switch-20260507/**` (bundle
     docs).
 - **Branch is committed AND pushed**: `commit_and_push` step.
-- A reviewer sub-agent confirms: (a) default flag is `v2`, (b) flag
+- A reviewer sub-agent confirms: (a) default flag is `v2`, (b)
   precedence flag > env > default, (c) `--runtime=v1` works and
-  emits exactly one deprecation warning, (d) unsupported-scenario
-  detection matches the closed list in design doc, (e) no v1–v5
-  surface mutations.
+  emits exactly one deprecation warning, (d) Zod-rejection of v1.6-
+  only fields produces exit 1 with the field name, (e) exit-code-2
+  shim preserves the legacy contract, (f) JSON-shape break is
+  documented, (g) no v1–v5 surface mutations.
 
 ## Discovery gate (per slice)
 
