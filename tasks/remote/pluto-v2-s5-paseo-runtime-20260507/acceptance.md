@@ -322,10 +322,12 @@ Must:
 
 ```bash
 rg -n 'paseo|opencode|claude' packages/pluto-v2-runtime/src \
-  --glob '!packages/pluto-v2-runtime/src/adapters/paseo/**'
+  --glob '!packages/pluto-v2-runtime/src/adapters/paseo/**' \
+  --glob '!packages/pluto-v2-runtime/src/index.ts'
 ```
 
-Expected: 0 matches.
+Expected: 0 matches. `src/index.ts` is the package's public re-export
+surface and legitimately references the paseo adapter modules.
 
 ### Gate 7 — No-HTTP grep (production source only)
 
