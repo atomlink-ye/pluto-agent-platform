@@ -35,9 +35,13 @@ describe('translateLegacyEvents table A', () => {
     expect(translateSingle(baseEvent('lead_started'))).toEqual([]);
   });
 
-  it('maps run_completed with null summary by default', () => {
+  it('maps run_completed with manager actor and envelope-derived completedAt', () => {
     const [event] = translateSingle(baseEvent('run_completed', { workerCount: 1, playbookId: 'research-review' }));
-    expect(event).toMatchObject({ kind: 'run_completed', payload: { status: 'succeeded', summary: null } });
+    expect(event).toMatchObject({
+      kind: 'run_completed',
+      actor: { kind: 'manager' },
+      payload: { status: 'succeeded', summary: null, completedAt: '2026-05-07T00:00:00.000Z' },
+    });
   });
 
   it('drops final_reconciliation_received', () => {
