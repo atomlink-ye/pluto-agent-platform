@@ -2668,207 +2668,302 @@ surface.
 
 ### Outcome
 
-Remove v1.6 mainline runtime code from `main`. The frozen reference
-copy lives on `legacy/v1.6-runtime` branch (created in S0); future
-readers reach it via that branch. `main` becomes v2-only:
+Remove ALL v1.6 surface from `main`. The frozen reference copy
+lives on the `legacy-v1.6-harness-prototype` branch on origin
+(created in S0; SHA documented at `docs/plans/active/v2-rewrite.md`
+line 97-104). Future readers reach v1.6 by checking out that branch.
 
-- Remove `src/` v1.6 modules NOT used by v2 (`adapters/paseo-opencode/`,
-  `four-layer/`, `orchestrator/`, `manager/`, etc.).
-- Remove `src/cli/` v1.6 routing entirely; `src/cli/` becomes a thin
-  wrapper that always invokes the v2 bridge.
-- Remove `--runtime=v1` flag and `pluto:run:v1` script.
-- Remove v1.6 test files under `tests/cli/run.test.ts`,
-  `tests/cli/run-exit-code-2.test.ts`,
-  `tests/cli/run-runtime-v1-opt-in.test.ts`,
-  `tests/cli/run-unsupported-scenario.test.ts` (some keep, some go
-  per deliverable 4 below).
-- Remove v1.6 authored configs (`scenarios/`, `playbooks/`,
-  `run-profiles/`, `agents/`) NOT referenced by S4 parity fixtures.
-- Keep `tests/fixtures/live-smoke/86557df1-...` (S4 parity gate
-  reference).
+`main` becomes v2-only end-to-end. Per operator's binding rule
+"every v2 vs v1.6 decision goes aggressive replacement; v1.6 stays
+only as reference," S7 deletes EVERY v1.6 surface that has a v2
+equivalent or is no longer needed:
+
+- v1.6 runtime sources (`src/orchestrator/`, `src/four-layer/`,
+  `src/adapters/paseo-opencode/`, etc.).
+- v1.6 auxiliary CLI commands (`pluto:package`, `pluto:runs`,
+  `pluto:submit` and their `src/cli/` modules).
+- v1.6 build / verify / smoke infrastructure (`docker/live-smoke.ts`,
+  `scripts/verify.mjs`'s v1 dispatch path, `src/index.ts` v1
+  exports).
+- All v1.6 tests under `tests/` (`manager-run-harness`,
+  `paseo-opencode-adapter`, `prompt-collar`, `four-layer-*`,
+  etc.).
+- All v1.6 authored configs (`scenarios/`, `playbooks/`,
+  `run-profiles/`, `agents/`, `evals/`) — none of these are loaded
+  by retained code; v2 takes only `--spec=<path>`.
+- All v1.6 doc references across the 9 docs identified by
+  discovery R1.
 
 This is the FINAL slice of the v2 rewrite. After S7 ships, `main`
-is fully v2 with v1.6 reachable only via `legacy/v1.6-runtime`.
+is fully v2.
+
+### Reference branch (binding)
+
+Archive branch on origin: **`legacy-v1.6-harness-prototype`**.
+(Discovery R1 confirmed via `git ls-remote`; the earlier plan name
+`legacy/v1.6-runtime` was a typo.)
 
 ### Boundary
 
-Aggressive deletion. Per operator's S6 directive ("完全的用 V2 来代替
-V1"), v1.6 fully exits `main`. The `legacy/v1.6-runtime` branch
-remains the canonical reference for any future reader needing v1.6
-code.
+Aggressive deletion. Reference recovery from
+`legacy-v1.6-harness-prototype` is git-cheap. v2 packages
+(`packages/pluto-v2-core/**`, `packages/pluto-v2-runtime/**`) and
+the parity fixture (`tests/fixtures/live-smoke/86557df1-...`) are
+UNTOUCHED.
 
 ### Concrete deliverables
 
-1. **Inventory (read-only first).**
+1. **Lane 0 — Inventory of retained vs deleted (read-only audit).**
 
-   Lane 0 produces an inventory at
+   Produce
    `tasks/remote/pluto-v2-s7-archive-legacy-20260508/artifacts/v1.6-inventory.md`
-   listing every file under `src/` that is NOT imported by:
+   BEFORE any deletion. The inventory enumerates EVERY file under
+   `src/`, `tests/`, `scripts/`, `docker/`, `scenarios/`,
+   `playbooks/`, `run-profiles/`, `agents/`, `evals/` and labels
+   each as **KEEP**, **DELETE**, or **REWRITE**.
 
-   - `src/cli/run.ts` v2 path (after surgery in deliverable 3).
-   - `src/cli/v2-cli-bridge.ts` / `src/cli/v2-cli-bridge-error.ts`.
-   - `src/cli/shared/flags.ts` / `src/cli/shared/run-selection.ts`
-     (v2-side use only).
+   Retained-entrypoint set used to derive the import graph:
 
-   Files NOT imported by the above are CANDIDATES for removal.
-   Files imported transitively are kept.
+   - `src/cli/run.ts` (v2 only, post-surgery).
+   - `src/cli/v2-cli-bridge.ts` / `v2-cli-bridge-error.ts`.
+   - `src/cli/shared/flags.ts` / `run-selection.ts`.
+   - `packages/pluto-v2-core/**`.
+   - `packages/pluto-v2-runtime/**`.
+   - `tests/fixtures/live-smoke/86557df1-...` (parity oracle data;
+     not code).
+   - `tsconfig.json`, `tsconfig.build.json`, `vitest.config.ts`,
+     `pnpm-workspace.yaml`, root `package.json` (post-script
+     cleanup).
+   - Any v2-only test under `tests/cli/run-runtime-*.test.ts`,
+     `run-exit-code-2-v2.test.ts`, `run-unsupported-scenario.test.ts`
+     (rewritten per deliverable 4).
 
-   Inventory MUST be committed to the bundle artifacts before any
-   deletion happens.
+   Inventory mechanism: `tsc --listFiles -p tsconfig.json` filtered
+   to `src/`, `tests/`, `docker/`, `scripts/`. Files NOT emitted by
+   `tsc --listFiles` from the retained entrypoints are DELETE
+   candidates. Cross-check against `package.json` script references
+   and Vitest include patterns.
 
-2. **Removed v1.6 surface (binding list).**
+2. **Removed v1.6 surface (binding list — applied AFTER inventory
+   confirms reachability).**
 
-   Remove (delete from `main`; reference copy stays on
-   `legacy/v1.6-runtime`):
+   Source code (entire directories deleted):
+   - `src/adapters/paseo-opencode/` — v1.6 paseo adapter.
+   - `src/four-layer/` — v1.6 four-layer authored-validate +
+     evidence-packet + result-contract.
+   - `src/orchestrator/` — v1.6 manager-run-harness + run-store +
+     redactor + runtime-helper + callback-normalizer.
+   - `src/contracts/` — v1.6 contract types (audit per file; v2
+     equivalents live in `packages/pluto-v2-core/src/`).
+   - `src/runtime/` — v1.6 runtime helpers (audit per file).
 
-   - `src/adapters/paseo-opencode/` (entire directory).
-   - `src/four-layer/` (entire directory).
-   - `src/orchestrator/` (entire directory) — runtime helpers are
-     v1.6-only.
-   - `src/manager/` (entire directory).
-   - `src/contracts/` v1.6-shape modules — keep ONLY any modules
-     that v2 imports (audit via inventory).
-   - `src/runtime/` — audit and remove v1.6 helpers; keep `result-contract.ts`
-     ONLY if v2 uses it.
-   - `tests/cli/run.test.ts` (v1.6 CLI test; obsolete after surgery).
-   - `tests/cli/run-exit-code-2.test.ts` (v1.6 capability test;
-     replaced by `run-exit-code-2-v2.test.ts`).
-   - `tests/cli/run-runtime-v1-opt-in.test.ts` (no longer
-     applicable).
-   - `scenarios/` v1.6 four-layer authored configs — remove unless
-     a fixture under `tests/fixtures/live-smoke/` references them.
-   - `playbooks/` v1.6 four-layer authored configs — same rule.
-   - `run-profiles/` v1.6 four-layer authored configs — same rule.
-   - `agents/` v1.6 authored agent configs — same rule.
-   - `evals/` v1.6 evaluation infrastructure — same rule.
-   - `docker/` v1.6 docker assets — keep ONLY assets used by v2
-     CI (audit).
-   - Root `package.json`'s `"pluto:run:v1"` script.
+   v1.6 auxiliary CLI commands (entire files deleted):
+   - `src/cli/package.ts` (`pluto:package` command).
+   - `src/cli/runs.ts` (`pluto:runs` command).
+   - `src/cli/submit.ts` (`pluto:submit` command).
+   - Any other `src/cli/*.ts` not in the retained-entrypoint list.
 
-   Keep:
+   v1.6 build / verify / smoke infrastructure:
+   - `docker/live-smoke.ts` — v1.6 live-smoke harness; replaced by
+     `packages/pluto-v2-runtime/scripts/smoke-live.ts` from S5.
+   - `scripts/verify.mjs` — v1.6 verify pipeline. Either rewrite
+     to a v2-only verify (preferred) or delete entirely. Deletion
+     OK if no `package.json` `verify` script remains required.
+   - `src/index.ts` lines 129-139 (v1.6 exports). The file becomes
+     v2-only re-exports OR is deleted entirely if no consumer
+     imports the package directly.
 
-   - `packages/pluto-v2-core/**` (untouched).
-   - `packages/pluto-v2-runtime/**` (untouched).
-   - `tests/fixtures/live-smoke/**` (S4 parity oracle).
-   - `tests/cli/run-runtime-v2-default.test.ts`,
-     `tests/cli/run-runtime-precedence.test.ts`,
-     `tests/cli/run-exit-code-2-v2.test.ts`,
-     `tests/cli/run-unsupported-scenario.test.ts` — but the
-     "v1+spec rejected" test inside the last one becomes "v1 flag
-     rejected entirely" (see deliverable 3).
-   - `docs/design-docs/v2-*.md` — v2 design docs.
-   - `docs/plans/active/v2-rewrite.md` — this plan; transitions
-     from "active" to "completed" after S7 merges.
+   v1.6 tests (entire files deleted):
+   - `tests/cli/run.test.ts` — v1.6 CLI test (covers
+     `pluto:package` too; that command is also being deleted, so
+     the test is irrelevant).
+   - `tests/cli/run-exit-code-2.test.ts` — v1.6 capability test;
+     replaced by `run-exit-code-2-v2.test.ts`.
+   - `tests/cli/run-runtime-v1-opt-in.test.ts` — v1 opt-in test
+     (no longer applicable post-S7).
+   - `tests/cli/runs.test.ts` — `pluto:runs` test.
+   - `tests/manager-run-harness.test.ts`.
+   - `tests/paseo-opencode-adapter.test.ts`.
+   - `tests/prompt-collar.test.ts`.
+   - `tests/four-layer-loader-render.test.ts`.
+   - `tests/fake-adapter.test.ts` (v1.6 fake adapter; v2 has its
+     own under `packages/pluto-v2-runtime/__tests__/adapters/fake/`).
+   - `tests/orchestrator/**`.
+   - `tests/live-smoke-classification.test.ts`.
+   - Any other v1.6-only test discovered by lane 0 inventory.
+
+   v1.6 authored configs (entire directories deleted):
+   - `scenarios/` — all v1.6 scenarios.
+   - `playbooks/` — all v1.6 playbooks.
+   - `run-profiles/` — all v1.6 run-profiles (v2 reads from
+     `--spec=<path>` only).
+   - `agents/` — v1.6 agent configs.
+   - `evals/` — v1.6 eval infrastructure.
+
+   Root `package.json` script removals:
+   - `pluto:run:v1` (v1 opt-in convenience script).
+   - `pluto:package` (the v1.6 command).
+   - `pluto:runs` (the v1.6 command).
+   - `pluto:submit` (the v1.6 command).
+   - Any `smoke:fake` / `smoke:live` script that points to deleted
+     v1.6 paths (replace with v2 equivalent that points to
+     `packages/pluto-v2-runtime/scripts/smoke-live.ts`).
+   - Any `verify` / `verify:*` scripts that reference
+     `scripts/verify.mjs` (rewrite or delete per the verify
+     decision above).
 
 3. **CLI router surgery.**
 
    `src/cli/run.ts`:
-   - Remove `--runtime=v1` flag handling.
-   - Remove `runV1(...)` function and v1 manager-run-harness imports.
-   - `pluto:run --spec <path>` becomes the ONLY supported invocation.
-   - If user passes `--runtime=v1` or any v1.6 name selector, exit 1
-     with stderr: "v1.6 runtime was archived in S7. The reference
-     copy lives on the `legacy/v1.6-runtime` branch. Pass --spec
-     <path> for v2 (the only supported runtime)."
-   - Optional: emit a one-line stderr help message when
-     `--runtime=v2` is passed redundantly: "v2 is the only runtime;
-     `--runtime` flag is no longer required."
+   - Remove `--runtime=v1` flag handling and `runV1(...)`.
+   - Remove `--scenario` / `--playbook` / `--run-profile` v1.6
+     name-selector parsing.
+   - `pluto:run --spec <path>` becomes the ONLY supported
+     invocation.
+   - If user passes `--runtime=v1`, `--scenario`, `--playbook`, or
+     `--run-profile`, exit 1 with stderr:
+     "v1.6 runtime was archived in S7. Reference copy lives on the
+     `legacy-v1.6-harness-prototype` branch. v2 takes
+     `pluto:run --spec <path>` only."
+   - The `--runtime=v2` flag is silently accepted (deprecated
+     but not rejected) for one transition window.
 
    `src/cli/shared/flags.ts` and
    `src/cli/shared/run-selection.ts`:
-   - Audit imports; remove v1-only handling.
+   - Audit imports; remove all v1-only handling.
 
-4. **Tests.**
+4. **Tests — concrete enumeration.**
 
-   Update / remove:
+   The inventory at lane 0 produces the exact KEEP / DELETE /
+   REWRITE list. Expected outcome:
 
-   - DELETE: `tests/cli/run.test.ts`, `run-exit-code-2.test.ts`,
-     `run-runtime-v1-opt-in.test.ts`.
-   - UPDATE: `run-runtime-precedence.test.ts` — the env-var tests
-     now check that `PLUTO_RUNTIME` is silently ignored OR exits 1
-     when set to `v1` (operator pick during dispatch; suggest
-     "exits 1 with archived message"). The `default` branch
-     becomes a no-op since v2 is always default.
-   - UPDATE: `run-unsupported-scenario.test.ts` — v2 + name
-     selectors path stays; v1+spec mutual-exclusion path goes away
-     (replaced by "v1 flag rejected entirely").
-   - KEEP: `run-runtime-v2-default.test.ts`,
-     `run-exit-code-2-v2.test.ts`.
-   - NEW: `run-v1-flag-archived.test.ts` — passing `--runtime=v1`
-     OR `PLUTO_RUNTIME=v1` exits 1 with the archived message.
+   Kept (v2-only):
+   - `tests/cli/run-runtime-v2-default.test.ts` (KEEP).
+   - `tests/cli/run-exit-code-2-v2.test.ts` (KEEP).
+   - All `packages/pluto-v2-core/__tests__/**` (UNTOUCHED).
+   - All `packages/pluto-v2-runtime/__tests__/**` (UNTOUCHED).
 
-   Total test count after S7: ≥ S6 baseline (746) - 6 v1-only tests
-   + 1 archived-message test = ~741. Acceptable variance ±5.
+   Rewritten:
+   - `tests/cli/run-runtime-precedence.test.ts` — strip v1
+     branches; assert that `--runtime=v1` and `PLUTO_RUNTIME=v1`
+     both exit 1 with the archived message. The default-v2 branch
+     remains as a no-op.
+   - `tests/cli/run-unsupported-scenario.test.ts` — drop the
+     v1+spec mutual-exclusion case; replace with "v1.6 name
+     selector exits 1 with archived message" assertions.
 
-5. **Scripts + docs.**
+   New:
+   - `tests/cli/run-v1-flag-archived.test.ts` — explicitly
+     asserts: `pluto:run --runtime=v1`, `pluto:run --scenario X`,
+     `pluto:run --playbook Y`, `pluto:run --run-profile Z`,
+     `PLUTO_RUNTIME=v1 pluto:run` ALL exit 1 with the archived
+     message including the legacy branch name.
 
-   - Root `package.json`: remove `pluto:run:v1` script.
-   - `README.md`: update to drop `--runtime=v1` references; document
-     `legacy/v1.6-runtime` branch as the historical reference.
-   - `docs/design-docs/v2-cli-default-switch.md`: append a note
-     that the `--runtime=v1` flag was archived in S7.
-   - NEW: `docs/design-docs/v1-archive.md` — short doc explaining
-     the legacy branch, what it contains, and how to fetch it.
-   - Move `docs/plans/active/v2-rewrite.md` → `docs/plans/completed/v2-rewrite.md`
-     with a final status note.
+   Deleted (entire files; bulk per deliverable 2 list).
+
+   Test count target: enumerated by the inventory. Plan does NOT
+   prescribe a specific number; acceptance bar requires `pnpm test`
+   to be green and the inventory to record the post-S7 count.
+
+5. **Docs — concrete sync list.**
+
+   Update or rewrite all 9 docs identified by discovery R1:
+
+   - `README.md` — drop `--runtime=v1` references; remove the
+     `pluto:package` / `pluto:runs` / `pluto:submit` quickstart
+     examples; document `legacy-v1.6-harness-prototype` branch as
+     historical reference; reference `docs/design-docs/v1-archive.md`.
+   - `AGENTS.md` — strip v1.6 actor / harness references; rewrite
+     for v2-only.
+   - `ARCHITECTURE.md` — strip v1.6 architecture diagrams; rewrite
+     for v2 (kernel + projections + runtime adapter + CLI bridge).
+   - `DESIGN.md` — strip v1.6 design rationale; reference v2
+     design docs.
+   - `RELIABILITY.md` — update for v2 reliability surface.
+   - `SECURITY.md` — update for v2 security surface.
+   - `docs/mvp-alpha.md` — archive note OR rewrite for v2 MVP.
+   - `docs/harness.md` — archive note (v1.6 harness is the legacy
+     branch) OR rewrite for v2 paseo runtime.
+   - `docs/testing-and-evals.md` — strip v1.6 eval surfaces;
+     reference v2 test layout.
+   - `docs/qa-checklist.md` — rewrite for v2 QA.
+
+   New:
+   - `docs/design-docs/v1-archive.md` — short doc explaining the
+     archive decision, the `legacy-v1.6-harness-prototype` branch,
+     how to fetch v1.6 source, and what's recoverable.
+
+   Deferred to post-merge (NOT in the slice diff):
+   - Move `docs/plans/active/v2-rewrite.md` →
+     `docs/plans/completed/v2-rewrite.md`. Local manager handles
+     this AFTER S7 merges, in a separate plan-status commit.
 
 6. **Pure invariants.**
 
-   - No new runtime code; this slice is removal + surgery only.
-   - `pnpm test` baseline remains green.
-   - `pnpm typecheck` clean.
-   - The v2 stack (`packages/pluto-v2-core/**`,
-     `packages/pluto-v2-runtime/**`) is UNTOUCHED.
+   - No v2 package code modified.
+   - `pnpm typecheck` (root + both packages) clean.
+   - `pnpm test` green (count enumerated by lane 0 inventory).
+   - `pnpm build` clean.
+   - `legacy-v1.6-harness-prototype` branch on origin remains
+     intact (sanity-checked pre-deletion AND post-merge).
 
-7. **Gates.**
+7. **S7 dependency graph.**
 
-   - Typecheck (root + both packages) clean.
-   - Tests green; total count within the documented variance band.
-   - Build clean.
-   - Diff hygiene: every removal is a deletion (`D`) of a tracked
-     file; every addition is on the v2-only side or new docs.
-   - No edits to `packages/**`.
-   - `git ls-tree -r --name-only legacy/v1.6-runtime` confirms the
-     archived branch still has the v1.6 source (sanity check that
-     we didn't accidentally delete the reference).
+   S7 only consumes the v2 stack (read-only) plus the v1.6 surface
+   that it deletes. NO mutations to `packages/`.
 
 ### Out of scope for S7
 
-- Adding new v2 features.
+- Adding new v2 features (v2 stays at S6 baseline).
 - Modifying v2 packages.
-- Changing the parity fixture under
+- Touching the parity fixture under
   `tests/fixtures/live-smoke/86557df1-...`.
-
-### S7 dependency graph
-
-S7 only consumes the v2 stack (read-only) plus the existing v1.6
-src/ surface (which it deletes). NO mutations to packages/.
+- Pushing or modifying the `legacy-v1.6-harness-prototype` branch.
 
 ### S7 acceptance bar
 
+- **Pre-flight branch sanity check**: `git ls-remote origin
+  refs/heads/legacy-v1.6-harness-prototype` resolves to a SHA
+  BEFORE any deletion happens. Recorded in the bundle artifacts.
+- **Lane 0 inventory artifact** exists at
+  `tasks/remote/pluto-v2-s7-archive-legacy-20260508/artifacts/v1.6-inventory.md`
+  and lists every src/tests/scripts/docker/scenarios/playbooks/
+  run-profiles/agents/evals file with KEEP / DELETE / REWRITE
+  label.
 - **Typecheck**: root + both v2 packages clean.
-- **Tests**: green; total within ±5 of the documented expected
-  count.
-- **Build**: clean.
-- **Diff hygiene**: deletions confined to the deliverable 2 list +
-  v1.6 test files; additions confined to:
-  - `src/cli/**` (surgery)
-  - `tests/cli/run-v1-flag-archived.test.ts` (new)
-  - `package.json` (script removal)
-  - `README.md` (deletions / updates)
-  - `docs/design-docs/v1-archive.md` (new)
-  - `docs/design-docs/v2-cli-default-switch.md` (append note)
-  - `docs/plans/active/v2-rewrite.md` → moved to `completed/`
-  - `docs/plans/completed/v2-rewrite.md` (final status row)
+- **Tests**: `pnpm test` green; total count matches the inventory.
+- **Build**: `pnpm --filter @pluto/v2-core build` and
+  `pnpm --filter @pluto/v2-runtime build` clean.
+- **No v2-package mutation**: `git diff --stat
+  main..origin/<branch> -- packages/` reports zero changes.
+- **`pluto:run --spec <path>` still works end-to-end** against
+  `packages/pluto-v2-runtime/test-fixtures/scenarios/hello-team-paseo-mock/scenario.yaml`
+  with a mock paseo client.
+- **`--runtime=v1` exits 1** with the documented archived message
+  (asserted by `run-v1-flag-archived.test.ts`).
+- **All 9 doc files updated** per deliverable 5 list.
+- **`legacy-v1.6-harness-prototype` branch remains intact on
+  origin** post-merge sanity check.
+- **Diff hygiene**: deletions confined to deliverable 2 list +
+  v1.6 test list + v1.6 authored configs; additions confined to
+  - `src/cli/run.ts` (surgery).
+  - `src/cli/shared/flags.ts` / `run-selection.ts` (surgery).
+  - `tests/cli/run-runtime-precedence.test.ts` (rewrite).
+  - `tests/cli/run-unsupported-scenario.test.ts` (rewrite).
+  - `tests/cli/run-v1-flag-archived.test.ts` (new).
+  - `package.json` (script removals).
+  - 9 doc updates per deliverable 5.
+  - `docs/design-docs/v1-archive.md` (new).
+  - `docs/plans/active/v2-rewrite.md` — S7 status row (post-merge,
+    by local manager; the plan-file move is a SEPARATE post-merge
+    step, not part of this slice).
   - `tasks/remote/pluto-v2-s7-archive-legacy-20260508/**` (bundle).
-- **Reference branch sanity**: `legacy/v1.6-runtime` still exists
-  on origin and contains the pre-archive v1.6 source.
 - **Branch is committed AND pushed**: `commit_and_push` step.
-- A reviewer sub-agent confirms: (a) every file in the deliverable
-  2 list IS deleted on the slice branch, (b) no v2 package files
-  changed, (c) `pluto:run --spec <path>` works end-to-end via the
-  v2-only CLI, (d) `--runtime=v1` exits 1 with the archived
-  message, (e) `legacy/v1.6-runtime` branch is intact on origin.
+- A reviewer sub-agent confirms: (a) every file in the inventory's
+  DELETE list is removed on the slice branch, (b) every file in
+  the KEEP list still exists, (c) every REWRITE file's diff is
+  bounded to the documented surgery, (d) the v2 packages are
+  untouched, (e) `legacy-v1.6-harness-prototype` remains on origin.
 
 ## Discovery gate (per slice)
 
