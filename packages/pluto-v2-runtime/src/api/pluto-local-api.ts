@@ -42,6 +42,8 @@ export interface PlutoLocalApiConfig {
     defaultTimeoutSec?: number;
     maxTimeoutSec?: number;
     disconnectReason?: string;
+    shutdownSignal?: AbortSignal;
+    shutdownReason?: string;
   };
   onRequest?: (request: {
     method: string;
@@ -215,22 +217,70 @@ function parseWaitTimeoutSec(body: unknown, defaults?: { defaultTimeoutSec?: num
   return timeoutSec;
 }
 
+type LeaseWaitResult =
+  | { ok: true }
+  | { ok: false; reason: string };
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
+function abortReason(signal: AbortSignal, fallback: string): string {
+  return typeof signal.reason === 'string' && signal.reason.length > 0 ? signal.reason : fallback;
+}
+
+function waitForAbort(signal: AbortSignal, fallback: string): Promise<string> {
+  if (signal.aborted) {
+    return Promise.resolve(abortReason(signal, fallback));
+  }
+
+  return new Promise((resolve) => {
+    signal.addEventListener('abort', () => {
+      resolve(abortReason(signal, fallback));
+    }, { once: true });
+  });
+}
+
 async function waitForLease(args: {
   leaseStore: TurnLeaseStore;
   actor: ActorRef;
   response: ServerResponse;
-}): Promise<boolean> {
+  disconnectReason: string;
+  shutdownSignal?: AbortSignal;
+  shutdownReason?: string;
+}): Promise<LeaseWaitResult> {
+  const shutdownPromise = args.shutdownSignal == null
+    ? null
+    : waitForAbort(args.shutdownSignal, args.shutdownReason ?? 'run_shutdown');
+
   while (!args.leaseStore.matches(args.actor)) {
     if (args.response.writableEnded || args.response.destroyed) {
-      return false;
+      return {
+        ok: false,
+        reason: args.disconnectReason,
+      };
     }
 
-    await new Promise((resolve) => {
-      setTimeout(resolve, 5);
-    });
+    if (shutdownPromise == null) {
+      await sleep(5);
+      continue;
+    }
+
+    const shutdown = await Promise.race([
+      sleep(5).then(() => null),
+      shutdownPromise.then((reason) => ({ reason })),
+    ]);
+    if (shutdown != null) {
+      return {
+        ok: false,
+        reason: shutdown.reason,
+      };
+    }
   }
 
-  return true;
+  return { ok: true };
 }
 
 function routeFor(method: string, pathname: string, body: unknown): LocalApiRoute | null {
@@ -371,17 +421,20 @@ async function runRoute(args: {
       });
 
       if (result.outcome === 'event') {
-        const hasLease = await waitForLease({
+        const leaseWait = await waitForLease({
           leaseStore: args.config.leaseStore,
           actor: args.session.currentActor,
           response: args.response,
+          disconnectReason,
+          shutdownSignal: waitService.shutdownSignal,
+          shutdownReason: waitService.shutdownReason,
         });
-        if (!hasLease) {
+        if (!leaseWait.ok) {
           return {
             status: 200,
             body: {
               outcome: 'cancelled',
-              reason: disconnectReason,
+              reason: leaseWait.reason,
             },
             contentType: 'json',
           };

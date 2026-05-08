@@ -25,6 +25,12 @@ const PROTOCOL_VERSION = '2025-11-25';
 const LEAD: ActorRef = { kind: 'role', role: 'lead' };
 const GENERATOR: ActorRef = { kind: 'role', role: 'generator' };
 
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
 function createKernel() {
   return new RunKernel({
     initialState: initialState(TeamContextSchema.parse({
@@ -101,8 +107,13 @@ async function withWaitServer(run: (context: {
   url: string;
   registry: ReturnType<typeof makeWaitRegistry>;
   events: RunEvent[];
+  traces: string[];
+  triggerShutdown(reason?: string): void;
+  shutdown(): Promise<void>;
 }) => Promise<void>) {
   const events: RunEvent[] = [];
+  const traces: string[] = [];
+  const shutdownController = new AbortController();
   const handlers = makePlutoToolHandlers({
     kernel: createKernel(),
     runId: 'run-1',
@@ -123,12 +134,14 @@ async function withWaitServer(run: (context: {
   const registry = makeWaitRegistry({
     events: () => events,
     getPromptViewForActor: (actor) => promptViewFor(actor, [{ sequence: 0, from: GENERATOR, to: LEAD, kind: 'completion', body: 'done' }]),
+    onTrace: (event) => traces.push(event.kind),
   });
   const cursorByActorKey = new Map<string, number>();
+  const leaseStore = makeTurnLeaseStore(LEAD);
   const server = await startPlutoMcpServer({
     bearerToken: TOKEN,
     handlers,
-    leaseStore: makeTurnLeaseStore(LEAD),
+    leaseStore,
     waitService: {
       registry,
       cursorForActor(actor) {
@@ -137,11 +150,22 @@ async function withWaitServer(run: (context: {
       onEventDelivered(actor, sequence) {
         cursorByActorKey.set(actor.kind === 'role' ? `role:${actor.role}` : actor.kind, sequence);
       },
+      shutdownSignal: shutdownController.signal,
+      shutdownReason: 'run_shutdown',
     },
   });
 
   try {
-    await run({ url: server.url, registry, events });
+    await run({
+      url: server.url,
+      registry,
+      events,
+      traces,
+      triggerShutdown(reason = 'run_shutdown') {
+        shutdownController.abort(reason);
+      },
+      shutdown: () => server.shutdown(),
+    });
   } finally {
     await server.shutdown();
   }
@@ -192,5 +216,68 @@ describe('pluto mcp server wait tool', () => {
         latestEvent: { kind: 'mailbox_message_appended', sequence: 0 },
       });
     });
+  });
+
+  it('returns cancelled when shutdown hits during post-event lease reacquisition', async () => {
+    const unhandledRejections: unknown[] = [];
+    const onUnhandledRejection = (reason: unknown) => {
+      unhandledRejections.push(reason);
+    };
+    process.on('unhandledRejection', onUnhandledRejection);
+
+    try {
+      await withWaitServer(async ({ url, events, triggerShutdown, shutdown }) => {
+        const event = mailboxEvent(0);
+        events.push(event);
+
+        const pending = fetch(url, {
+          method: 'POST',
+          headers: {
+            authorization: `Bearer ${TOKEN}`,
+            connection: 'close',
+            'content-type': 'application/json',
+            'mcp-protocol-version': PROTOCOL_VERSION,
+            'Pluto-Run-Actor': JSON.stringify(GENERATOR),
+          },
+          body: JSON.stringify({
+            jsonrpc: '2.0',
+            id: 3,
+            method: 'tools/call',
+            params: {
+              name: 'pluto_wait_for_event',
+              arguments: { timeoutSec: 300 },
+            },
+          }),
+        });
+
+        await delay(25);
+
+        triggerShutdown('run_shutdown');
+        const closePromise = shutdown();
+
+        const response = await Promise.race([
+          pending,
+          delay(1000).then(() => {
+            throw new Error('mcp wait-for-event response timed out during shutdown');
+          }),
+        ]);
+        const json = await response.json() as { result: { content: Array<{ text: string }> } };
+
+        expect(JSON.parse(json.result.content[0]?.text ?? 'null')).toEqual({
+          outcome: 'cancelled',
+          reason: 'run_shutdown',
+        });
+
+        await expect(Promise.race([
+          closePromise.then(() => 'closed'),
+          delay(1000).then(() => 'timed_out'),
+        ])).resolves.toBe('closed');
+
+        await delay(0);
+        expect(unhandledRejections).toEqual([]);
+      });
+    } finally {
+      process.off('unhandledRejection', onUnhandledRejection);
+    }
   });
 });

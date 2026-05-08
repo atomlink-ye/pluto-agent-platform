@@ -48,3 +48,14 @@
 
 - Code commit created: `61a6d17` (`feat(v2): T5-S2b wait registry + dual-mode delivery`)
 - `git push origin pluto/v2/t5-s2b-wait-registry` failed on auth: `fatal: could not read Username for 'https://github.com': No such device or address`
+
+## Fix-up commit
+
+- Reviewer BLOCKER: shutdown could strand HTTP/MCP wait handlers after `WaitRegistry.arm()` returned `{ outcome: 'event' }` but before the handler re-acquired the actor lease, causing in-flight requests and `server.close()` to hang on run shutdown.
+- Chosen option: **A** — added a runtime shutdown signal that both HTTP and MCP `waitForLease()` paths race against, then signalled shutdown before `waitRegistry.cancelAll('run_shutdown')` in the Paseo driver.
+- Test cases added: HTTP regression for shutdown during post-event lease reacquisition; MCP regression for the same post-event lease reacquisition window.
+- Gate results:
+  - `pnpm install`: passed after re-running with development deps enabled (`NODE_ENV=development`) because the shell defaulted to `NODE_ENV=production`.
+  - `pnpm --filter @pluto/v2-runtime typecheck`: baseline preserved at 60 existing errors; no new errors added.
+  - `pnpm --filter @pluto/v2-runtime test`: baseline preserved at 4 pre-existing CLI subprocess failures; new wait regression coverage passed.
+  - `pnpm test`: baseline preserved at 8 pre-existing root failures.

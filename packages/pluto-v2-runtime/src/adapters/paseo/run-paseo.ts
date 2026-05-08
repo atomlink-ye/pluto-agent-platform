@@ -536,6 +536,7 @@ async function runAgenticToolLoop(
     getPromptViewForActor: promptViewForActor,
     onTrace: pushWaitTrace,
   });
+  const waitShutdownController = new AbortController();
 
   const rememberDeliveredEvent = (actor: ActorRef, sequence: number) => {
     const key = actorKey(actor);
@@ -636,6 +637,8 @@ async function runAgenticToolLoop(
         return waitCursorByActorKey.get(key) ?? deliveryCursorByActorKey.get(key) ?? -1;
       },
       onEventDelivered: rememberDeliveredEvent,
+      shutdownSignal: waitShutdownController.signal,
+      shutdownReason: 'run_shutdown',
     },
   });
   const localApi = await startPlutoLocalApi({
@@ -649,6 +652,8 @@ async function runAgenticToolLoop(
         return waitCursorByActorKey.get(key) ?? deliveryCursorByActorKey.get(key) ?? -1;
       },
       onEventDelivered: rememberDeliveredEvent,
+      shutdownSignal: waitShutdownController.signal,
+      shutdownReason: 'run_shutdown',
     },
   });
 
@@ -907,6 +912,7 @@ async function runAgenticToolLoop(
       };
     }
   } finally {
+    waitShutdownController.abort('run_shutdown');
     waitRegistry.cancelAll('run_shutdown');
     leaseStore.setCurrent(null);
     await localApi.shutdown();

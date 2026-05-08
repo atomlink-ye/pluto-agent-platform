@@ -24,6 +24,12 @@ const TOKEN = 'pluto-test-token';
 const LEAD: ActorRef = { kind: 'role', role: 'lead' };
 const GENERATOR: ActorRef = { kind: 'role', role: 'generator' };
 
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
 function createKernel() {
   return new RunKernel({
     initialState: initialState(TeamContextSchema.parse({
@@ -108,10 +114,13 @@ async function withWaitApi(
     registry: ReturnType<typeof makeWaitRegistry>;
     leaseStore: ReturnType<typeof makeTurnLeaseStore>;
     traces: string[];
+    triggerShutdown(reason?: string): void;
+    shutdown(): Promise<void>;
   }) => Promise<void>,
 ) {
   const kernel = createKernel();
   const leaseStore = makeTurnLeaseStore(LEAD);
+  const shutdownController = new AbortController();
   const events: RunEvent[] = [];
   const traces: string[] = [];
   const cursorByActorKey = new Map<string, number>();
@@ -149,11 +158,23 @@ async function withWaitApi(
       onEventDelivered(actor, sequence) {
         cursorByActorKey.set(`${actor.kind}:${actor.kind === 'role' ? actor.role : actor.kind}`, sequence);
       },
+      shutdownSignal: shutdownController.signal,
+      shutdownReason: 'run_shutdown',
     },
   });
 
   try {
-    await run({ url: api.url, events, registry, leaseStore, traces });
+    await run({
+      url: api.url,
+      events,
+      registry,
+      leaseStore,
+      traces,
+      triggerShutdown(reason = 'run_shutdown') {
+        shutdownController.abort(reason);
+      },
+      shutdown: () => api.shutdown(),
+    });
   } finally {
     await api.shutdown();
   }
@@ -230,5 +251,59 @@ describe('pluto local api wait-for-event route', () => {
         expect(traces).toContain('wait_cancelled');
       });
     });
+  });
+
+  it('returns cancelled when shutdown hits during post-event lease reacquisition', async () => {
+    const unhandledRejections: unknown[] = [];
+    const onUnhandledRejection = (reason: unknown) => {
+      unhandledRejections.push(reason);
+    };
+    process.on('unhandledRejection', onUnhandledRejection);
+
+    try {
+      await withWaitApi(async ({ url, events, triggerShutdown, shutdown }) => {
+        const event = mailboxEvent(0);
+        events.push(event);
+
+        const pending = fetch(`${url}/tools/wait-for-event`, {
+          method: 'POST',
+          headers: {
+            authorization: `Bearer ${TOKEN}`,
+            'Pluto-Run-Actor': 'role:generator',
+            connection: 'close',
+            'content-type': 'application/json',
+          },
+          body: JSON.stringify({ timeoutSec: 300 }),
+        });
+
+        await delay(25);
+
+        triggerShutdown('run_shutdown');
+        const closePromise = shutdown();
+
+        const response = await Promise.race([
+          pending,
+          delay(1000).then(() => {
+            throw new Error('wait-for-event response timed out during shutdown');
+          }),
+        ]);
+
+        expect(response.status).toBe(200);
+        await expect(response.json()).resolves.toEqual({
+          outcome: 'cancelled',
+          reason: 'run_shutdown',
+        });
+
+        await expect(Promise.race([
+          closePromise.then(() => 'closed'),
+          delay(1000).then(() => 'timed_out'),
+        ])).resolves.toBe('closed');
+
+        await delay(0);
+        expect(unhandledRejections).toEqual([]);
+      });
+    } finally {
+      process.off('unhandledRejection', onUnhandledRejection);
+    }
   });
 });
