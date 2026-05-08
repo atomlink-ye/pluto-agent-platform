@@ -96,9 +96,18 @@ explicitly inline.)
    - `deterministic` — unchanged (S4 parity fixture).
 
 8. **paseo MCP injection.** No `paseo --mcp` or
-   `opencode run --mcp` flag exists. Use **`OPENCODE_CONFIG_CONTENT`**
-   env var on agent spawn (preferred) or temp project-local
-   `opencode.json` in actor `cwd` (fallback). T4-D0 proves which.
+   `opencode run --mcp` flag exists. **T4-D0 empirical
+   finding (2026-05-08, `main @ 0d22433`):** the spawned
+   OpenCode actor only reaches `tools/call` when MCP config
+   is delivered via a temp project-local **`opencode.json`
+   written into the per-actor `cwd`** before
+   `paseoCli.spawnAgent`. The `OPENCODE_CONFIG_CONTENT` env
+   route reaches MCP discovery (`initialize` →
+   `notifications/initialized` → `tools/list`) but the agent
+   does not invoke `tools/call` under that path. **Adopt
+   temp-file injection as primary**; keep
+   `OPENCODE_CONFIG_CONTENT` as a best-effort/diagnostic
+   fallback. See `docs/notes/t4-d0-mcp-injection.md`.
 
 9. **Closed schemas unchanged.** v2-core protocol envelopes,
    event kinds, payloads, authority matrix all byte-stable.
@@ -229,7 +238,11 @@ server and tool calls instead of `extractDirective`.
   experimental in spec schema.
 - `runPaseo` agentic_tool lane:
   - starts MCP server before lead spawn
-  - injects `OPENCODE_CONFIG_CONTENT` per T4-D0 finding
+  - writes per-actor `opencode.json` into a deterministic
+    cwd (`.pluto/runs/<runId>/agents/<actorKey>/`) and spawns
+    the actor with `cwd` set there (per T4-D0 finding;
+    `OPENCODE_CONFIG_CONTENT` env stays as fallback only)
+  - cleans up the per-actor cwd on run termination
   - never calls `extractDirective`
   - drives turn end on first mutating tool call (or no-progress)
   - terminal signal = `pluto_complete_run` tool call
