@@ -13,6 +13,7 @@ import {
 } from '@pluto/v2-runtime';
 import type { PaseoAgentSpec, PaseoCliClient } from '@pluto/v2-runtime';
 import { replayAll, SCHEMA_VERSION, type ActorRef, type AuthoredSpec, type ClockProvider, type IdProvider } from '@pluto/v2-core';
+import type { LoadedAuthoredSpec } from '@pluto/v2-runtime';
 
 import { classifyPaseoError } from './v2-cli-bridge-error.js';
 
@@ -171,18 +172,37 @@ function resolveRunDir(input: Pick<V2BridgeInput, 'workspaceCwd' | 'evidenceOutp
   return join(resolve(input.workspaceCwd), '.pluto', 'runs', runId);
 }
 
-function fallbackAuthoredSpec(specPath: string, runId = fallbackRunId(specPath)): AuthoredSpec {
+function fallbackAuthoredSpec(specPath: string, runId = fallbackRunId(specPath)): LoadedAuthoredSpec {
   return {
     runId,
     scenarioRef: specPath,
     runProfileRef: 'paseo-v2-cli',
     actors: {},
     declaredActors: [],
+    playbook: null,
   };
 }
 
+function toCoreAuthoredSpec(loaded: LoadedAuthoredSpec): AuthoredSpec {
+  const { playbook: _playbook, orchestration, ...rest } = loaded;
+  if (!orchestration) {
+    return rest as AuthoredSpec;
+  }
+  const coreMode =
+    orchestration.mode === 'agentic_text' || orchestration.mode === 'agentic_tool'
+      ? 'agentic'
+      : orchestration.mode;
+  return {
+    ...rest,
+    orchestration: {
+      ...orchestration,
+      ...(coreMode === undefined ? {} : { mode: coreMode }),
+    },
+  } as AuthoredSpec;
+}
+
 function buildFailedEvidencePacket(args: {
-  readonly authored: AuthoredSpec;
+  readonly authored: LoadedAuthoredSpec;
   readonly summary: string | null;
 }): EvidencePacket {
   const timestamp = new Date().toISOString();
@@ -204,7 +224,7 @@ function buildFailedEvidencePacket(args: {
 
 async function writeRunArtifacts(args: {
   readonly runDir: string;
-  readonly authored: AuthoredSpec;
+  readonly authored: LoadedAuthoredSpec;
   readonly result: Awaited<ReturnType<typeof runPaseo>>;
   readonly transcriptByActor: ReadonlyMap<string, string>;
   readonly specByTitle: ReadonlyMap<string, PaseoAgentSpec>;
@@ -227,8 +247,9 @@ async function writeRunArtifacts(args: {
     actorSpecByKey.set(actorKey, spec);
   }
 
+  const coreAuthored = toCoreAuthoredSpec(args.authored);
   const usageSummary = buildUsageSummary({
-    authored: args.authored,
+    authored: coreAuthored,
     evidencePacket: args.result.evidencePacket,
     usage: args.result.usage,
     actorSpecByKey,
@@ -260,7 +281,7 @@ async function writeRunArtifacts(args: {
 
 async function writeFailedRunArtifacts(args: {
   readonly runDir: string;
-  readonly authored: AuthoredSpec;
+  readonly authored: LoadedAuthoredSpec;
   readonly summary: string | null;
   readonly transcriptByActor: ReadonlyMap<string, string>;
 }): Promise<ReadonlyArray<string>> {
@@ -273,12 +294,13 @@ async function writeFailedRunArtifacts(args: {
   const mailboxPath = join(projectionsDir, PROJECTIONS_MAILBOX_FILE);
   const artifactsPath = join(projectionsDir, PROJECTIONS_ARTIFACTS_FILE);
   const views = replayAll([]);
+  const coreAuthored = toCoreAuthoredSpec(args.authored);
   const evidencePacket = buildFailedEvidencePacket({
     authored: args.authored,
     summary: args.summary,
   });
   const usageSummary = buildUsageSummary({
-    authored: args.authored,
+    authored: coreAuthored,
     evidencePacket,
     usage: {
       totalInputTokens: 0,
