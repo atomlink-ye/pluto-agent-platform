@@ -2747,15 +2747,44 @@ UNTOUCHED.
 2. **Removed v1.6 surface (binding list — applied AFTER inventory
    confirms reachability).**
 
-   Source code (entire directories deleted):
-   - `src/adapters/paseo-opencode/` — v1.6 paseo adapter.
-   - `src/four-layer/` — v1.6 four-layer authored-validate +
-     evidence-packet + result-contract.
-   - `src/orchestrator/` — v1.6 manager-run-harness + run-store +
-     redactor + runtime-helper + callback-normalizer.
-   - `src/contracts/` — v1.6 contract types (audit per file; v2
-     equivalents live in `packages/pluto-v2-core/src/`).
-   - `src/runtime/` — v1.6 runtime helpers (audit per file).
+   **Scope expansion (R3 update, 2026-05-08):** Lane 0 inventory
+   on `3a931fd` revealed the v1.6 surface under `src/` is much
+   wider than the original list (211 TS files across 27 subdirs;
+   only `src/cli/{run,v2-cli-bridge}.ts` import the v2 packages).
+   Per operator's binding rule "always aggressive full v2
+   replacement", the deletion list expands to **every src/
+   subdirectory NOT in the retained-entrypoint set**.
+
+   Source code (entire directories deleted — full v1.6 product
+   surface, not just runtime):
+
+   v1.6 runtime trees:
+   - `src/adapters/` (paseo-opencode + fake; v2 equivalents live
+     in `packages/pluto-v2-runtime/src/adapters/`).
+   - `src/four-layer/` — v1.6 four-layer.
+   - `src/orchestrator/` — v1.6 manager-run-harness etc.
+   - `src/contracts/` — v1.6 contract types (v2 equivalents in
+     `packages/pluto-v2-core/src/`).
+   - `src/runtime/` — v1.6 runtime helpers.
+
+   v1.6 broader product surface (cascading deletion required by
+   `src/contracts/` removal; all chain off v1.6 contracts):
+   - `src/audit/`, `src/bootstrap/`, `src/catalog/`,
+     `src/compliance/`, `src/evidence/`, `src/extensions/`,
+     `src/governance/`, `src/identity/`, `src/integration/`,
+     `src/observability/`, `src/ops/`, `src/portability/`,
+     `src/portable-workflow/`, `src/publish/`, `src/release/`,
+     `src/review/`, `src/schedule/`, `src/security/`,
+     `src/storage/`, `src/store/`, `src/versioning/`.
+   - Any other `src/<subdir>/` discovered by lane 0 NOT in the
+     retained-entrypoint set.
+
+   The v2 product surface lives entirely under
+   `packages/pluto-v2-core/` and `packages/pluto-v2-runtime/`.
+   Any feature from the broader v1.6 product surface that needs
+   to live on `main` post-S7 is a SEPARATE post-merge slice with
+   v2-shaped re-implementation. Recovery from
+   `legacy-v1.6-harness-prototype` is git-cheap.
 
    v1.6 auxiliary CLI commands (entire files deleted):
    - `src/cli/package.ts` (`pluto:package` command).
@@ -2773,24 +2802,35 @@ UNTOUCHED.
      v2-only re-exports OR is deleted entirely if no consumer
      imports the package directly.
 
-   v1.6 tests (entire files deleted):
-   - `tests/cli/run.test.ts` — v1.6 CLI test (covers
-     `pluto:package` too; that command is also being deleted, so
-     the test is irrelevant).
-   - `tests/cli/run-exit-code-2.test.ts` — v1.6 capability test;
-     replaced by `run-exit-code-2-v2.test.ts`.
-   - `tests/cli/run-runtime-v1-opt-in.test.ts` — v1 opt-in test
-     (no longer applicable post-S7).
-   - `tests/cli/runs.test.ts` — `pluto:runs` test.
-   - `tests/manager-run-harness.test.ts`.
-   - `tests/paseo-opencode-adapter.test.ts`.
-   - `tests/prompt-collar.test.ts`.
-   - `tests/four-layer-loader-render.test.ts`.
-   - `tests/fake-adapter.test.ts` (v1.6 fake adapter; v2 has its
-     own under `packages/pluto-v2-runtime/__tests__/adapters/fake/`).
-   - `tests/orchestrator/**`.
-   - `tests/live-smoke-classification.test.ts`.
+   v1.6 tests (entire files / directories deleted):
+   - `tests/cli/run.test.ts`, `tests/cli/run-exit-code-2.test.ts`,
+     `tests/cli/run-runtime-v1-opt-in.test.ts`,
+     `tests/cli/runs.test.ts` (v1.6 CLI tests).
+   - `tests/manager-run-harness.test.ts`,
+     `tests/paseo-opencode-adapter.test.ts`,
+     `tests/prompt-collar.test.ts`,
+     `tests/four-layer-loader-render.test.ts`,
+     `tests/fake-adapter.test.ts`,
+     `tests/orchestrator/**`,
+     `tests/live-smoke-classification.test.ts`.
+   - **All tests under `tests/` that import a deleted v1.6
+     module** (every test exercising `src/audit/`,
+     `src/bootstrap/`, `src/compliance/`, `src/evidence/`,
+     `src/governance/`, `src/identity/`, `src/integration/`,
+     `src/observability/`, `src/ops/`, `src/portability/`,
+     `src/portable-workflow/`, `src/publish/`, `src/release/`,
+     `src/review/`, `src/schedule/`, `src/security/`,
+     `src/storage/`, `src/store/`, `src/versioning/`,
+     `src/extensions/`, `src/catalog/` is to be deleted with its
+     subject).
    - Any other v1.6-only test discovered by lane 0 inventory.
+
+   Retained tests (UNTOUCHED):
+   - `packages/pluto-v2-core/__tests__/**`.
+   - `packages/pluto-v2-runtime/__tests__/**`.
+   - `tests/cli/run-runtime-v2-default.test.ts`.
+   - `tests/cli/run-exit-code-2-v2.test.ts`.
+   - `tests/fixtures/live-smoke/86557df1-...` (data, not code).
 
    v1.6 authored configs (entire directories deleted):
    - `scenarios/` — all v1.6 scenarios.
