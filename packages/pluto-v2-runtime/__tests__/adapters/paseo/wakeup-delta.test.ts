@@ -218,4 +218,189 @@ describe('computeWakeupDelta', () => {
     expect(delta.budgets).toEqual(BUDGETS);
     expect(delta.lastRejection?.error).toContain('PLUTO_TOOL_BAD_ARGS');
   });
+
+  it('caps newTasks at 20 entries when more are visible past the cursor', () => {
+    const events: RunEvent[] = [runStarted(0)];
+    for (let i = 1; i <= 35; i += 1) {
+      events.push({
+        kind: 'task_created',
+        eventId: eventId(i),
+        runId: RUN_ID,
+        sequence: i,
+        timestamp: timestamp(i),
+        schemaVersion: SCHEMA_VERSION,
+        actor: LEAD,
+        requestId: requestId(i),
+        causationId: null,
+        correlationId: null,
+        entityRef: { kind: 'task', taskId: `bulk-${i}` },
+        outcome: 'accepted',
+        payload: {
+          taskId: `bulk-${i}`,
+          title: `Bulk task ${i}`,
+          ownerActor: GENERATOR,
+          dependsOn: [],
+        },
+      });
+    }
+    const currentPromptView = buildPromptView({
+      spec: SPEC,
+      events,
+      forActor: GENERATOR,
+      budgets: BUDGETS,
+      activeDelegation: GENERATOR,
+      lastRejection: null,
+    });
+
+    const delta = computeWakeupDelta({ events, fromSequence: 0, forActor: GENERATOR, currentPromptView });
+
+    expect(delta.newTasks.length).toBe(20);
+  });
+
+  it('caps newMailbox at 20 entries when more are visible past the cursor', () => {
+    const events: RunEvent[] = [runStarted(0)];
+    for (let i = 1; i <= 30; i += 1) {
+      events.push(mailboxMessage(i, LEAD, GENERATOR, `bulk message ${i}`));
+    }
+    const currentPromptView = buildPromptView({
+      spec: SPEC,
+      events,
+      forActor: GENERATOR,
+      budgets: BUDGETS,
+      activeDelegation: GENERATOR,
+      lastRejection: null,
+    });
+
+    const delta = computeWakeupDelta({ events, fromSequence: 0, forActor: GENERATOR, currentPromptView });
+
+    expect(delta.newMailbox.length).toBe(20);
+  });
+
+  it('caps newArtifacts at 20 entries when more are visible past the cursor', () => {
+    const events: RunEvent[] = [runStarted(0)];
+    for (let i = 1; i <= 25; i += 1) {
+      events.push({
+        kind: 'artifact_published',
+        eventId: eventId(i),
+        runId: RUN_ID,
+        sequence: i,
+        timestamp: timestamp(i),
+        schemaVersion: SCHEMA_VERSION,
+        actor: GENERATOR,
+        requestId: requestId(i),
+        causationId: null,
+        correlationId: null,
+        entityRef: { kind: 'artifact', artifactId: `bulk-art-${i}` },
+        outcome: 'accepted',
+        payload: {
+          artifactId: `bulk-art-${i}`,
+          kind: 'intermediate',
+          mediaType: 'text/plain',
+          byteSize: 32,
+        },
+      });
+    }
+    const currentPromptView = buildPromptView({
+      spec: SPEC,
+      events,
+      forActor: GENERATOR,
+      budgets: BUDGETS,
+      activeDelegation: GENERATOR,
+      lastRejection: null,
+    });
+
+    const delta = computeWakeupDelta({ events, fromSequence: 0, forActor: GENERATOR, currentPromptView });
+
+    expect(delta.newArtifacts.length).toBe(20);
+  });
+
+  it('truncates long task titles, mailbox bodies, and rejection error strings', () => {
+    const longTitle = 'A'.repeat(400);
+    const longBody = 'B'.repeat(600);
+    const longError = `PLUTO_TOOL_BAD_ARGS: ${'C'.repeat(800)}`;
+
+    const events: RunEvent[] = [
+      runStarted(0),
+      {
+        kind: 'task_created',
+        eventId: eventId(1),
+        runId: RUN_ID,
+        sequence: 1,
+        timestamp: timestamp(1),
+        schemaVersion: SCHEMA_VERSION,
+        actor: LEAD,
+        requestId: requestId(1),
+        causationId: null,
+        correlationId: null,
+        entityRef: { kind: 'task', taskId: 'long-task' },
+        outcome: 'accepted',
+        payload: {
+          taskId: 'long-task',
+          title: longTitle,
+          ownerActor: GENERATOR,
+          dependsOn: [],
+        },
+      },
+      mailboxMessage(2, LEAD, GENERATOR, longBody),
+    ];
+    const currentPromptView = buildPromptView({
+      spec: SPEC,
+      events,
+      forActor: GENERATOR,
+      budgets: BUDGETS,
+      activeDelegation: GENERATOR,
+      lastRejection: {
+        directive: {
+          kind: 'append_mailbox_message',
+          payload: {
+            fromActor: GENERATOR,
+            toActor: LEAD,
+            kind: 'completion',
+            body: 'sample',
+          },
+        },
+        error: longError,
+      },
+    });
+
+    const delta = computeWakeupDelta({ events, fromSequence: 0, forActor: GENERATOR, currentPromptView });
+
+    expect(delta.newTasks[0]?.title.length).toBeLessThan(longTitle.length);
+    expect(delta.newTasks[0]?.title).toContain('...[truncated]');
+    expect(delta.newMailbox[0]?.body.length).toBeLessThan(longBody.length);
+    expect(delta.newMailbox[0]?.body).toContain('...[truncated]');
+    expect(delta.lastRejection?.error.length).toBeLessThan(longError.length);
+    expect(delta.lastRejection?.error).toContain('...[truncated]');
+  });
+
+  it('cursor monotonicity: a higher fromSequence yields a strict subset of events past it', () => {
+    const events = [
+      runStarted(0),
+      taskCreated(1),
+      mailboxMessage(2, LEAD, GENERATOR, 'turn 2 message'),
+      taskStateChanged(4),
+      mailboxMessage(5, LEAD, GENERATOR, 'turn 5 message'),
+    ];
+    const currentPromptView = buildPromptView({
+      spec: SPEC,
+      events,
+      forActor: GENERATOR,
+      budgets: BUDGETS,
+      activeDelegation: GENERATOR,
+      lastRejection: null,
+    });
+
+    const deltaFromZero = computeWakeupDelta({ events, fromSequence: 0, forActor: GENERATOR, currentPromptView });
+    const deltaFromTwo = computeWakeupDelta({ events, fromSequence: 2, forActor: GENERATOR, currentPromptView });
+    const deltaFromFive = computeWakeupDelta({ events, fromSequence: 5, forActor: GENERATOR, currentPromptView });
+
+    // Higher cursor → fewer (or equal) entries returned for each list.
+    expect(deltaFromTwo.newMailbox.length).toBeLessThanOrEqual(deltaFromZero.newMailbox.length);
+    expect(deltaFromFive.newMailbox.length).toBeLessThanOrEqual(deltaFromTwo.newMailbox.length);
+    // From sequence 5 — nothing new in the stream past it.
+    expect(deltaFromFive.newMailbox).toEqual([]);
+    expect(deltaFromFive.newTasks).toEqual([]);
+    expect(deltaFromFive.updatedTasks).toEqual([]);
+    expect(deltaFromFive.newArtifacts).toEqual([]);
+  });
 });
