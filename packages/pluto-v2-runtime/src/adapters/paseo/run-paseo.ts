@@ -33,6 +33,7 @@ import type { RuntimeAdapter } from '../../runtime/runtime-adapter.js';
 import { makePlutoToolHandlers, type PlutoToolResult } from '../../tools/pluto-tool-handlers.js';
 import { PLUTO_TOOL_NAMES, type PlutoToolName } from '../../tools/pluto-tool-schemas.js';
 import type { AgenticMutation } from './agentic-mutation.js';
+import { materializeActorBridge, resolveActorBridgeDependencyPaths } from './actor-bridge.js';
 import { buildAgenticToolPrompt, buildWakeupPrompt } from './agentic-tool-prompt-builder.js';
 import { createInitialAgenticLoopState } from './agentic-loop-state.js';
 import { leadActorFromSpec, pickNextAgenticActor, withKernelRejection } from './agentic-scheduler.js';
@@ -162,6 +163,7 @@ class PaseoRuntimeError extends Error {
 
 type AgentInjection = {
   cwd?: string;
+  wrapperPath?: string;
 };
 
 type AgentSessionState = {
@@ -527,11 +529,22 @@ async function prepareAgentInjection(args: {
   runId: string;
   actor: ActorRef;
   workspaceCwd: string;
+  handoff: PaseoAgentEnvHandoff;
 }): Promise<AgentInjection> {
   const actorDir = join(args.workspaceCwd, '.pluto', 'runs', args.runId, 'agents', actorKey(args.actor));
   await mkdir(actorDir, { recursive: true });
+  const bridgePaths = await resolveActorBridgeDependencyPaths();
+  const bridge = await materializeActorBridge({
+    actorCwd: actorDir,
+    apiUrl: args.handoff.apiUrl,
+    bearerToken: args.handoff.bearerToken,
+    actorKey: args.handoff.actorKey,
+    plutoToolSourcePath: bridgePaths.plutoToolSourcePath,
+    tsxBinPath: bridgePaths.tsxBinPath,
+  });
   return {
     cwd: actorDir,
+    wrapperPath: bridge.wrapperPath,
   };
 }
 
@@ -798,6 +811,7 @@ async function runAgenticToolLoop(
           runId: kernel.state.runId,
           actor,
           workspaceCwd,
+          handoff,
         });
 
         const spawnedSession = await options.client.spawnAgent({
