@@ -36,6 +36,7 @@ import { buildAgenticToolPrompt, buildWakeupPrompt } from './agentic-tool-prompt
 import { createInitialAgenticLoopState } from './agentic-loop-state.js';
 import { leadActorFromSpec, pickNextAgenticActor, withKernelRejection } from './agentic-scheduler.js';
 import { buildPromptView } from './prompt-view.js';
+import { planDelegatedTaskCloseout } from './task-closeout.js';
 import { computeWakeupDelta } from './wakeup-delta.js';
 
 export type PaseoLabel = `${string}=${string}`;
@@ -257,6 +258,24 @@ function buildCompleteRunRequest(
       status: completion.status,
       summary: completion.summary,
     },
+    idempotencyKey: null,
+    clientTimestamp: options.clockProvider.nowIso(),
+    schemaVersion: SCHEMA_VERSION,
+  };
+}
+
+function buildChangeTaskStateRequest(
+  runId: string,
+  actor: ActorRef,
+  payload: { taskId: string; to: 'completed' },
+  options: { idProvider: IdProvider; clockProvider: ClockProvider },
+): Extract<ProtocolRequest, { intent: 'change_task_state' }> {
+  return {
+    requestId: options.idProvider.next(),
+    runId,
+    actor,
+    intent: 'change_task_state',
+    payload,
     idempotencyKey: null,
     clientTimestamp: options.clockProvider.nowIso(),
     schemaVersion: SCHEMA_VERSION,
@@ -884,6 +903,35 @@ async function runAgenticToolLoop(
           turnIndex: state.turnIndex + 1,
         };
         continue;
+      }
+
+      const synthesizedCloseout = planDelegatedTaskCloseout({
+        actor,
+        acceptedEvent: observed.event,
+        directive: attemptedDirective,
+        leadActor,
+        delegationPointer: state.delegationPointer,
+        delegationTaskId: state.delegationTaskId,
+        runState: kernel.state,
+      });
+      if (synthesizedCloseout != null) {
+        const synthesizedEvent = kernel.submit(
+          buildChangeTaskStateRequest(
+            kernel.state.runId,
+            synthesizedCloseout.actor,
+            { taskId: synthesizedCloseout.taskId, to: 'completed' },
+            options,
+          ),
+        ).event;
+
+        if (synthesizedEvent.kind === 'request_rejected') {
+          throw new Error(
+            `Driver-synthesized task close-out rejected for ${actorKey(synthesizedCloseout.actor)} task ${synthesizedCloseout.taskId}: ${synthesizedEvent.payload.detail}`,
+          );
+        }
+
+        rememberActorMutationEvent(synthesizedCloseout.actor, synthesizedEvent.sequence);
+        waitRegistry.notify(synthesizedEvent, promptViewForActor);
       }
 
       if (observed.toolName === 'pluto_complete_run' && observed.event.kind === 'run_completed') {

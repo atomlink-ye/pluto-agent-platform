@@ -62,6 +62,13 @@ function actorKey(actor: ActorRef): string {
     case 'role':
       return `role:${actor.role}`;
   }
+
+  const exhaustiveActor: never = actor;
+  throw new Error(`unsupported actor ${String(exhaustiveActor)}`);
+}
+
+function taskStates(tasks: Record<string, unknown>): string[] {
+  return Object.values(tasks as Record<string, { state: string }>).map((task) => task.state);
 }
 
 function buildSpec(overrides?: Partial<LoadedAuthoredSpec>): LoadedAuthoredSpec {
@@ -322,8 +329,10 @@ describe('agentic_tool Paseo loop', () => {
         'run_started',
         'task_created',
         'mailbox_message_appended',
+        'task_state_changed',
         'run_completed',
       ]);
+      expect(taskStates(execution.result.views.task.tasks)).toEqual(['completed']);
       expect(execution.spawnSpecs.map((spec) => spec.cwd)).toEqual([
         expect.stringContaining(`${execution.workspaceCwd}/.pluto/runs/run-hello-team-agentic-tool-mock/agents/role:lead`),
         expect.stringContaining(`${execution.workspaceCwd}/.pluto/runs/run-hello-team-agentic-tool-mock/agents/role:generator`),
@@ -381,6 +390,13 @@ describe('agentic_tool Paseo loop', () => {
 
     try {
       expect(execution.prompts.map((entry) => entry.actorKey)).toEqual(['role:lead', 'role:generator', 'role:lead']);
+      expect(execution.result.events.map((event) => event.kind)).toEqual([
+        'run_started',
+        'task_created',
+        'task_state_changed',
+        'run_completed',
+      ]);
+      expect(taskStates(execution.result.views.task.tasks)).toEqual(['completed']);
     } finally {
       await execution.cleanup();
     }
@@ -424,6 +440,7 @@ describe('agentic_tool Paseo loop', () => {
 
     try {
       expect(execution.prompts.map((entry) => entry.actorKey)).toEqual(['role:lead', 'role:generator', 'role:lead']);
+      expect(execution.result.events.some((event) => event.kind === 'task_state_changed')).toBe(false);
     } finally {
       await execution.cleanup();
     }
@@ -477,8 +494,10 @@ describe('agentic_tool Paseo loop', () => {
         'run_started',
         'task_created',
         'mailbox_message_appended',
+        'task_state_changed',
         'run_completed',
       ]);
+      expect(taskStates(execution.result.views.task.tasks)).toEqual(['completed']);
       expect(execution.result.runtimeTraces.map((trace) => trace.kind)).toEqual([
         'wait_armed',
         'wait_unblocked',
@@ -741,8 +760,10 @@ describe('agentic_tool Paseo loop', () => {
         'task_state_changed',
         'artifact_published',
         'mailbox_message_appended',
+        'task_state_changed',
         'run_completed',
       ]);
+      expect(taskStates(execution.result.views.task.tasks)).toEqual(['completed']);
     } finally {
       await execution.cleanup();
     }

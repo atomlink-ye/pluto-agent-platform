@@ -51,6 +51,7 @@ const MUTATING_EVENT_KINDS = new Set([
   'artifact_published',
   'run_completed',
 ]);
+const TERMINAL_TASK_STATES = new Set(['completed', 'cancelled', 'failed']);
 
 function readRunId(): string {
   return readFileSync(MANIFEST_PATH, 'utf8').trim();
@@ -106,6 +107,46 @@ describe('agentic_tool live smoke invariants', () => {
     expect(authoredSpecText).toBe(scenarioText);
     expect(playbookSha).toBe(createHash('sha256').update(playbookText).digest('hex'));
     expect(usageSummary.totalTurns).toBeLessThanOrEqual(50);
+  });
+
+  it('keeps delegated tasks terminal once close-out state transitions are captured in the fixture', () => {
+    const runId = readRunId();
+    const fixtureDir = join(FIXTURES_ROOT, runId);
+    const events = parseJsonLines<RunEvent>(join(fixtureDir, 'events.jsonl'));
+    const evidencePacket = JSON.parse(readFileSync(join(fixtureDir, 'evidence-packet.json'), 'utf8')) as EvidencePacket;
+    const delegatedTaskIds = events.reduce<string[]>((taskIds, event) => {
+      if (
+        event.kind === 'task_created'
+        && event.outcome === 'accepted'
+        && event.payload.ownerActor?.kind === 'role'
+        && event.payload.ownerActor.role !== 'lead'
+      ) {
+        taskIds.push(event.payload.taskId);
+      }
+      return taskIds;
+    }, []);
+    const terminalDelegatedCloseouts = events.filter((event) =>
+      event.kind === 'task_state_changed'
+      && event.outcome === 'accepted'
+      && delegatedTaskIds.includes(event.payload.taskId)
+      && TERMINAL_TASK_STATES.has(event.payload.to),
+    );
+
+    expect(delegatedTaskIds.length).toBeGreaterThan(0);
+    if (terminalDelegatedCloseouts.length === 0) {
+      expect(events.some((event) =>
+        event.kind === 'mailbox_message_appended'
+        && event.outcome === 'accepted'
+        && event.payload.toActor.kind === 'role'
+        && event.payload.toActor.role === 'lead'
+        && (event.payload.kind === 'completion' || event.payload.kind === 'final'),
+      )).toBe(true);
+      return;
+    }
+
+    for (const taskId of delegatedTaskIds) {
+      expect(TERMINAL_TASK_STATES.has(evidencePacket.tasks[taskId]?.state ?? '')).toBe(true);
+    }
   });
 
   it.skip('records pluto-tool invocations instead of curl or mcporter in the captured transcript fixture', () => {
