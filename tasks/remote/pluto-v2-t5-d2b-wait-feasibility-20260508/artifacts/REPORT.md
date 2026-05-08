@@ -48,4 +48,4 @@ recommendation: GO
 - Task-driver `gate_diff_hygiene`: passed.
 - Task-driver `run_proof`: passed with exit `0` after a temporary untracked symlink workaround inside `packages/pluto-v2-runtime/` because `commands.sh` resolves `tsx packages/pluto-v2-runtime/scripts/smoke-wait-feasibility.ts` from the filtered package cwd rather than repo root.
 - Task-driver `commit_and_push`: created local commit `7a54b34fb03d9eaa778bee52e20ae286faff39b1`, but push failed on auth (`fatal: could not read Username for 'https://github.com': No such device or address`).
-- Task-driver `force_add_report`: pending.
+- Task-driver `force_add_report`: created local commit for the copied report, and its push also failed on auth (`WARN: push failed (auth) — operator handles locally`).
