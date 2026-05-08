@@ -17,6 +17,7 @@ import { actorKey } from '../../../../pluto-v2-core/src/core/team-context.js';
 
 import { assembleEvidencePacket, type EvidencePacket } from '../../evidence/evidence-packet.js';
 import type { UsageStatus } from '../../evidence/usage-summary-builder.js';
+import type { LoadedAuthoredSpec } from '../../loader/authored-spec-loader.js';
 import { kernelViewOf, RunNotCompletedError } from '../../runtime/runner.js';
 import type { KernelView } from '../../runtime/kernel-view.js';
 import type { RuntimeAdapter } from '../../runtime/runtime-adapter.js';
@@ -67,6 +68,8 @@ export interface PaseoTurnResponse {
 export interface PaseoRuntimeAdapter<S> extends RuntimeAdapter<S> {
   pendingPaseoTurn(state: S, view: KernelView): PaseoTurnRequest | null;
   withPaseoResponse(state: S, response: PaseoTurnResponse): S;
+  configureAgenticState?(state: S, spec: LoadedAuthoredSpec): S;
+  bypassKernelRequest?(state: S, request: ProtocolRequest, view: KernelView): boolean;
   withKernelEvent?(state: S, event: RunEvent, view: KernelView): S;
 }
 
@@ -293,6 +296,8 @@ export async function runPaseo<S>(
     clockProvider: options.clockProvider,
   });
 
+  const isAgenticRun = authored.orchestration?.mode === 'agentic';
+
   kernel.seedRunStarted(
     {
       scenarioRef: teamContext.scenarioRef,
@@ -303,6 +308,12 @@ export async function runPaseo<S>(
   );
 
   let state = adapter.init(teamContext, kernelViewOf(kernel));
+  if (isAgenticRun) {
+    if (adapter.configureAgenticState == null) {
+      throw new Error('runPaseo agentic mode requires adapter.configureAgenticState');
+    }
+    state = adapter.configureAgenticState(state, authored as LoadedAuthoredSpec);
+  }
   const agentByActorKey = new Map<string, string>();
   const usage = createUsageAccumulator();
   const maxSteps = options.maxSteps ?? DEFAULT_MAX_STEPS;
@@ -362,6 +373,11 @@ export async function runPaseo<S>(
           });
           state = step.nextState;
           break;
+        }
+
+        if (adapter.bypassKernelRequest?.(step.nextState, step.request, kernelViewOf(kernel)) ?? false) {
+          state = step.nextState;
+          continue;
         }
 
         const submission = kernel.submit(step.request, { correlationId: options.correlationId ?? null });

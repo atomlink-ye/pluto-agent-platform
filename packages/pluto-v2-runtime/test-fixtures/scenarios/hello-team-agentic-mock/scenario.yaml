@@ -7,6 +7,9 @@ actors:
   lead:
     kind: role
     role: lead
+  planner:
+    kind: role
+    role: planner
   generator:
     kind: role
     role: generator
@@ -16,6 +19,7 @@ actors:
 declaredActors:
   - manager
   - lead
+  - planner
   - generator
   - evaluator
 orchestration:

@@ -95,7 +95,7 @@ describe('buildAgenticPrompt', () => {
   it('includes the lead user task, full playbook body, and PromptView JSON', () => {
     const prompt = buildPrompt(LEAD);
 
-    expect(prompt).toContain('You are the lead actor.');
+    expect(prompt).toContain('You are the lead actor for an agentic Pluto v2 run.');
     expect(prompt).toContain('User task:\nShip a safe first draft.');
     expect(prompt).toContain('## planner');
     expect(prompt).toContain('## generator');
@@ -106,8 +106,10 @@ describe('buildAgenticPrompt', () => {
   it('uses the role slice for a sub-actor when a matching heading exists', () => {
     const prompt = buildPrompt(GENERATOR);
 
-    expect(prompt).toContain('You are the generator actor.');
+    expect(prompt).toContain('You are the generator actor on a Pluto v2 agentic run.');
     expect(prompt).not.toContain('User task:\nShip a safe first draft.');
+    expect(prompt).toContain('"userTask": null');
+    expect(prompt).not.toContain('"userTask": "Ship a safe first draft."');
     expect(prompt).toContain('## generator\nWrite the draft artifact and keep the lead updated.');
     expect(prompt).not.toContain('## planner\nPlan the run before work starts.');
     expect(prompt).not.toContain('## evaluator\nReview the draft for defects and gaps.');
@@ -145,7 +147,7 @@ describe('buildAgenticPrompt', () => {
     });
 
     expect(Buffer.byteLength(prompt, 'utf8')).toBeLessThanOrEqual(DEFAULT_AGENTIC_PROMPT_MAX_BYTES);
-    expect(prompt).toContain('Emit exactly one fenced JSON block and no surrounding prose.');
+    expect(prompt).toContain('Emit exactly ONE fenced JSON code block and no surrounding prose.');
     expect(prompt).not.toContain('{"kind":"append_mailbox_message","payload":{}}');
     expect(prompt).toContain('The block must contain a single directive object with top-level `kind` and `payload` fields.');
   });

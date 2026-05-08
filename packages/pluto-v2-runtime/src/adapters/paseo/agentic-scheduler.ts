@@ -11,7 +11,6 @@ export interface PaseoAgenticSchedulerState {
   readonly turnIndex: number;
   readonly maxTurns: number;
   readonly currentActor: ActorRef;
-  readonly activeDelegation: ActorRef | null;
   readonly delegationPointer: ActorRef | null;
   readonly delegationTaskId: string | null;
   readonly kernelRejections: number;
@@ -21,13 +20,10 @@ export interface PaseoAgenticSchedulerState {
   readonly maxNoProgressTurns: number;
 }
 
-export type PaseoAgenticLoopState = PaseoAgenticSchedulerState;
-
 export interface PaseoAgenticSchedulerSpec extends Pick<AuthoredSpec, 'actors' | 'orchestration'> {}
 
 export interface PaseoAgenticSchedulerDecision {
   readonly actor: ActorRef;
-  readonly activeDelegation: ActorRef | null;
   readonly delegationPointer: ActorRef | null;
   readonly delegationTaskId: string | null;
   readonly progressed: boolean;
@@ -38,19 +34,6 @@ export const DEFAULT_MAX_KERNEL_REJECTIONS = 3;
 export const DEFAULT_MAX_NO_PROGRESS_TURNS = 3;
 export const HARD_MAX_TURNS = 50;
 export const LEAD_ACTOR: ActorRef = { kind: 'role', role: 'lead' };
-
-function normalizeMax(value: number | undefined, fallback: number, hardCap?: number): number {
-  if (value == null || !Number.isFinite(value)) {
-    return fallback;
-  }
-
-  const normalized = Math.max(0, Math.trunc(value));
-  if (hardCap == null) {
-    return normalized;
-  }
-
-  return Math.min(normalized, hardCap);
-}
 
 export function sameActor(left: ActorRef, right: ActorRef): boolean {
   if (left.kind !== right.kind) {
@@ -89,40 +72,11 @@ function closesDelegationMailboxMessage(event: RunEvent, leadActor: ActorRef): b
     && (event.payload.kind === 'completion' || event.payload.kind === 'final');
 }
 
-export function createInitialAgenticSchedulerState(args?: {
-  spec?: PaseoAgenticSchedulerSpec;
-  maxTurns?: number;
-  maxKernelRejections?: number;
-  maxNoProgressTurns?: number;
-}): PaseoAgenticSchedulerState {
-  const leadActor = args?.spec == null ? LEAD_ACTOR : leadActorFromSpec(args.spec);
-  const orchestration = args?.spec?.orchestration;
-
-  return {
-    turnIndex: 0,
-    maxTurns: normalizeMax(args?.maxTurns ?? orchestration?.maxTurns, DEFAULT_MAX_TURNS, HARD_MAX_TURNS),
-    currentActor: leadActor,
-    activeDelegation: null,
-    delegationPointer: null,
-    delegationTaskId: null,
-    kernelRejections: 0,
-    noProgressTurns: 0,
-    lastRejection: null,
-    maxKernelRejections: normalizeMax(
-      args?.maxKernelRejections ?? orchestration?.maxKernelRejections,
-      DEFAULT_MAX_KERNEL_REJECTIONS,
-    ),
-    maxNoProgressTurns: normalizeMax(
-      args?.maxNoProgressTurns ?? orchestration?.maxNoProgressTurns,
-      DEFAULT_MAX_NO_PROGRESS_TURNS,
-    ),
-  };
-}
-
-export const createInitialAgenticLoopState = createInitialAgenticSchedulerState;
-
 export function budgetFailureForAgenticScheduler(
-  state: Pick<PaseoAgenticSchedulerState, 'turnIndex' | 'maxTurns' | 'kernelRejections' | 'maxKernelRejections' | 'noProgressTurns' | 'maxNoProgressTurns'>,
+  state: Pick<
+    PaseoAgenticSchedulerState,
+    'turnIndex' | 'maxTurns' | 'kernelRejections' | 'maxKernelRejections' | 'noProgressTurns' | 'maxNoProgressTurns'
+  >,
 ): { status: 'failed'; summary: string } | null {
   if (state.turnIndex >= state.maxTurns) {
     return { status: 'failed', summary: 'maxTurns exhausted' };
@@ -142,7 +96,7 @@ export function budgetFailureForAgenticScheduler(
 export const budgetFailureForAgentic = budgetFailureForAgenticScheduler;
 
 export function pickNextAgenticSchedulerActor(args: {
-  state: Pick<PaseoAgenticSchedulerState, 'currentActor' | 'activeDelegation' | 'delegationPointer' | 'delegationTaskId'>;
+  state: Pick<PaseoAgenticSchedulerState, 'currentActor' | 'delegationPointer' | 'delegationTaskId'>;
   acceptedEvent: RunEvent;
   directive: PaseoDirective;
   leadActor?: ActorRef;
@@ -158,7 +112,6 @@ export function pickNextAgenticSchedulerActor(args: {
     ) {
       return {
         actor: args.directive.payload.ownerActor,
-        activeDelegation: args.directive.payload.ownerActor,
         delegationPointer: args.directive.payload.ownerActor,
         delegationTaskId:
           args.acceptedEvent.kind === 'task_created' && args.acceptedEvent.outcome === 'accepted'
@@ -175,7 +128,6 @@ export function pickNextAgenticSchedulerActor(args: {
     ) {
       return {
         actor: args.directive.payload.toActor,
-        activeDelegation: args.directive.payload.toActor,
         delegationPointer: args.directive.payload.toActor,
         delegationTaskId: null,
         progressed: true,
@@ -184,7 +136,6 @@ export function pickNextAgenticSchedulerActor(args: {
 
     return {
       actor: leadActor,
-      activeDelegation: args.state.activeDelegation,
       delegationPointer: args.state.delegationPointer,
       delegationTaskId: args.state.delegationTaskId,
       progressed: args.acceptedEvent.outcome === 'accepted',
@@ -194,12 +145,12 @@ export function pickNextAgenticSchedulerActor(args: {
   if (
     args.acceptedEvent.kind === 'task_state_changed'
     && args.acceptedEvent.outcome === 'accepted'
+    && args.state.delegationTaskId !== null
+    && args.acceptedEvent.payload.taskId === args.state.delegationTaskId
     && terminalTaskState(args.acceptedEvent.payload.to)
-    && (args.state.delegationTaskId == null || args.acceptedEvent.payload.taskId === args.state.delegationTaskId)
   ) {
     return {
       actor: leadActor,
-      activeDelegation: null,
       delegationPointer: null,
       delegationTaskId: null,
       progressed: true,
@@ -209,7 +160,6 @@ export function pickNextAgenticSchedulerActor(args: {
   if (closesDelegationMailboxMessage(args.acceptedEvent, leadActor)) {
     return {
       actor: leadActor,
-      activeDelegation: null,
       delegationPointer: null,
       delegationTaskId: null,
       progressed: true,
@@ -218,7 +168,6 @@ export function pickNextAgenticSchedulerActor(args: {
 
   return {
     actor: currentActor,
-    activeDelegation: args.state.activeDelegation ?? currentActor,
     delegationPointer: args.state.delegationPointer ?? currentActor,
     delegationTaskId: args.state.delegationTaskId,
     progressed: args.acceptedEvent.outcome === 'accepted',
@@ -226,37 +175,6 @@ export function pickNextAgenticSchedulerActor(args: {
 }
 
 export const pickNextAgenticActor = pickNextAgenticSchedulerActor;
-
-export function advanceAgenticSchedulerState(
-  state: PaseoAgenticSchedulerState,
-  decision: PaseoAgenticSchedulerDecision,
-): PaseoAgenticSchedulerState {
-  return {
-    ...state,
-    currentActor: decision.actor,
-    activeDelegation: decision.activeDelegation,
-    delegationPointer: decision.delegationPointer,
-    delegationTaskId: decision.delegationTaskId,
-    lastRejection: null,
-    noProgressTurns: decision.progressed ? 0 : state.noProgressTurns + 1,
-  };
-}
-
-export function withAcceptedDirective(state: PaseoAgenticSchedulerState, args: {
-  acceptedEvent: RunEvent;
-  directive: PaseoDirective;
-  leadActor?: ActorRef;
-}): PaseoAgenticSchedulerState {
-  return advanceAgenticSchedulerState(
-    state,
-    pickNextAgenticSchedulerActor({
-      state,
-      acceptedEvent: args.acceptedEvent,
-      directive: args.directive,
-      leadActor: args.leadActor,
-    }),
-  );
-}
 
 export function withKernelRejection(
   state: PaseoAgenticSchedulerState,
@@ -266,6 +184,8 @@ export function withKernelRejection(
   return {
     ...state,
     currentActor: leadActor,
+    delegationPointer: null,
+    delegationTaskId: null,
     kernelRejections: state.kernelRejections + 1,
     noProgressTurns: state.noProgressTurns + 1,
     lastRejection: rejection,

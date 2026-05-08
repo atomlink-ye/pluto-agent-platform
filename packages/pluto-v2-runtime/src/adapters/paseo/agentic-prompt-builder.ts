@@ -20,8 +20,8 @@ export interface AgenticPromptInput {
 export const DEFAULT_AGENTIC_PROMPT_MAX_BYTES = 32 * 1024;
 
 const FINAL_INSTRUCTION = [
-  'Choose one directive that is authorized for your actor and supported by the current state.',
-  'Emit exactly one fenced JSON block and no surrounding prose.',
+  'Decide ONE directive that advances the run and is authorized for your actor.',
+  'Emit exactly ONE fenced JSON code block and no surrounding prose.',
   'The block must contain a single directive object with top-level `kind` and `payload` fields.',
 ].join('\n');
 
@@ -85,7 +85,7 @@ function isLeadActor(actor: ActorRef): boolean {
 
 function leadLine(actor: ActorRef): string {
   if (isLeadActor(actor)) {
-    return 'You are the lead actor. Coordinate the team, keep the run moving, and choose the next directive.';
+    return 'You are the lead actor for an agentic Pluto v2 run.';
   }
 
   switch (actor.kind) {
@@ -94,8 +94,19 @@ function leadLine(actor: ActorRef): string {
     case 'system':
       return 'You are the system actor. Respond only with a valid directive when the state requires a system action.';
     case 'role':
-      return `You are the ${actor.role} actor. Focus on the ${actor.role} role slice, current state, and your allowed directives.`;
+      return `You are the ${actor.role} actor on a Pluto v2 agentic run.`;
   }
+}
+
+function promptViewForActor(actor: ActorRef, view: PromptView): PromptView {
+  if (isLeadActor(actor)) {
+    return view;
+  }
+
+  return {
+    ...view,
+    userTask: null,
+  };
 }
 
 function extractRolePlaybookSlice(playbookBody: string, actor: ActorRef): string {
@@ -275,6 +286,7 @@ function joinPromptSections(sections: readonly string[]): string {
 
 export function buildAgenticPrompt(input: AgenticPromptInput): string {
   const maxBytes = input.maxBytes ?? DEFAULT_AGENTIC_PROMPT_MAX_BYTES;
+  const promptView = promptViewForActor(input.actor, input.promptView);
   const authorityGuidance = buildAuthorityGuidance(input.actor);
   const leadSection = leadLine(input.actor);
   const userTaskSection = isLeadActor(input.actor) ? `User task:\n${input.promptView.userTask ?? ''}` : '';
@@ -288,7 +300,7 @@ export function buildAgenticPrompt(input: AgenticPromptInput): string {
       ? input.playbook.body
       : extractRolePlaybookSlice(input.playbook.body, input.actor);
 
-  const promptViewJsonCandidates = promptViewCandidates(input.promptView);
+  const promptViewJsonCandidates = promptViewCandidates(promptView);
   for (const promptViewJson of promptViewJsonCandidates) {
     const fixedPrompt = joinPromptSections([
       leadSection,
@@ -314,7 +326,7 @@ export function buildAgenticPrompt(input: AgenticPromptInput): string {
     }
   }
 
-  const fallbackPromptViewJson = selectPromptViewJson(input.promptView, 0);
+  const fallbackPromptViewJson = selectPromptViewJson(promptView, 0);
 
   return joinPromptSections([
     leadSection,

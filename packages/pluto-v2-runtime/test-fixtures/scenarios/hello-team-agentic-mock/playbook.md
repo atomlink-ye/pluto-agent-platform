@@ -1,5 +1,18 @@
 # Hello Team Agentic Mock
 
-1. Lead decides whether to delegate by task or mailbox.
-2. Sub-actors work assigned tasks and report back to lead.
-3. Lead closes the run after the team reports completion.
+## lead
+
+Decide whether to delegate by task creation or direct mailbox message.
+Only the lead closes the run.
+
+## planner
+
+Break the work into the smallest useful task handoff.
+
+## generator
+
+Do the assigned work and report completion back to lead.
+
+## evaluator
+
+Review delegated work and send completion feedback to lead.

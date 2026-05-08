@@ -10,6 +10,7 @@ import { afterEach, describe, expect, it } from "vitest";
 const exec = promisify(execFile);
 const tempDirs: string[] = [];
 const SPEC_PATH = join(process.cwd(), "packages/pluto-v2-runtime/test-fixtures/scenarios/hello-team-paseo-mock/scenario.yaml");
+const AGENTIC_SPEC_PATH = join(process.cwd(), "packages/pluto-v2-runtime/test-fixtures/scenarios/hello-team-agentic-mock/scenario.yaml");
 
 afterEach(async () => {
   await Promise.all(tempDirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
@@ -34,6 +35,43 @@ async function createFakePaseoBin(rootDir: string): Promise<string> {
     'const appendTranscript = (agentId, promptText) => { const directive = extractPrompt(promptText); const prefix = `[assistant turn ${turnIndexFor(directive)}]\\n`; const prior = readAgent(agentId).transcript; const next = prior ? `${prior}\\n${prefix}${directive}` : `${prefix}${directive}`; writeAgent(agentId, { transcript: next }); };',
     'if (command === "run") { const titleIndex = args.indexOf("--title"); const title = titleIndex >= 0 ? args[titleIndex + 1] : "unknown"; const agentId = `fake-${title}`; appendTranscript(agentId, args.at(-1) ?? ""); process.stdout.write(JSON.stringify({ agentId })); process.exit(0); }',
     'if (command === "send") { const agentId = args[1]; const promptFile = args[args.indexOf("--prompt-file") + 1]; appendTranscript(agentId, readFileSync(promptFile, "utf8")); process.exit(0); }',
+    'if (command === "wait") { process.stdout.write(JSON.stringify({ exitCode: 0 })); process.exit(0); }',
+    'if (command === "logs") { const agentId = args[1]; process.stdout.write(readAgent(agentId).transcript ?? ""); process.exit(0); }',
+    'if (command === "inspect") { process.stdout.write(JSON.stringify({ usage: { inputTokens: 12, outputTokens: 6, costUsd: 0.01 } })); process.exit(0); }',
+    'if (command === "delete") { process.exit(0); }',
+    'process.stderr.write(`unsupported fake paseo command: ${command}\\n`);',
+    'process.exit(1);',
+  ].join("\n");
+
+  await writeFile(binPath, script, "utf8");
+  await chmod(binPath, 0o755);
+  return binPath;
+}
+
+async function createAgenticFakePaseoBin(rootDir: string): Promise<string> {
+  const binPath = join(rootDir, "paseo-agentic.cjs");
+  const script = [
+    "#!/usr/bin/env node",
+    'const { mkdirSync, readFileSync, writeFileSync, existsSync } = require("node:fs");',
+    'const { dirname, join } = require("node:path");',
+    'const args = process.argv.slice(2);',
+    'const stateDir = process.env.PASEO_FAKE_STATE_DIR;',
+    'if (!stateDir) throw new Error("PASEO_FAKE_STATE_DIR is required");',
+    'mkdirSync(stateDir, { recursive: true });',
+    'const command = args[0];',
+    'const agentPath = (agentId) => join(stateDir, `${agentId}.json`);',
+    'const readAgent = (agentId) => existsSync(agentPath(agentId)) ? JSON.parse(readFileSync(agentPath(agentId), "utf8")) : { transcript: "", promptCount: 0 };',
+    'const writeAgent = (agentId, state) => { mkdirSync(dirname(agentPath(agentId)), { recursive: true }); writeFileSync(agentPath(agentId), JSON.stringify(state), "utf8"); };',
+    'const logicalTitle = (title) => title.startsWith("pluto-") ? title.slice("pluto-".length) : title;',
+    'const nextDirective = (title, promptCount) => { const actor = logicalTitle(title);',
+    '  if (actor === "role:lead" && promptCount === 0) return { kind: "create_task", payload: { title: "Draft the runtime change", ownerActor: { kind: "role", role: "generator" }, dependsOn: [] } };',
+    '  if (actor === "role:generator" && promptCount === 0) return { kind: "append_mailbox_message", payload: { fromActor: { kind: "role", role: "generator" }, toActor: { kind: "role", role: "lead" }, kind: "completion", body: "Generator completed the draft." } };',
+    '  if (actor === "role:lead" && promptCount === 1) return { kind: "complete_run", payload: { status: "succeeded", summary: "Agentic mock run completed." } };',
+    '  return { kind: "complete_run", payload: { status: "failed", summary: `Unexpected agent turn for ${title} #${promptCount}` } };',
+    '};',
+    "const appendTranscript = (agentId, title) => { const state = readAgent(agentId); const directive = nextDirective(title, state.promptCount); const transcriptText = `\\`\\`\\`json\\n${JSON.stringify(directive)}\\n\\`\\`\\`\\n`; const nextTranscript = state.transcript ? `${state.transcript}${transcriptText}` : transcriptText; writeAgent(agentId, { transcript: nextTranscript, promptCount: state.promptCount + 1 }); };",
+    'if (command === "run") { const titleIndex = args.indexOf("--title"); const title = titleIndex >= 0 ? args[titleIndex + 1] : "unknown"; const agentId = `fake-${title}`; appendTranscript(agentId, title); process.stdout.write(JSON.stringify({ agentId })); process.exit(0); }',
+    'if (command === "send") { const agentId = args[1]; const title = agentId.slice("fake-".length); appendTranscript(agentId, title); process.exit(0); }',
     'if (command === "wait") { process.stdout.write(JSON.stringify({ exitCode: 0 })); process.exit(0); }',
     'if (command === "logs") { const agentId = args[1]; process.stdout.write(readAgent(agentId).transcript ?? ""); process.exit(0); }',
     'if (command === "inspect") { process.stdout.write(JSON.stringify({ usage: { inputTokens: 12, outputTokens: 6, costUsd: 0.01 } })); process.exit(0); }',
@@ -190,6 +228,50 @@ describe("src/cli/run.ts default v2 runtime", () => {
 
     const output = JSON.parse(stdout) as { runDir: string };
     expect(output.runDir).toBe(join(workspace, ".pluto", "runs", "run-hello-team-paseo-mock"));
+  }, 30_000);
+
+  it("routes agentic specs through the real CLI path", async () => {
+    const workspace = await mkdtemp(join(tmpdir(), "pluto-run-v2-agentic-"));
+    const dataDir = join(workspace, ".pluto");
+    const fakeStateDir = join(workspace, "paseo-state");
+    tempDirs.push(workspace);
+
+    await installV2PackageShims();
+    const fakePaseoBin = await createAgenticFakePaseoBin(workspace);
+    const { stdout, stderr, exitCode } = await runCli(
+      [
+        `--spec=${AGENTIC_SPEC_PATH}`,
+        "--workspace",
+        workspace,
+        "--data-dir",
+        dataDir,
+      ],
+      {
+        ...process.env,
+        PASEO_BIN: fakePaseoBin,
+        PASEO_FAKE_STATE_DIR: fakeStateDir,
+      },
+    );
+
+    expect(exitCode).toBe(0);
+    expect(filterCliStderr(stderr)).toBe("");
+
+    const output = JSON.parse(stdout) as { status: string; runDir: string; transcriptPaths: string[] };
+    expect(output.status).toBe("succeeded");
+    expect(output.runDir).toBe(join(dataDir, "runs", "run-hello-team-agentic-mock"));
+    expect(output.transcriptPaths.length).toBeGreaterThan(0);
+
+    const events = (await readFile(join(output.runDir, "events.jsonl"), "utf8"))
+      .trim()
+      .split("\n")
+      .filter((line) => line.trim().length > 0)
+      .map((line) => JSON.parse(line) as { kind: string; payload?: { ownerActor?: { kind: string; role?: string } } });
+
+    expect(events.some((event) =>
+      event.kind === "task_created"
+      && event.payload?.ownerActor?.kind === "role"
+      && event.payload.ownerActor.role !== "lead",
+    )).toBe(true);
   }, 30_000);
 
   it("writes the documented run-directory files even when the v2 run fails", async () => {

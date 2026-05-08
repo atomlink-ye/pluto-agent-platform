@@ -2,8 +2,9 @@ import { fileURLToPath } from 'node:url';
 
 import { describe, expect, it, vi } from 'vitest';
 
-import { counterIdProvider, fixedClockProvider, type ActorRef } from '@pluto/v2-core';
+import { counterIdProvider, fixedClockProvider, type ActorRef, type RunEvent } from '@pluto/v2-core';
 
+import { pickNextAgenticActor } from '../../../src/adapters/paseo/agentic-scheduler.js';
 import { makePaseoAdapter } from '../../../src/adapters/paseo/paseo-adapter.js';
 import { runPaseo, type PaseoCliClient, type PaseoUsageEstimate } from '../../../src/adapters/paseo/run-paseo.js';
 import { loadAuthoredSpec, type LoadedAuthoredSpec } from '../../../src/loader/authored-spec-loader.js';
@@ -16,7 +17,6 @@ const SCENARIO_PATH = fileURLToPath(
 const LEAD: ActorRef = { kind: 'role', role: 'lead' };
 const GENERATOR: ActorRef = { kind: 'role', role: 'generator' };
 const EVALUATOR: ActorRef = { kind: 'role', role: 'evaluator' };
-const exactPhrase = ['must', 'match', 'exactly'].join(' ');
 
 type ScriptEntry = {
   actor: ActorRef;
@@ -151,7 +151,6 @@ async function runAgentic(options: {
     makePaseoAdapter({
       idProvider: counterIdProvider(100),
       clockProvider: fixedClockProvider(FIXED_TIME),
-      spec,
       ...options.adapterOptions,
     }),
     {
@@ -214,13 +213,13 @@ describe('agentic Paseo loop', () => {
     });
 
     expect(prompts.map((entry) => entry.actorKey)).toEqual(['role:lead', 'role:generator', 'role:lead']);
-    expect(prompts[1]?.prompt).toContain('"activeDelegation"');
     expect(result.events.map((event) => event.kind)).toEqual([
       'run_started',
       'task_created',
       'mailbox_message_appended',
       'run_completed',
     ]);
+    expect(result.events[1]).toMatchObject({ kind: 'task_created', payload: { ownerActor: GENERATOR } });
   });
 
   it('delegates from lead by mailbox message', async () => {
@@ -394,7 +393,32 @@ describe('agentic Paseo loop', () => {
     expect(prompts.map((entry) => entry.actorKey)).toEqual(['role:lead', 'role:generator', 'role:lead']);
   });
 
-  it('retries a parse repair within budget and succeeds', async () => {
+  it('rejects sub-actor complete_run and returns control to lead', async () => {
+    const { prompts, result } = await runAgentic({
+      script: [
+        {
+          actor: LEAD,
+          transcriptText: '```json\n{"kind":"append_mailbox_message","payload":{"fromActor":{"kind":"role","role":"lead"},"toActor":{"kind":"role","role":"generator"},"kind":"task","body":"Handle the change."}}\n```',
+        },
+        {
+          actor: GENERATOR,
+          transcriptText: '```json\n{"kind":"complete_run","payload":{"status":"succeeded","summary":"worker should not close the run"}}\n```',
+        },
+        {
+          actor: LEAD,
+          transcriptText: '```json\n{"kind":"complete_run","payload":{"status":"succeeded","summary":"lead closed the run"}}\n```',
+        },
+      ],
+    });
+
+    expect(prompts.map((entry) => entry.actorKey)).toEqual(['role:lead', 'role:generator', 'role:lead']);
+    expect(prompts[2]?.prompt).toContain('"lastRejection"');
+    expect(prompts[2]?.prompt).toContain('worker should not close the run');
+    expect(result.events.map((event) => event.kind)).toEqual(['run_started', 'mailbox_message_appended', 'request_rejected', 'run_completed']);
+    expect(result.events.at(-1)?.payload).toMatchObject({ status: 'succeeded', summary: 'lead closed the run' });
+  });
+
+  it('retries a parse repair within budget and succeeds without emitting a repair event', async () => {
     const { prompts, result } = await runAgentic({
       spec: { orchestration: { mode: 'agentic', maxParseFailuresPerTurn: 1 } },
       script: [
@@ -407,17 +431,19 @@ describe('agentic Paseo loop', () => {
     });
 
     expect(prompts.map((entry) => entry.actorKey)).toEqual(['role:lead', 'role:lead']);
-    expect(prompts.every((entry) => !entry.prompt.includes(exactPhrase))).toBe(true);
-    expect(result.events.map((event) => event.kind)).toEqual(['run_started', 'mailbox_message_appended', 'run_completed']);
+    expect(prompts[1]?.prompt).toContain('Parse error: no fenced json block or balanced JSON object found');
+    expect(prompts[1]?.prompt).toContain('Parse failures this turn: 1');
+    expect(result.events.map((event) => event.kind)).toEqual(['run_started', 'run_completed']);
     expect(result.events.at(-1)?.payload).toMatchObject({ status: 'succeeded', summary: 'recovered' });
   });
 
-  it('fails when the parse repair budget is exhausted', async () => {
+  it('fails when the parse repair budget is exhausted without emitting a repair event', async () => {
     const { result } = await runAgentic({
       adapterOptions: { maxParseFailuresPerTurn: 0 },
       script: [{ actor: LEAD, transcriptText: 'still not json' }],
     });
 
+    expect(result.events.map((event) => event.kind)).toEqual(['run_started', 'run_completed']);
     expect(result.events.at(-1)?.payload).toMatchObject({
       status: 'failed',
       summary: 'parse failure budget exhausted for actor role:lead at turn 0',
@@ -477,5 +503,105 @@ describe('agentic Paseo loop', () => {
 
     expect(prompts.map((entry) => entry.actorKey)).toEqual(['role:lead', 'role:lead']);
     expect(result.events.at(-1)?.payload).toMatchObject({ status: 'failed', summary: 'maxNoProgressTurns exhausted' });
+  });
+});
+
+describe('agentic scheduler delegation close rules', () => {
+  it('does not close mailbox-opened delegation on an unrelated terminal task event', () => {
+    const decision = pickNextAgenticActor({
+      state: {
+        currentActor: GENERATOR,
+        delegationPointer: GENERATOR,
+        delegationTaskId: null,
+      },
+      directive: {
+        kind: 'change_task_state',
+        payload: {
+          taskId: 'task-unrelated',
+          to: 'completed',
+        },
+      },
+      acceptedEvent: {
+        kind: 'task_state_changed',
+        outcome: 'accepted',
+        payload: {
+          taskId: 'task-unrelated',
+          from: 'running',
+          to: 'completed',
+        },
+      } as unknown as RunEvent,
+      leadActor: LEAD,
+    });
+
+    expect(decision.actor).toEqual(GENERATOR);
+    expect(decision.delegationPointer).toEqual(GENERATOR);
+    expect(decision.delegationTaskId).toBeNull();
+  });
+
+  it('closes task-opened delegation on the bound task terminal transition', () => {
+    const decision = pickNextAgenticActor({
+      state: {
+        currentActor: GENERATOR,
+        delegationPointer: GENERATOR,
+        delegationTaskId: 'task-123',
+      },
+      directive: {
+        kind: 'change_task_state',
+        payload: {
+          taskId: 'task-123',
+          to: 'completed',
+        },
+      },
+      acceptedEvent: {
+        kind: 'task_state_changed',
+        outcome: 'accepted',
+        payload: {
+          taskId: 'task-123',
+          from: 'running',
+          to: 'completed',
+        },
+      } as unknown as RunEvent,
+      leadActor: LEAD,
+    });
+
+    expect(decision.actor).toEqual(LEAD);
+    expect(decision.delegationPointer).toBeNull();
+    expect(decision.delegationTaskId).toBeNull();
+  });
+
+  it('closes mailbox-opened delegation on a completion message to lead', () => {
+    const decision = pickNextAgenticActor({
+      state: {
+        currentActor: GENERATOR,
+        delegationPointer: GENERATOR,
+        delegationTaskId: null,
+      },
+      directive: {
+        kind: 'append_mailbox_message',
+        payload: {
+          fromActor: GENERATOR,
+          toActor: LEAD,
+          kind: 'completion',
+          body: 'done',
+        },
+      },
+      acceptedEvent: {
+        kind: 'mailbox_message_appended',
+        outcome: 'accepted',
+        payload: {
+          messageId: 'msg-1',
+          sequence: 1,
+          fromActor: GENERATOR,
+          toActor: LEAD,
+          kind: 'completion',
+          body: 'done',
+        },
+      } as unknown as RunEvent,
+      leadActor: LEAD,
+    });
+
+    expect(decision.actor).toEqual(LEAD);
+    expect(decision.delegationPointer).toBeNull();
+    expect(decision.delegationTaskId).toBeNull();
   });
 });
