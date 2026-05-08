@@ -9,8 +9,7 @@ import { afterEach, describe, expect, it } from "vitest";
 
 const exec = promisify(execFile);
 const tempDirs: string[] = [];
-const nameSelectorError = "v1.6 name-based selection (--scenario/--playbook/--run-profile) requires --runtime=v1. For v2, pass a single --spec=<path> AuthoredSpec file. v1.6 will be archived in S7.";
-const specWithV1Error = "--spec is only valid with --runtime=v2 (the default). For v1.6, use --scenario / --playbook / --run-profile name selectors.";
+const archivedMessage = "v1.6 runtime was archived in S7. Reference copy lives on the legacy-v1.6-harness-prototype branch. v2 takes pluto:run --spec <path> only.";
 
 afterEach(async () => {
   await Promise.all(tempDirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
@@ -61,35 +60,20 @@ async function installV2PackageShims(): Promise<void> {
 }
 
 describe("src/cli/run.ts unsupported v1 selectors on v2", () => {
-  it("fails when v2 receives legacy name selectors without --spec", async () => {
-    const result = await runCli([
-      "--scenario",
-      "hello-team",
-      "--playbook",
-      "research-review",
-      "--run-profile",
-      "fake-smoke",
-    ]);
+  it("fails with the archived message for legacy v1 selectors", async () => {
+    const cases = [
+      ["--scenario", "hello-team"],
+      ["--playbook", "research-review"],
+      ["--run-profile", "fake-smoke"],
+    ];
 
-    expect(result.exitCode).toBe(1);
-    expect(result.stderr).toContain(nameSelectorError);
-    expect(result.stdout).toBe("");
-  });
+    for (const args of cases) {
+      const result = await runCli(args);
 
-  it("fails when v1 receives --spec alongside legacy name selectors", async () => {
-    const result = await runCli([
-      "--runtime=v1",
-      "--scenario",
-      "hello-team",
-      "--run-profile",
-      "fake-smoke",
-      "--spec",
-      "/unused.yaml",
-    ]);
-
-    expect(result.exitCode).toBe(1);
-    expect(result.stderr).toContain(specWithV1Error);
-    expect(result.stdout).toBe("");
+      expect(result.exitCode).toBe(1);
+      expect(result.stdout).toBe("");
+      expect(result.stderr).toContain(archivedMessage);
+    }
   });
 
   it("fails with the unsupported legacy field name when a v1.6-only field appears in a v2 spec", async () => {

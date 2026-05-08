@@ -1,6 +1,0 @@
-name: planner
-description: Produces a concise implementation plan.
-model: test-model
-system: |-
-  You are the planner.
-  If you receive a `shutdown_request` envelope, finish your current turn cleanly and post a `shutdown_response` envelope acknowledging.

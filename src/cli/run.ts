@@ -4,12 +4,7 @@ import { basename, dirname, extname, join, relative, resolve } from "node:path";
 import process from "node:process";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
-import { FakeAdapter } from "../adapters/fake/index.js";
-import { PaseoOpenCodeAdapter } from "../adapters/paseo-opencode/index.js";
 import { parseKeyValueFlags, resolvePlutoDataDir } from "./shared/flags.js";
-import { buildRunSelection } from "./shared/run-selection.js";
-import { runManagerHarness } from "../orchestrator/manager-run-harness.js";
-import { resolveRuntimeHelperMvpEnabled } from "../orchestrator/runtime-helper.js";
 
 type CliRuntime = "v1" | "v2";
 
@@ -20,16 +15,11 @@ interface CliFlags {
   scenario?: string;
   runProfile?: string;
   playbook?: string;
-  task?: string;
   workspace?: string;
-  adapter: "fake" | "paseo-opencode";
   dataDir?: string;
 }
 
-const V1_DEPRECATION_WARNING = "v1.6 runtime is deprecated; will be archived in S7. See docs/design-docs/v2-cli-default-switch.md for migration.";
-const V2_NAME_SELECTOR_ERROR = "v1.6 name-based selection (--scenario/--playbook/--run-profile) requires --runtime=v1. For v2, pass a single --spec=<path> AuthoredSpec file. v1.6 will be archived in S7.";
-const V1_SPEC_ERROR = "--spec is only valid with --runtime=v2 (the default). For v1.6, use --scenario / --playbook / --run-profile name selectors.";
-let hasEmittedV1DeprecationWarning = false;
+const ARCHIVED_V1_MESSAGE = "v1.6 runtime was archived in S7. Reference copy lives on the legacy-v1.6-harness-prototype branch. v2 takes pluto:run --spec <path> only.";
 
 function parseCliRuntime(value: string | undefined): CliRuntime {
   if (value === "v1" || value === "v2") {
@@ -43,7 +33,6 @@ function parseFlags(argv: string[]): CliFlags {
   return parseKeyValueFlags<CliFlags>(argv, {
     defaults: {
       root: process.cwd(),
-      adapter: "fake",
     },
     flags: {
       "--root": { key: "root" },
@@ -52,17 +41,7 @@ function parseFlags(argv: string[]): CliFlags {
       "--scenario": { key: "scenario" },
       "--run-profile": { key: "runProfile" },
       "--playbook": { key: "playbook" },
-      "--task": { key: "task" },
       "--workspace": { key: "workspace" },
-      "--adapter": {
-        key: "adapter",
-        parse: (value) => {
-          if (value !== "fake" && value !== "paseo-opencode") {
-            throw new Error(`unknown_adapter:${value}`);
-          }
-          return value;
-        },
-      },
       "--data-dir": { key: "dataDir" },
     },
   });
@@ -81,23 +60,15 @@ function hasV1NameSelectors(flags: CliFlags): boolean {
   return Boolean(flags.scenario || flags.playbook || flags.runProfile);
 }
 
-function validateRuntimeFlags(runtime: CliRuntime, flags: CliFlags): void {
-  if (runtime === "v1" && flags.spec) {
-    throw new Error(V1_SPEC_ERROR);
+function validateInvocation(flags: CliFlags): void {
+  const runtime = resolveSelectedRuntime(flags);
+  if (runtime === "v1" || hasV1NameSelectors(flags)) {
+    throw new Error(ARCHIVED_V1_MESSAGE);
   }
 
-  if (runtime === "v2" && hasV1NameSelectors(flags)) {
-    throw new Error(V2_NAME_SELECTOR_ERROR);
+  if (!flags.spec) {
+    throw new Error("missing_required_flag: --spec is required");
   }
-}
-
-function emitV1DeprecationWarning(): void {
-  if (hasEmittedV1DeprecationWarning) {
-    return;
-  }
-
-  hasEmittedV1DeprecationWarning = true;
-  console.error(V1_DEPRECATION_WARNING);
 }
 
 async function pathExists(path: string): Promise<boolean> {
@@ -254,52 +225,9 @@ function resolveV2EvidenceOutputDir(flags: CliFlags): string {
   return join(resolveCliDataDir(flags), "runs", runId);
 }
 
-async function runV1(flags: CliFlags): Promise<void> {
-  if (!flags.scenario) {
-    throw new Error("missing_required_flag: --scenario is required");
-  }
-
-  emitV1DeprecationWarning();
-  const selection = buildRunSelection({
-    scenario: flags.scenario,
-    ...(flags.runProfile ? { runProfile: flags.runProfile } : {}),
-    ...(flags.playbook ? { playbook: flags.playbook } : {}),
-    ...(flags.task ? { task: flags.task } : {}),
-  });
-  const workspaceSubdirPerRun = Boolean(flags.workspace)
-    && flags.adapter === "paseo-opencode"
-    && resolveRuntimeHelperMvpEnabled();
-  const result = await runManagerHarness({
-    rootDir: resolve(flags.root),
-    selection,
-    ...(flags.workspace ? { workspaceOverride: resolve(flags.workspace) } : {}),
-    ...(workspaceSubdirPerRun ? { workspaceSubdirPerRun: true } : {}),
-    ...(flags.dataDir ? { dataDir: flags.dataDir } : {}),
-    createAdapter: ({ team, workspaceCwd }) => flags.adapter === "fake"
-      ? new FakeAdapter({ team })
-      : new PaseoOpenCodeAdapter({ workspaceCwd, deleteAgentsOnEnd: false }),
-  });
-
-  console.log(JSON.stringify({
-    runId: result.run.runId,
-    status: result.run.status,
-    scenario: result.run.scenario,
-    playbook: result.run.playbook,
-    runProfile: result.run.runProfile,
-    workspaceDir: result.workspaceDir,
-    runDir: result.runDir,
-    artifactPath: result.artifactPath,
-    evidencePacketPath: result.canonicalEvidencePath,
-    evidencePath: result.legacyEvidencePath,
-  }, null, 2));
-
-  if (result.run.status !== "succeeded") {
-    process.exitCode = result.legacyResult.blockerReason === "chat_transport_unavailable" ? 2 : 1;
-  }
-}
-
 async function runV2(flags: CliFlags): Promise<void> {
-  if (!flags.spec) {
+  const specPath = flags.spec;
+  if (!specPath) {
     throw new Error("missing_required_flag: --spec is required");
   }
 
@@ -308,7 +236,7 @@ async function runV2(flags: CliFlags): Promise<void> {
     loadV2BridgeDeps(),
   ]);
   const result = await runViaV2Bridge({
-    specPath: resolve(flags.spec),
+    specPath: resolve(specPath),
     workspaceCwd: resolve(flags.workspace ?? flags.root),
     evidenceOutputDir: resolveV2EvidenceOutputDir(flags),
     ...(process.env["PASEO_HOST"] ? { paseoHost: process.env["PASEO_HOST"] } : {}),
@@ -326,14 +254,7 @@ async function runV2(flags: CliFlags): Promise<void> {
 
 async function main() {
   const flags = parseFlags(process.argv.slice(2));
-  const runtime = resolveSelectedRuntime(flags);
-  validateRuntimeFlags(runtime, flags);
-
-  if (runtime === "v1") {
-    await runV1(flags);
-    return;
-  }
-
+  validateInvocation(flags);
   await runV2(flags);
 }
 

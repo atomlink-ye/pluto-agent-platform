@@ -1,22 +1,22 @@
-# DESIGN.md — Pluto MVP-alpha Design Principles
+# DESIGN.md — Pluto v2 Principles
 
-## MVP Goal
+## Goal
 
-Prove the smallest closed loop where Pluto runs an authored agent team through the v1.6
-mailbox/task-list runtime and emits audit-grade evidence.
+Run a single authored v2 spec through a deterministic, event-shaped runtime and emit inspectable evidence with one supported CLI surface: `pluto:run --spec <path>`.
 
-## Design Principles
+## Principles
 
-1. **Playbook-first:** authored YAML defines the team and workflow.
-2. **Mailbox-first coordination:** teammate coordination is typed mailbox + shared tasks,
-   not marker parsing.
-3. **File-backed evidence:** mailbox/task mirrors are durable local proof surfaces.
-4. **Single adapter seam:** runtime specifics stay behind `PaseoTeamAdapter`.
-5. **Fail-closed audit:** missing files, missing mailbox/task evidence, or failed commands
-   block success.
-6. **No DB:** MVP state stays in files.
+1. Spec-first: one authored spec path is the runtime input.
+2. Pure core: contracts, reducers, and projections live in `@pluto/v2-core`.
+3. Runtime boundary: loading, adapters, and evidence assembly live in `@pluto/v2-runtime`.
+4. Provider isolation: Paseo and model-specific details stay behind the runtime adapter.
+5. Evidence-first output: runs must leave an evidence packet plus actor transcripts.
+6. Archive, not dual-mainline: v1.6 remains recoverable on the legacy branch, not on `main`.
 
-## Why host-driven live mode
+## References
 
-Paseo CLI is host-native, so live smoke runs on host while Docker remains optional for
-debug-oriented helper paths.
+- `docs/design-docs/v2-core.md`
+- `docs/design-docs/v2-contracts.md`
+- `docs/design-docs/v2-projections.md`
+- `docs/design-docs/v2-paseo-adapter.md`
+- `docs/design-docs/v1-archive.md`

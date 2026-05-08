@@ -1,38 +1,37 @@
-# MVP-alpha QA Checklist
+# QA Checklist
 
-Run after every meaningful change.
+Run after meaningful v2 changes on `main`.
 
-## 1. Static gates
+## 1. Static Gates
 
 - [ ] `pnpm typecheck`
 - [ ] `pnpm test`
-- [ ] `pnpm verify`
-- [ ] `pnpm verify` runs `pnpm spec:hygiene` in the default non-required mirror mode, so verify still passes when the production mirror is absent.
-- [ ] Local authors can point the hygiene check at a mirror with `pnpm spec:hygiene --input <path-to-mirror>`.
+- [ ] `pnpm build`
+- [ ] `pnpm spec:hygiene`
 
-## 2. Fake adapter E2E
+## 2. CLI Contract
 
-- [ ] `pnpm pluto:run --scenario hello-team --run-profile fake-smoke --workspace .tmp/pluto-cli`
-- [ ] `.pluto/runs/<runId>/mailbox.jsonl` exists
-- [ ] `.pluto/runs/<runId>/events.jsonl` shows at least one `mailbox_message_delivered` event
-- [ ] `.pluto/runs/<runId>/tasks.json` exists
-- [ ] planner, generator, evaluator tasks complete in dependency order
-- [ ] `.pluto/runs/<runId>/evidence-packet.json` exists and validates
+- [ ] `pnpm pluto:run --spec packages/pluto-v2-runtime/test-fixtures/scenarios/hello-team-paseo-mock/scenario.yaml`
+- [ ] stdout matches the v2 bridge shape: `status`, `summary`, `evidencePacketPath`, `transcriptPaths`, `exitCode`
+- [ ] invalid or archived legacy flags fail cleanly instead of selecting another runtime path
 
-## 3. Live smoke
+## 3. Package Coverage
 
-- [ ] `pnpm smoke:local` returns `status: ok` or an allowed structured blocker/partial per current policy
-- [ ] `PASEO_HOST=<host> pnpm smoke:live` behaves the same when using an explicit daemon
-- [ ] `mailbox.jsonl` contains team coordination, teammate completion, FINAL summary, and plan-approval messages when applicable
-- [ ] `events.jsonl` contains a delivery event chain plus `plan_approval_requested`, `plan_approval_responded`, `spawn_request_received`, `spawn_request_executed`, `worker_complete_received`, and `final_reconciliation_received`
-- [ ] `tasks.json` contains pending → in_progress → completed transitions
-- [ ] `artifact.md` references lead, planner, generator, evaluator
-- [ ] `evidence-packet.json` cites mailbox/task lineage and role citations
+- [ ] `packages/pluto-v2-core/__tests__/` remains green
+- [ ] `packages/pluto-v2-runtime/__tests__/` remains green
+- [ ] retained root utility tests still pass
 
-## 4. Documentation
+## 4. Live Smoke
 
-- [ ] README quickstart matches the current `pnpm pluto:run` path
-- [ ] `docs/mvp-alpha.md` matches current four-layer/runtime contracts
-- [ ] `docs/harness.md` knob table matches `docker/live-smoke.ts`
-- [ ] `PLUTO_DISPATCH_MODE` documentation matches the default `teamlead_chat` path and `static_loop` fallback
-- [ ] Repository-documentation consistency check passes
+- [ ] `pnpm smoke:live` succeeds or returns the documented capability-unavailable blocker
+- [ ] generated evidence packet is present
+- [ ] actor transcripts are written when the run reaches execution
+- [ ] no token-shaped or raw auth material appears in smoke artifacts
+
+## 5. Documentation
+
+- [ ] README active usage shows only `pluto:run --spec <path>`
+- [ ] `docs/harness.md` knob table matches the retained v2 smoke script
+- [ ] `docs/mvp-alpha.md` matches the v2 CLI contract
+- [ ] `docs/design-docs/v1-archive.md` still accurately describes legacy branch recovery
+- [ ] `docs/plans/active/v2-rewrite.md` remains in place until its separate post-merge move

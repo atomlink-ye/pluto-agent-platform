@@ -1,66 +1,39 @@
-# Pluto MVP-alpha — Object & Contract Reference
+# Pluto MVP-alpha — v2 Contract Summary
 
 ## Goal
 
-Prove the smallest closed loop where Pluto loads authored `Agent`, `Playbook`,
-`Scenario`, and `RunProfile`, runs the v1.6 mailbox/task-list runtime, and emits
-audit-grade evidence.
+Pluto `main` accepts one authored v2 spec, runs it through the v2 runtime, and emits a compact evidence bundle.
 
-## Mainline runtime
+## Mainline Entry
 
-- Entrypoint: `src/orchestrator/manager-run-harness.ts`
-- CLI: `src/cli/run.ts` (`pnpm pluto:run ...`)
-- Main evidence: `.pluto/runs/<runId>/evidence-packet.{md,json}`
-- Runtime primitives: mailbox, task list, hooks, plan approval, TeamLead-driven dispatch envelopes, structured verdict/revision/shutdown control messages
+- CLI: `src/cli/run.ts`
+- Supported invocation: `pnpm pluto:run --spec <path>`
+- Bridge result: `status`, `summary`, `evidencePacketPath`, `transcriptPaths`, `exitCode`
 
-## Objects
+## Mainline Packages
 
-| Object | Where it lives | Notes |
+| Surface | Location | Purpose |
 | --- | --- | --- |
-| `Agent` | `agents/*.yaml` | authored role/system/model definition |
-| `Playbook` | `playbooks/*.yaml` | team composition + workflow + audit policy |
-| `Scenario` | `scenarios/*.yaml` | task specialization and overlays |
-| `RunProfile` | `run-profiles/*.yaml` | workspace + acceptance + artifact/stdout policy |
-| `MailboxMessage` | `mailbox.jsonl` / `src/contracts/four-layer.ts` | typed coordination message with baked transport and additive delivery metadata |
-| `Task` | `tasks.json` / `src/contracts/four-layer.ts` | shared task-list record |
-| `Run` | `.pluto/runs/<runId>/` | materialized runtime record |
-| `RunPackage` | `src/four-layer/run-package.ts` (compiled in-memory; inspectable via `pnpm pluto:package`) | normalized compiled output of Agent + Playbook + Scenario + RunProfile; the object handed to the runtime executor |
-| `EvidencePacket` | `.pluto/runs/<runId>/evidence-packet.{md,json}` | canonical evidence |
+| v2 contracts and core | `packages/pluto-v2-core/` | schemas, pure runtime core, projections, replay |
+| v2 runtime | `packages/pluto-v2-runtime/` | spec loading, adapters, execution, evidence packet assembly |
+| root CLI bridge | `src/cli/v2-cli-bridge.ts` | root process contract over the runtime package |
 
-## Adapter contract
+## Required Outputs
 
-`PaseoTeamAdapter` remains the only runtime seam. It bootstraps the run, creates the lead
-session, creates worker sessions when asked by the harness/runtime flow, forwards
-messages, drains events, waits for completion, tears down runtime state, and accepts
-delivery-loop follow-up messages through `sendSessionMessage()`.
-
-## Runtime evidence
-
-Required runtime artifacts:
-
-- `mailbox.jsonl`
-- `Run.coordinationChannel.locator` points at the real shared channel room id; `mailbox.jsonl` remains the canonical mirrored transcript
-- `events.jsonl` includes delivery telemetry (`mailbox_message_delivered`, `mailbox_message_queued`, `mailbox_message_failed`), the plan-approval round-trip events, the chat-driven dispatch events (`spawn_request_*`, `worker_complete_received`, `final_reconciliation_received`), and the structured control-plane events (`evaluator_verdict_*`, `revision_request_*`, `shutdown_*`)
-- `tasks.json`
-- `artifact.md`
 - `evidence-packet.json`
+- zero or more actor transcripts recorded in `transcriptPaths`
+- CLI stdout using the v2 bridge result envelope
 
-## Delivery semantics
+## Acceptance Shape
 
-- The manager harness owns one inbox delivery loop per run.
-- The loop waits on `MailboxTransport.wait()`, skips non-agent targets like `pluto` and `broadcast`, resolves role-to-session ids, and delivers ordinary mailbox traffic with `sendSessionMessage({ wait: false })`.
-- In `PLUTO_RUNTIME_HELPER_MVP=1`, helper `wait` requests are resolved on Pluto's side from task-state transitions, and already-handled lead control envelopes are recorded as semantic deliveries instead of being replayed back into the lead session.
-- If a target session is busy, the loop queues the message per session and drains it after a later just-in-time idle check.
-- Planner plan approval is now a real room round-trip: planner posts `plan_approval_request`, the lead response is posted back to the room as `plan_approval_response`, and both deliveries are evidenced through the loop.
-- TeamLead-message-driven dispatch is now the default runtime path: the lead posts `spawn_request` and `final_reconciliation` envelopes, Pluto validates them on inbox delivery, and `PLUTO_DISPATCH_MODE=static_loop` keeps the v1.6 fallback for one release.
-- Evaluators can post structured `evaluator_verdict` envelopes. When the verdict fails, the lead can post a `revision_request`, and Pluto converts that into a fresh `spawn_request`-backed worker task so the revision remains visible in the task list and mailbox evidence.
-- Early shutdown is structured: the lead posts `shutdown_request`, Pluto fans it out to active teammate sessions only, teammates answer with `shutdown_response`, and Pluto emits `shutdown_complete` while resolving finalization even if no later `final_reconciliation` arrives.
+A run is acceptable when:
 
-## Acceptance
+1. the authored spec loads successfully;
+2. the runtime reaches a terminal outcome;
+3. the CLI returns the documented result envelope;
+4. the evidence packet is written;
+5. transcript capture is available for the actors that ran.
 
-A run is acceptable iff:
+## Archive Note
 
-1. mailbox/task artifacts exist and reflect the expected task progression;
-2. the final artifact exists and references the contributing roles;
-3. `evidence-packet.json` exists and records citations plus mailbox/task lineage.
-4. the room transcript plus `events.jsonl` show mailbox delivery evidence, the planner plan-approval round-trip, and the chat-driven dispatch/control-plane events when `PLUTO_DISPATCH_MODE=teamlead_chat`.
+The former v1.6 four-layer manager-run harness, name-based selectors, and related authored-config surface are archived to `origin/legacy-v1.6-harness-prototype` and are not part of the active MVP contract on `main`.

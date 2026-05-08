@@ -10,7 +10,7 @@ import { afterEach, describe, expect, it } from "vitest";
 const exec = promisify(execFile);
 const tempDirs: string[] = [];
 const SPEC_PATH = join(process.cwd(), "packages/pluto-v2-runtime/test-fixtures/scenarios/hello-team-paseo-mock/scenario.yaml");
-const warning = "v1.6 runtime is deprecated; will be archived in S7. See docs/design-docs/v2-cli-default-switch.md for migration.";
+const archivedMessage = "v1.6 runtime was archived in S7. Reference copy lives on the legacy-v1.6-harness-prototype branch. v2 takes pluto:run --spec <path> only.";
 
 afterEach(async () => {
   await Promise.all(tempDirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
@@ -93,64 +93,21 @@ async function runCli(args: string[], env?: Record<string, string>): Promise<{ s
 }
 
 describe("src/cli/run.ts runtime precedence", () => {
-  it("prefers the CLI flag over PLUTO_RUNTIME", async () => {
-    const workspace = await mkdtemp(join(tmpdir(), "pluto-run-precedence-flag-"));
-    const dataDir = join(workspace, ".pluto");
-    const fakeStateDir = join(workspace, "paseo-state");
-    tempDirs.push(workspace);
+  it("exits 1 with the archived message for --runtime=v1", async () => {
+    const result = await runCli(["--runtime=v1"]);
 
-    await installV2PackageShims();
-    const fakePaseoBin = await createFakePaseoBin(workspace);
-    const result = await runCli(
-      [
-        "--runtime=v2",
-        `--spec=${SPEC_PATH}`,
-        "--workspace",
-        workspace,
-        "--data-dir",
-        dataDir,
-      ],
-      {
-        PLUTO_RUNTIME: "v1",
-        PASEO_BIN: fakePaseoBin,
-        PASEO_FAKE_STATE_DIR: fakeStateDir,
-      },
-    );
+    expect(result.exitCode).toBe(1);
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toContain(archivedMessage);
+  });
 
-    expect(result.exitCode).toBe(0);
-    expect(result.stderr).not.toContain(warning);
-    const output = JSON.parse(result.stdout) as { status: string; evidencePacketPath: string };
-    expect(output.status).toBe("succeeded");
-    expect(output.evidencePacketPath).toBe(join(dataDir, "runs", "scenario", "evidence-packet.json"));
-  }, 30_000);
+  it("exits 1 with the archived message for PLUTO_RUNTIME=v1", async () => {
+    const result = await runCli([], { PLUTO_RUNTIME: "v1" });
 
-  it("uses PLUTO_RUNTIME when the CLI flag is omitted", async () => {
-    const workspace = await mkdtemp(join(tmpdir(), "pluto-run-precedence-env-"));
-    const dataDir = join(workspace, ".pluto");
-    tempDirs.push(workspace);
-
-    await installV2PackageShims();
-    const result = await runCli(
-      [
-        "--scenario",
-        "hello-team",
-        "--run-profile",
-        "fake-smoke",
-        "--workspace",
-        workspace,
-        "--data-dir",
-        dataDir,
-      ],
-      { PLUTO_RUNTIME: "v1" },
-    );
-
-    expect(result.exitCode).toBe(0);
-    expect(result.stderr).toContain(warning);
-    expect(result.stderr.match(/v1\.6 runtime is deprecated/g)).toHaveLength(1);
-    const output = JSON.parse(result.stdout) as { status: string; scenario: string };
-    expect(output.status).toBe("succeeded");
-    expect(output.scenario).toBe("hello-team");
-  }, 30_000);
+    expect(result.exitCode).toBe(1);
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toContain(archivedMessage);
+  });
 
   it("defaults to v2 when neither the CLI flag nor env var is set", async () => {
     const workspace = await mkdtemp(join(tmpdir(), "pluto-run-precedence-default-"));
@@ -174,9 +131,48 @@ describe("src/cli/run.ts runtime precedence", () => {
       },
     );
 
+    const filteredStderr = result.stderr
+      .split("\n")
+      .filter((line) => !line.startsWith("npm warn") && line.trim() !== "")
+      .join("\n");
     expect(result.exitCode).toBe(0);
-    expect(result.stderr).not.toContain(warning);
+    expect(filteredStderr).toBe("");
     const output = JSON.parse(result.stdout) as { status: string };
     expect(output.status).toBe("succeeded");
+  }, 30_000);
+
+  it("lets --runtime=v2 override PLUTO_RUNTIME=v1 during the transition window", async () => {
+    const workspace = await mkdtemp(join(tmpdir(), "pluto-run-precedence-flag-"));
+    const dataDir = join(workspace, ".pluto");
+    const fakeStateDir = join(workspace, "paseo-state");
+    tempDirs.push(workspace);
+
+    await installV2PackageShims();
+    const fakePaseoBin = await createFakePaseoBin(workspace);
+    const result = await runCli(
+      [
+        "--runtime=v2",
+        `--spec=${SPEC_PATH}`,
+        "--workspace",
+        workspace,
+        "--data-dir",
+        dataDir,
+      ],
+      {
+        PLUTO_RUNTIME: "v1",
+        PASEO_BIN: fakePaseoBin,
+        PASEO_FAKE_STATE_DIR: fakeStateDir,
+      },
+    );
+
+    const filteredStderr = result.stderr
+      .split("\n")
+      .filter((line) => !line.startsWith("npm warn") && line.trim() !== "")
+      .join("\n");
+    expect(result.exitCode).toBe(0);
+    expect(filteredStderr).toBe("");
+    const output = JSON.parse(result.stdout) as { status: string; evidencePacketPath: string };
+    expect(output.status).toBe("succeeded");
+    expect(output.evidencePacketPath).toBe(join(dataDir, "runs", "scenario", "evidence-packet.json"));
   }, 30_000);
 });

@@ -1,39 +1,33 @@
-# RELIABILITY.md — Pluto MVP-alpha Reliability Policy
+# RELIABILITY.md — Pluto v2 Policy
 
-## Timeout Policy
+## Supported Runtime
 
-| Operation | Default | Max |
-|-----------|---------|-----|
-| Team run | 10 minutes | 15 minutes |
-| Adapter wait window | 5 minutes | 10 minutes |
-| Poll / read loop | implementation-defined | - |
+`main` supports the v2 CLI bridge only:
 
-## Runtime policy (v1.6)
+- entrypoint: `pnpm pluto:run --spec <path>`
+- bridge: `src/cli/v2-cli-bridge.ts`
+- runtime package: `packages/pluto-v2-runtime/`
 
-- The default and only runtime is the mailbox + shared task list path.
-- Target after `agent-teams-chat-mailbox-runtime` Stage B: mailbox transport uses paseo
-  chat in live mode. Until then, Pluto mirrors authoritative runtime evidence into
-  `mailbox.jsonl` and `tasks.json`.
-- Active hooks (`TaskCreated`, `TaskCompleted`, `TeammateIdle`) are part of the runtime
-  control path and may block continuation.
-- Plan approval is a typed mailbox round-trip, not an out-of-band operator action.
+## Exit Codes
+
+- `0`: run succeeded
+- `1`: spec invalid, run failed, or run did not complete
+- `2`: required runtime capability unavailable, including paseo CLI spawn failures
+
+## Reliability Rules
+
+- CLI routing is single-path on `main`; archived v1.6 flows are not a fallback.
+- The bridge writes `evidence-packet.json` even on failure paths when possible.
+- Transcript writing is best-effort on failure and required on successful runs.
+- Runtime adapters must keep provider-specific errors inside the adapter boundary and return normalized outcomes to the bridge.
+
+## Smoke Policy
+
+- Root live smoke entrypoint: `pnpm smoke:live`
+- Retained knobs: `PASEO_PROVIDER`, `PASEO_MODEL`, `PASEO_MODE`, `PASEO_THINKING`, `PASEO_HOST`, `PASEO_BIN`, `PLUTO_V2_WAIT_TIMEOUT_SEC`, `PLUTO_V2_WORKSPACE_CWD`
+- Missing paseo capability is a structured blocker and should map to exit code `2`, not a silent pass.
 
 ## Cleanup Policy
 
-Adapters must implement idempotent `endRun` and leave `.pluto/runs/<runId>/` intact for
-debugging and evidence inspection.
-
-## Paseo CLI Blocker
-
-If `PASEO_BIN` points to an unavailable binary or `paseo` is not on PATH with the live
-adapter:
-
-- `docker/live-smoke.ts` prints a structured blocker
-- exits with code 2
-- this is intentional and distinct from runtime failure
-
-## Error Handling Patterns
-
-1. **Blocker:** missing live prerequisite → exit 2, structured JSON payload
-2. **Fail-closed audit:** missing mailbox/task/file/citation evidence → failed or failed_audit
-3. **Fatal:** run records failure and exits non-zero
+- Preserve generated evidence artifacts for inspection.
+- Do not delete archived v1.6 references from the legacy branch as part of normal reliability work on `main`.

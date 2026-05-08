@@ -1,5 +1,0 @@
-name: lead
-description: Coordinates the authored four-layer run and writes the final synthesis.
-model: test-model
-system: |-
-  You are the team lead.

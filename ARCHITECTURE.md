@@ -1,46 +1,36 @@
-# ARCHITECTURE.md — Pluto MVP-alpha Architecture
+# ARCHITECTURE.md — Pluto v2 Mainline
 
-> **Status (2026-05-07):** this document describes the v1.6 manager-run harness, which is
-> now frozen as a **legacy reference prototype**. The v2 target architecture
-> (event-sourced `RunKernel` + append-only `RunEventLog` + projections) is described in
-> [`docs/plans/active/v2-rewrite.md`](docs/plans/active/v2-rewrite.md) and forthcoming
-> design notes under `docs/design-docs/`. The v1.6 module map below remains accurate for
-> what is currently shipped on `main` and on
-> `origin/legacy-v1.6-harness-prototype`.
+Pluto `main` is a v2 CLI plus package runtime stack.
 
-## Module Responsibilities
+## Active Modules
 
-| Module | Responsibility | Owns |
-|--------|---------------|------|
-| `src/contracts/four-layer.ts` | authored/runtime schema | Agent, Playbook, Scenario, RunProfile, Run, EvidencePacket, MailboxMessage, Task |
-| `src/contracts/adapter.ts` | adapter interface | `PaseoTeamAdapter` seam |
-| `src/four-layer/` | mailbox/tasks/hooks/plan approval + render/load/audit | file-backed runtime primitives |
-| `src/orchestrator/manager-run-harness.ts` | main runtime orchestration | run lifecycle, evidence integration |
-| `src/adapters/fake/` | deterministic adapter | in-memory mailbox/task runtime |
-| `src/adapters/paseo-opencode/` | live adapter | target paseo chat transport + OpenCode launch |
-| `docker/live-smoke.ts` | live E2E | smoke assertions |
+| Module | Responsibility |
+| --- | --- |
+| `src/cli/run.ts` | root CLI entrypoint and argument validation |
+| `src/cli/v2-cli-bridge.ts` | bridge from root CLI into `@pluto/v2-runtime` |
+| `packages/pluto-v2-core/` | authored spec schema, pure core, projections, replay |
+| `packages/pluto-v2-runtime/` | spec loading, fake runtime, paseo runtime, evidence packet assembly |
+| `packages/pluto-v2-runtime/scripts/smoke-live.ts` | retained live smoke harness |
 
 ## Control Flow
 
 ```text
-pnpm pluto:run
-  -> load four-layer YAML
-  -> render prompts
-  -> create mailbox.jsonl + tasks.json
-  -> launch lead via adapter
-  -> coordinate teammates through mailbox/task runtime
-  -> run hooks + acceptance
-  -> write artifact + evidence packet
+pnpm pluto:run --spec <path>
+  -> parse CLI flags in src/cli/run.ts
+  -> load authored spec through the v2 bridge
+  -> run the scenario through @pluto/v2-runtime
+  -> write evidence packet and transcripts
+  -> print the v2 bridge result envelope
 ```
 
-## Runtime Evidence Surfaces
+## Runtime Boundary
 
-- `.pluto/runs/<runId>/mailbox.jsonl`
-- `.pluto/runs/<runId>/tasks.json`
-- `.pluto/runs/<runId>/artifact.md`
-- `.pluto/runs/<runId>/evidence-packet.{md,json}`
+- The root CLI owns process entry, exit code, and bridge-level error classification.
+- `@pluto/v2-core` stays pure and provider-agnostic.
+- `@pluto/v2-runtime` owns loading, adapters, execution, and evidence assembly.
+- Paseo CLI details stay inside the v2 runtime adapter boundary.
 
-## Adapter Boundary
+## Archived Surface
 
-The adapter is the only seam to runtime-specific behavior. Provider IDs, model names,
-CLI flags, and transport quirks stay inside adapter implementations.
+The former v1.6 manager-run harness and related mainline runtime trees no longer define `main`.
+They survive only on `origin/legacy-v1.6-harness-prototype`. See `docs/design-docs/v1-archive.md`.

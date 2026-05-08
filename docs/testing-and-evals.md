@@ -1,65 +1,39 @@
-# docs/testing-and-evals.md — Tests vs Evals Split
+# docs/testing-and-evals.md — Post-S7 Test Surface
 
-## Tests vs Evals
+## Main Test Lanes
 
-| Category | Location | Purpose |
-|----------|----------|---------|
-| `tests/` | `tests/*.test.ts` | correctness and file-backed runtime behavior |
-| `evals/` | `evals/*` | model/workflow quality |
+| Lane | Location | Purpose |
+| --- | --- | --- |
+| Root CLI | `tests/cli/` | `pluto:run --spec <path>` behavior and archived-flag rejection |
+| Root utilities | `tests/spec-hygiene*.test.ts` and retained repo tests | repo-level utility and policy checks |
+| v2 core | `packages/pluto-v2-core/__tests__/` | contracts, pure core, projections, replay |
+| v2 runtime | `packages/pluto-v2-runtime/__tests__/` | spec loader, adapters, runner, parity, evidence |
+| Live smoke fixtures | `tests/fixtures/live-smoke/` | retained replay and evidence oracles |
 
-## Main test lanes
-
-- `tests/manager-run-harness.test.ts` — end-to-end fake run through mailbox/task runtime
-- `tests/orchestrator/plan-approval-round-trip.test.ts` — proves request -> deliver -> response -> deliver goes through transport plus the inbox loop
-- `tests/orchestrator/teamlead-driven-dispatch.test.ts` — happy path, dependsOn rejection, trusted-sender checks, and static fallback coverage for TeamLead-message-driven dispatch
-- `tests/four-layer/inbox-delivery-loop.test.ts` — idle delivery, busy queue + drain, failed delivery, wait-timeout loop behavior
-- `tests/four-layer-audit.test.ts` — mailbox/task/evidence audit behavior
-- `tests/paseo-opencode-adapter.test.ts` — live-adapter boundary behavior
-- `tests/cli/run.test.ts` / `tests/cli/runs*.test.ts` — CLI behavior
-
-## Canonical commands
+## Canonical Commands
 
 ```bash
 pnpm typecheck
 pnpm test
 pnpm build
-pnpm smoke:fake
-pnpm pluto:run --scenario hello-team --run-profile fake-smoke --workspace .tmp/pluto-cli
-pnpm verify
-pnpm smoke:local
-PASEO_HOST=localhost:6767 pnpm smoke:live
+pnpm pluto:run --spec packages/pluto-v2-runtime/test-fixtures/scenarios/hello-team-paseo-mock/scenario.yaml
+pnpm smoke:live
+pnpm spec:hygiene
 ```
 
-## Gate wrapper
+## What Changed In S7
 
-- Use `node scripts/gate.mjs <gate-name> -- <command>` for recorded verification gates.
-- The wrapper writes timing headers directly into the gate artifact stream:
+- Root validation no longer treats v1.6 harness tests as active mainline coverage.
+- Active root coverage centers on the v2 CLI plus retained repo utility tests.
+- Most execution coverage now lives inside the v2 package test suites.
+- Historical v1.6 eval assets are archived with the legacy branch, not exercised from `main`.
 
-```text
-# started: 2026-05-03T11:45:06Z
-# command: pnpm test
-# duration: 127.95s
-# exit: 0
-```
+## Replay And Parity
 
-- Slice-end artifacts should preserve those headers verbatim so later reviews can reconstruct the timeline without parsing agent logs.
+- Keep the retained parity fixture in `tests/fixtures/live-smoke/86557df1-0b4a-4bd4-8a75-027a4dcd5d38/` unchanged.
+- Use package-level parity and replay tests to protect translator and evidence behavior.
 
-## Live-smoke knobs
+## Live Smoke
 
-See `docs/harness.md` for the canonical live-smoke knob table.
-
-## Stage D checks
-
-- Targeted validation for TeamLead-message-driven dispatch can use:
-
-```bash
-pnpm vitest --run tests/orchestrator/teamlead-driven-dispatch.test.ts tests/orchestrator/plan-approval-round-trip.test.ts tests/orchestrator/harness-chat-room.test.ts tests/four-layer/inbox-delivery-loop.test.ts tests/live-smoke-classification.test.ts
-```
-
-- `docker/live-smoke.ts` now asserts the chat-driven dispatch path by checking `spawn_request_received`, `spawn_request_executed`, `worker_complete_received`, and `final_reconciliation_received` plus `orchestrationSource: "teamlead_chat"` in `events.jsonl`.
-
-## Live-smoke fixture replay
-
-- When a live `pnpm smoke:live` run hits a parser/format/handler issue, capture the run directory under `tests/fixtures/live-smoke/<runId>/` instead of rerunning live.
-- Use `tests/fixtures/live-smoke/_helpers.ts` to load fixture `events.jsonl`, `mailbox.jsonl`, and adjacent JSON artifacts in replay tests.
-- Keep replay tests short and focused: load the fixture, inject the failing worker output into the fake adapter path, and assert the repaired control-plane behavior.
+`pnpm smoke:live` is the retained end-to-end runtime smoke path for the v2 paseo adapter.
+Its knob table is defined in `docs/harness.md`.

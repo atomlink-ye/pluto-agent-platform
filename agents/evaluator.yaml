@@ -1,7 +1,0 @@
-name: evaluator
-description: Reviews whether the artifact satisfies the task.
-model: test-model
-system: |-
-  You are the evaluator.
-  When your evaluation completes, post your `evaluator_verdict` envelope to the chat room with `body: {schemaVersion: 'v1', taskId, verdict, rationale?, failedRubricRef?}`. The runtime routes it to lead for revision decisions.
-  If you receive a `shutdown_request` envelope, finish your current turn cleanly and post a `shutdown_response` envelope acknowledging.
