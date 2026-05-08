@@ -11,6 +11,7 @@ type SpawnCall = {
   readonly command: string;
   readonly args: string[];
   readonly cwd: string;
+  readonly env?: NodeJS.ProcessEnv;
 };
 
 type SpawnPlan = {
@@ -31,7 +32,7 @@ class MockChildProcess extends EventEmitter {
 
 const createSpawnStub = (plans: SpawnPlan[]) => {
   const calls: SpawnCall[] = [];
-  const processSpawn = ((command: string, args: readonly string[], options?: { cwd?: string }) => {
+  const processSpawn = ((command: string, args: readonly string[], options?: { cwd?: string; env?: NodeJS.ProcessEnv }) => {
     const plan = plans.shift();
     if (!plan) {
       throw new Error(`unexpected spawn: ${command} ${args.join(' ')}`);
@@ -41,6 +42,7 @@ const createSpawnStub = (plans: SpawnPlan[]) => {
       command,
       args: [...args],
       cwd: options?.cwd ?? '',
+      env: options?.env,
     });
 
     const child = new MockChildProcess();
@@ -115,8 +117,45 @@ describe('makePaseoCliClient', () => {
           'Wait for the next prompt.',
         ],
         cwd: TEST_CWD,
+        env: undefined,
       },
     ]);
+  });
+
+  it('does not pass an env override when spawnAgent spec omits env', async () => {
+    const { processSpawn, calls } = createSpawnStub([
+      { stdout: '{"agentId":"agent-no-env"}' },
+    ]);
+    const client = makePaseoCliClient({ cwd: TEST_CWD, processSpawn });
+
+    await expect(client.spawnAgent({
+      provider: 'opencode',
+      model: 'openai/gpt-5.4-mini',
+      mode: 'build',
+      title: 'No env',
+      initialPrompt: 'Hello.',
+    })).resolves.toEqual({ agentId: 'agent-no-env' });
+
+    expect(calls[0]?.env).toBeUndefined();
+  });
+
+  it('merges spec env on top of process.env for spawnAgent', async () => {
+    const { processSpawn, calls } = createSpawnStub([
+      { stdout: '{"agentId":"agent-env"}' },
+    ]);
+    const client = makePaseoCliClient({ cwd: TEST_CWD, processSpawn });
+
+    await expect(client.spawnAgent({
+      provider: 'opencode',
+      model: 'openai/gpt-5.4-mini',
+      mode: 'build',
+      title: 'Env merge',
+      initialPrompt: 'Hello.',
+      env: { FOO: 'bar' },
+    })).resolves.toEqual({ agentId: 'agent-env' });
+
+    expect(calls[0]?.env?.FOO).toBe('bar');
+    expect(calls[0]?.env?.PATH).toBe(process.env.PATH);
   });
 
   it('sends prompts through a temp file', async () => {
@@ -141,6 +180,22 @@ describe('makePaseoCliClient', () => {
     expect(calls[0]?.args[3]).toBe('--prompt-file');
     expect(calls[0]?.args[4]).toBeTruthy();
     expect(capturedPrompt).toBe(prompt);
+  });
+
+  it('does not apply spawn env overrides to other commands', async () => {
+    let capturedEnv: NodeJS.ProcessEnv | undefined;
+    const { processSpawn } = createSpawnStub([{ stdout: '' }]);
+    const wrappedSpawn = ((command: string, args: readonly string[], options?: { cwd?: string; env?: NodeJS.ProcessEnv }) => {
+      if (args[0] === 'send') {
+        capturedEnv = options?.env;
+      }
+      return processSpawn(command, args, options);
+    }) as unknown as SpawnMock;
+    const client = makePaseoCliClient({ cwd: TEST_CWD, processSpawn: wrappedSpawn });
+
+    await client.sendPrompt('agent-send', 'Follow-up prompt');
+
+    expect(capturedEnv).toBeUndefined();
   });
 
   it('returns agent exit code from wait json without throwing on non-zero', async () => {

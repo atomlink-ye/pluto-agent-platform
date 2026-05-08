@@ -15,6 +15,7 @@ export interface PaseoAgentSpec {
   readonly initialPrompt: string;
   readonly labels?: ReadonlyArray<PaseoLabel>;
   readonly cwd?: string;
+  readonly env?: Readonly<Record<string, string>>;
 }
 
 export interface PaseoAgentSession {
@@ -204,9 +205,11 @@ const execCommand = async (input: {
   readonly args: string[];
   readonly cwd: string;
   readonly timeoutSec: number;
+  readonly env?: NodeJS.ProcessEnv;
 }): Promise<ExecResult> => {
   const child = input.processSpawn(input.bin, input.args, {
     cwd: input.cwd,
+    ...(input.env ? { env: input.env } : {}),
     stdio: ['ignore', 'pipe', 'pipe'],
   }) as SpawnedReadableProcess;
 
@@ -314,6 +317,7 @@ export function makePaseoCliClient(deps: {
         args: [...appendHost(args, deps.host), spec.initialPrompt],
         cwd: deps.cwd,
         timeoutSec: timeoutDefaultSec,
+        env: spec.env ? { ...process.env, ...spec.env } : undefined,
       });
       ensureSuccess(result, 'paseo run');
       const agentId = parseAgentId(result.stdout);
