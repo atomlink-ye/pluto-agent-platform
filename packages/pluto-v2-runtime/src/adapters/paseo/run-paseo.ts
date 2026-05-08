@@ -574,11 +574,22 @@ async function runAgenticToolLoop(
         userTask: authored.userTask ?? null,
         toolNames: PLUTO_TOOL_NAMES,
       });
-      const baseAgentSpec = options.paseoAgentSpec(actor, {
+      const handoff = {
         apiUrl: localApi.url,
         bearerToken,
         actorKey: key,
-      });
+      };
+      const baseAgentSpec = options.paseoAgentSpec(actor, handoff);
+
+      const actorSpec: PaseoAgentSpec = {
+        ...baseAgentSpec,
+        env: {
+          ...(baseAgentSpec.env ?? {}),
+          PLUTO_RUN_API_URL: handoff.apiUrl,
+          PLUTO_RUN_TOKEN: handoff.bearerToken,
+          PLUTO_RUN_ACTOR: handoff.actorKey,
+        },
+      };
 
       leaseStore.setCurrent(actor);
       observedMutatingToolCall = null;
@@ -592,7 +603,7 @@ async function runAgenticToolLoop(
         });
 
         const session = await options.client.spawnAgent({
-          ...baseAgentSpec,
+          ...actorSpec,
           initialPrompt: prompt,
           ...(injection.cwd == null ? {} : { cwd: injection.cwd }),
         });

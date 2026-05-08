@@ -155,6 +155,9 @@ function parseFlagTokens(tokens: readonly string[]): {
 
   for (let index = 0; index < tokens.length; index += 1) {
     const token = tokens[index];
+    if (token == null) {
+      break;
+    }
     if (token === '--help') {
       help = true;
       continue;
@@ -463,8 +466,6 @@ function textSummary(command: ParsedCommand, result: unknown): string {
     case 'read-artifact':
       return JSON.stringify(result, null, 2);
     case 'read-transcript':
-      return JSON.stringify(result, null, 2);
-    case 'read-state':
       return JSON.stringify(result, null, 2);
   }
 }

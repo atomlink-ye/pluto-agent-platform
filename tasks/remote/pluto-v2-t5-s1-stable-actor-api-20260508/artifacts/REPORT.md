@@ -28,3 +28,10 @@
 - `commit_and_push` failed at the remote push step with GitHub auth error: `fatal: could not read Username for 'https://github.com': No such device or address`.
 - `force_add_report` also created a local report commit, and its push failed with the same auth error.
 - Operator push is still required locally.
+
+## Fix-up Addendum
+
+- Root cause: `run-paseo.ts` stopped enforcing `PLUTO_RUN_API_URL`, `PLUTO_RUN_TOKEN`, and `PLUTO_RUN_ACTOR` onto the final spawned agent spec, so callers that ignored the optional handoff argument never received the local API env; this left delegated actor turns inert until the env merge was restored. Separately, `pluto-tool.ts` still had two unchecked argv-index reads plus a dead `read-state` switch branch that surfaced as TSC errors.
+- Root CLI follow-up: `tests/cli/run-runtime-v2-default.test.ts` still mocked the pre-S1 `opencode.json` injection path, so the agentic fake paseo runner was updated to persist and replay the stable env handoff contract instead.
+- Diff stat: `4 files changed, 30 insertions(+), 10 deletions(-)`.
+- Final SHA: recorded at the branch HEAD for this single fix-up commit after commit/push.
