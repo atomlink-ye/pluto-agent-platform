@@ -29,10 +29,10 @@ import type { KernelView } from '../../runtime/kernel-view.js';
 import type { RuntimeAdapter } from '../../runtime/runtime-adapter.js';
 import { makePlutoToolHandlers, type PlutoToolResult } from '../../tools/pluto-tool-handlers.js';
 import { PLUTO_TOOL_NAMES, type PlutoToolName } from '../../tools/pluto-tool-schemas.js';
+import type { AgenticMutation } from './agentic-mutation.js';
 import { buildAgenticToolPrompt } from './agentic-tool-prompt-builder.js';
 import { createInitialAgenticLoopState } from './agentic-loop-state.js';
 import { leadActorFromSpec, pickNextAgenticActor, withKernelRejection } from './agentic-scheduler.js';
-import { type PaseoDirective } from './paseo-directive.js';
 import { buildPromptView } from './prompt-view.js';
 
 export type PaseoLabel = `${string}=${string}`;
@@ -82,9 +82,6 @@ export interface PaseoTurnResponse {
 export interface PaseoRuntimeAdapter<S> extends RuntimeAdapter<S> {
   pendingPaseoTurn(state: S, view: KernelView): PaseoTurnRequest | null;
   withPaseoResponse(state: S, response: PaseoTurnResponse): S;
-  configureAgenticState?(state: S, spec: LoadedAuthoredSpec): S;
-  bypassKernelRequest?(state: S, request: ProtocolRequest, view: KernelView): boolean;
-  withKernelEvent?(state: S, event: RunEvent, view: KernelView): S;
 }
 
 type ProjectionViews = ReplayViews;
@@ -154,7 +151,7 @@ const TOOL_NAME_TO_DIRECTIVE_KIND = {
   pluto_append_mailbox_message: 'append_mailbox_message',
   pluto_publish_artifact: 'publish_artifact',
   pluto_complete_run: 'complete_run',
-} as const satisfies Record<(typeof MUTATING_TOOL_NAMES)[number], PaseoDirective['kind']>;
+} as const satisfies Record<(typeof MUTATING_TOOL_NAMES)[number], AgenticMutation['kind']>;
 
 type TranscriptAwareState = {
   turnIndex: number;
@@ -321,11 +318,6 @@ function runtimeModeOf(authored: RuntimeAuthoredInput): string | undefined {
   return authored.orchestration?.mode;
 }
 
-function isAgenticTextMode(authored: RuntimeAuthoredInput): boolean {
-  const mode = runtimeModeOf(authored);
-  return mode === 'agentic' || mode === 'agentic_text';
-}
-
 function isAgenticToolMode(authored: RuntimeAuthoredInput): authored is LoadedAuthoredSpec {
   return runtimeModeOf(authored) === 'agentic_tool';
 }
@@ -341,7 +333,7 @@ function toCoreAuthoredSpec(authored: RuntimeAuthoredInput): AuthoredSpec {
       : {
           orchestration: {
             ...orchestration,
-            ...(orchestration.mode === 'agentic_text' || orchestration.mode === 'agentic_tool'
+            ...(orchestration.mode === 'agentic_tool'
               ? { mode: 'agentic' as const }
               : {}),
           },
@@ -361,7 +353,7 @@ function ensureLoadedAuthoredSpec(authored: RuntimeAuthoredInput, mode: string):
   return authored;
 }
 
-function buildToolAttemptDirective(toolName: (typeof MUTATING_TOOL_NAMES)[number], rawArgs: unknown): PaseoDirective {
+function buildToolAttemptDirective(toolName: (typeof MUTATING_TOOL_NAMES)[number], rawArgs: unknown): AgenticMutation {
   const payload = rawArgs != null && typeof rawArgs === 'object' && !Array.isArray(rawArgs)
     ? rawArgs as Record<string, unknown>
     : {};
@@ -369,10 +361,10 @@ function buildToolAttemptDirective(toolName: (typeof MUTATING_TOOL_NAMES)[number
   return {
     kind: TOOL_NAME_TO_DIRECTIVE_KIND[toolName],
     payload,
-  } as PaseoDirective;
+  } as AgenticMutation;
 }
 
-function buildDiagnosticDirective(actor: ActorRef, body: string): PaseoDirective {
+function buildDiagnosticDirective(actor: ActorRef, body: string): AgenticMutation {
   return {
     kind: 'append_mailbox_message',
     payload: {
@@ -381,7 +373,7 @@ function buildDiagnosticDirective(actor: ActorRef, body: string): PaseoDirective
       kind: 'final',
       body,
     },
-  } as PaseoDirective;
+  } as AgenticMutation;
 }
 
 function toolErrorMessage(result: Extract<PlutoToolResult, { ok: false }>): string {
@@ -830,7 +822,6 @@ export async function runPaseo<S>(
     clockProvider: options.clockProvider,
   });
 
-  const isAgenticTextRun = isAgenticTextMode(authored);
   const isAgenticToolRun = isAgenticToolMode(authored);
 
   kernel.seedRunStarted(
@@ -864,12 +855,6 @@ export async function runPaseo<S>(
   }
 
   let state = adapter.init(teamContext, kernelViewOf(kernel));
-  if (isAgenticTextRun) {
-    if (adapter.configureAgenticState == null) {
-      throw new Error('runPaseo agentic mode requires adapter.configureAgenticState');
-    }
-    state = adapter.configureAgenticState(state, ensureLoadedAuthoredSpec(authored, 'agentic_text'));
-  }
   const agentByActorKey = new Map<string, string>();
   const usage = createUsageAccumulator();
   const maxSteps = options.maxSteps ?? DEFAULT_MAX_STEPS;
@@ -923,22 +908,17 @@ export async function runPaseo<S>(
       stepCount += 1;
 
       const step = adapter.step(state, kernelViewOf(kernel));
-        if (step.kind === 'done') {
-          kernel.submit(buildCompleteRunRequest(kernel.state.runId, step.completion, options), {
-            correlationId: options.correlationId ?? null,
-          });
-          state = step.nextState;
-          break;
-        }
-
-        if (adapter.bypassKernelRequest?.(step.nextState, step.request, kernelViewOf(kernel)) ?? false) {
-          state = step.nextState;
-          continue;
-        }
-
-        const submission = kernel.submit(step.request, { correlationId: options.correlationId ?? null });
-        state = adapter.withKernelEvent?.(step.nextState, submission.event, kernelViewOf(kernel)) ?? step.nextState;
+      if (step.kind === 'done') {
+        kernel.submit(buildCompleteRunRequest(kernel.state.runId, step.completion, options), {
+          correlationId: options.correlationId ?? null,
+        });
+        state = step.nextState;
+        break;
       }
+
+      kernel.submit(step.request, { correlationId: options.correlationId ?? null });
+      state = step.nextState;
+    }
   } finally {
     await cleanupAgents(options.client, agentByActorKey.values());
   }

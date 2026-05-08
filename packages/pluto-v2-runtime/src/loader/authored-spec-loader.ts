@@ -10,8 +10,6 @@ type CoreOrchestration = Exclude<AuthoredSpec['orchestration'], undefined>;
 
 export const RUNTIME_ORCHESTRATION_MODE_VALUES = [
   'deterministic',
-  'agentic',
-  'agentic_text',
   'agentic_tool',
 ] as const;
 
@@ -43,9 +41,8 @@ export type LoadedAuthoredSpec = Omit<AuthoredSpec, 'orchestration'> & {
 function toRuntimeOrchestrationMode(mode: unknown): RuntimeOrchestrationMode | undefined {
   switch (mode) {
     case 'agentic':
-      return 'agentic_text';
+      return 'agentic_tool';
     case 'deterministic':
-    case 'agentic_text':
     case 'agentic_tool':
       return mode;
     default:
@@ -55,7 +52,7 @@ function toRuntimeOrchestrationMode(mode: unknown): RuntimeOrchestrationMode | u
 
 function normalizeModeForCore(mode: unknown): unknown {
   const runtimeMode = toRuntimeOrchestrationMode(mode);
-  if (runtimeMode === 'agentic_text' || runtimeMode === 'agentic_tool') {
+  if (runtimeMode === 'agentic_tool') {
     return 'agentic';
   }
 
@@ -96,7 +93,7 @@ function runtimeModeFromParsedSpec(parsed: unknown): RuntimeOrchestrationMode | 
 }
 
 function isRuntimeAgenticMode(mode: RuntimeOrchestrationMode | undefined): boolean {
-  return mode === 'agentic_text' || mode === 'agentic_tool';
+  return mode === 'agentic_tool';
 }
 
 function parseSerializedSpec(filePath: string, content: string): unknown {
@@ -197,34 +194,34 @@ function assertAgenticLoaderRequirements(
   }
 
   if (!authored.declaredActors.includes('lead')) {
-    throw new Error('agentic_text/agentic_tool declaredActors must include lead');
+    throw new Error('agentic_tool declaredActors must include lead');
   }
 
   const leadActor = authored.actors.lead;
   if (leadActor == null || leadActor.kind !== 'role' || leadActor.role !== 'lead') {
-    throw new Error('agentic_text/agentic_tool actors.lead must be { kind: "role", role: "lead" }');
+    throw new Error('agentic_tool actors.lead must be { kind: "role", role: "lead" }');
   }
 
   if (!authored.declaredActors.includes('manager')) {
-    throw new Error('agentic_text/agentic_tool declaredActors must include manager');
+    throw new Error('agentic_tool declaredActors must include manager');
   }
 
   const managerActor = authored.actors.manager;
   if (managerActor == null || managerActor.kind !== 'manager') {
-    throw new Error('agentic_text/agentic_tool actors.manager must be { kind: "manager" }');
+    throw new Error('agentic_tool actors.manager must be { kind: "manager" }');
   }
 
   if (authored.userTask == null || authored.userTask.trim().length === 0) {
-    throw new Error('agentic_text/agentic_tool userTask must be non-empty');
+    throw new Error('agentic_tool userTask must be non-empty');
   }
 
   if (authored.playbookRef == null || authored.playbookRef.trim().length === 0) {
-    throw new Error('agentic_text/agentic_tool playbookRef must be a non-empty markdown path');
+    throw new Error('agentic_tool playbookRef must be a non-empty markdown path');
   }
 
   const playbookRef = authored.playbookRef.trim();
   if (!playbookRef.toLowerCase().endsWith('.md')) {
-    throw new Error('agentic_text/agentic_tool playbookRef must reference a markdown file');
+    throw new Error('agentic_tool playbookRef must reference a markdown file');
   }
 
   resolvePlaybookSync({

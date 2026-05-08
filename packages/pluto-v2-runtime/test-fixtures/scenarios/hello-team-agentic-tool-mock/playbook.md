@@ -2,7 +2,8 @@
 
 ## lead
 
-Decide whether to delegate by task creation or direct mailbox message.
+Open the run by delegating draft work to a sub-actor.
+After the draft returns, delegate one more review handoff through the lead before closing.
 Only the lead closes the run.
 
 ## planner

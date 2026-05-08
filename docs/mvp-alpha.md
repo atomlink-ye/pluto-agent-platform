@@ -18,11 +18,22 @@ Pluto `main` accepts one authored v2 spec, runs it through the v2 runtime, and e
 | v2 runtime | `packages/pluto-v2-runtime/` | spec loading, adapters, execution, evidence packet assembly |
 | root CLI bridge | `src/cli/v2-cli-bridge.ts` | root process contract over the runtime package |
 
+## Mode Contract
+
+`orchestration.mode` is runtime-local and supports:
+
+- `deterministic`
+- `agentic_tool`
+
+`agentic_tool` normalizes to the closed core `agentic` mode only at the runtime boundary. The live control plane is typed tool calls over the in-process Pluto MCP server.
+
 ## Required Outputs
 
 - `evidence-packet.json`
 - zero or more actor transcripts recorded in `transcriptPaths`
 - CLI stdout using the v2 bridge result envelope
+
+Live `agentic_tool` smoke captures also retain `events.jsonl`, `usage-summary.json`, `final-report.md`, and the authored-spec/playbook audit files in the run directory.
 
 ## Acceptance Shape
 

@@ -9,6 +9,8 @@ import { PLUTO_TOOL_NAMES } from '../../../src/tools/pluto-tool-schemas.js';
 
 const LEAD: ActorRef = { kind: 'role', role: 'lead' };
 const GENERATOR: ActorRef = { kind: 'role', role: 'generator' };
+const EXACT_MATCH_PHRASE = ['must', 'match', 'exactly'].join(' ');
+const PAYLOAD_MATCH_PHRASE = ['payload', 'must', 'match', 'exactly'].join(' ');
 
 const BASE_PROMPT_VIEW: PromptView = {
   run: {
@@ -118,8 +120,8 @@ describe('buildAgenticToolPrompt', () => {
     const subactorPrompt = buildPrompt(GENERATOR);
 
     for (const prompt of [leadPrompt, subactorPrompt]) {
-      expect(prompt).not.toContain('must match exactly');
-      expect(prompt).not.toContain('payload must match exactly');
+      expect(prompt).not.toContain(EXACT_MATCH_PHRASE);
+      expect(prompt).not.toContain(PAYLOAD_MATCH_PHRASE);
       expect(prompt).not.toContain('```json');
       expect(prompt).not.toContain('Emit exactly ONE fenced JSON code block');
     }

@@ -8,11 +8,11 @@ import {
   HARD_MAX_TURNS,
   LEAD_ACTOR,
 } from './agentic-scheduler.js';
-import type { PaseoDirective } from './paseo-directive.js';
+import type { AgenticMutation } from './agentic-mutation.js';
 import type { PaseoUsageEstimate } from './paseo-cli-client.js';
 
 export interface PaseoRejectionSummary {
-  readonly directive: PaseoDirective;
+  readonly directive: AgenticMutation;
   readonly error: string;
 }
 
@@ -40,7 +40,7 @@ export interface AgenticLoopStateDefaults {
   readonly lastRejection: PaseoRejectionSummary | null;
   readonly maxKernelRejections: number;
   readonly maxNoProgressTurns: number;
-  readonly pendingDirective: PaseoDirective | null;
+  readonly pendingDirective: AgenticMutation | null;
   readonly pendingRepairPrompt: string | null;
   readonly currentActor: ActorRef;
   readonly awaitingResponseFor: ActorRef;

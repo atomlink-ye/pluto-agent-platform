@@ -14,7 +14,7 @@ export const loadScenarioSpec = (filePath: string): AuthoredSpec => {
       : {
           orchestration: {
             ...authored.orchestration,
-            ...(mode === 'agentic_text' || mode === 'agentic_tool' ? { mode: 'agentic' as const } : {}),
+            ...(mode === 'agentic_tool' ? { mode: 'agentic' as const } : {}),
           },
         }),
   } as AuthoredSpec;

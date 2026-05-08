@@ -1,6 +1,6 @@
 # Pluto v2 — MCP tool-driven agentic loop (T4)
 
-> **Status:** draft, 2026-05-08. Awaiting operator approval before T4-D0 dispatch.
+> **Status:** Done — main @ `c1632b1`.
 > **Authority:** this file is the canonical plan for T4. Conflicts with
 > bundle docs / future acceptance files → plan wins.
 > **Inputs:**
@@ -336,11 +336,11 @@ Halt and re-scope if:
 
 | Slice    | Status   | Owner    | Notes                                          |
 | -------- | -------- | -------- | ---------------------------------------------- |
-| T4-D0    | pending  | remote   | MCP injection proof; gating                    |
-| T4-S1    | pending  | remote   | in-process tool contract                       |
-| T4-S2    | pending  | remote   | MCP server + lease + transport                 |
-| T4-S3    | pending  | remote   | driver lane swap; delete `agentic_text` code   |
-| T4-S4    | pending  | remote   | live smoke + invariants + docs + cleanup      |
+| T4-D0    | Done     | remote   | MCP injection proof shipped on `main`          |
+| T4-S1    | Done     | remote   | in-process tool contract shipped on `main`     |
+| T4-S2    | Done     | remote   | MCP server + lease + transport shipped on `main` |
+| T4-S3    | Done     | remote   | driver lane swap shipped on `main`             |
+| T4-S4    | Done     | remote   | live smoke, invariants, docs, and cleanup complete |
 
 T3 status row in `v2-agentic-orchestration.md` flips to
 `superseded-by: T4` in the commit that lands this plan; no

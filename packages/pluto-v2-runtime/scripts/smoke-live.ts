@@ -1,7 +1,7 @@
 #!/usr/bin/env tsx
 
-import { randomUUID } from 'node:crypto';
-import { mkdir, writeFile } from 'node:fs/promises';
+import { createHash, randomUUID } from 'node:crypto';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join, relative, resolve } from 'node:path';
 import process from 'node:process';
 import { pathToFileURL } from 'node:url';
@@ -15,6 +15,7 @@ import {
 } from '../../pluto-v2-core/src/index.ts';
 
 import {
+  loadAuthoredSpec,
   makePaseoAdapter,
   makePaseoCliClient,
   runPaseo,
@@ -55,6 +56,14 @@ const DEFAULT_PROVIDER = 'opencode';
 const DEFAULT_MODEL = 'openai/gpt-5.4-mini';
 const DEFAULT_MODE = 'build';
 const DEFAULT_WAIT_TIMEOUT_SEC = 600;
+
+type SmokeInput = {
+  authored: AuthoredSpec;
+  specPath: string | null;
+  authoredSpecText: string | null;
+  playbookBody: string | null;
+  playbookSha256: string | null;
+};
 
 function actorKey(actor: ActorRef | { readonly kind: 'broadcast' }): string {
   switch (actor.kind) {
@@ -110,6 +119,46 @@ function authoredSpecFor(runId: string): AuthoredSpec {
       evaluator: { kind: 'role', role: 'evaluator' },
     },
     declaredActors: ['manager', 'planner', 'generator', 'evaluator'],
+  };
+}
+
+function parseSpecArg(argv: readonly string[]): string | null {
+  for (let index = 0; index < argv.length; index += 1) {
+    const arg = argv[index];
+    if (arg === '--spec') {
+      return argv[index + 1] ?? null;
+    }
+    if (arg.startsWith('--spec=')) {
+      return arg.slice('--spec='.length);
+    }
+  }
+
+  return null;
+}
+
+async function loadSmokeInput(repoRoot: string, argv: readonly string[]): Promise<SmokeInput> {
+  const specArg = parseSpecArg(argv);
+  if (specArg == null || specArg.trim().length === 0) {
+    const runId = process.env.PLUTO_V2_SMOKE_RUN_ID?.trim() || randomUUID();
+    return {
+      authored: authoredSpecFor(runId),
+      specPath: null,
+      authoredSpecText: null,
+      playbookBody: null,
+      playbookSha256: null,
+    };
+  }
+
+  const specPath = resolve(repoRoot, specArg);
+  const authored = loadAuthoredSpec(specPath);
+  const authoredSpecText = await readFile(specPath, 'utf8');
+
+  return {
+    authored,
+    specPath,
+    authoredSpecText,
+    playbookBody: authored.playbook?.body ?? null,
+    playbookSha256: authored.playbook?.sha256 ?? null,
   };
 }
 
@@ -221,8 +270,9 @@ async function main(): Promise<void> {
   // (which runs cwd=package dir) still writes the fixture to the workspace root.
   const scriptDir = resolve(new URL('.', import.meta.url).pathname);
   const repoRoot = process.env.PLUTO_V2_REPO_ROOT?.trim() || resolve(scriptDir, '..', '..', '..');
-  const runId = process.env.PLUTO_V2_SMOKE_RUN_ID?.trim() || randomUUID();
-  const authored = authoredSpecFor(runId);
+  const smokeInput = await loadSmokeInput(repoRoot, process.argv.slice(2));
+  const authored = smokeInput.authored;
+  const runId = authored.runId;
   const fixtureDir = join(repoRoot, 'tests/fixtures/live-smoke', runId);
   const transcriptDir = join(fixtureDir, 'paseo-transcripts');
   await mkdir(transcriptDir, { recursive: true });
@@ -353,6 +403,9 @@ async function main(): Promise<void> {
     totalOutputTokens: result.usage.totalOutputTokens,
     totalTokens: result.usage.totalInputTokens + result.usage.totalOutputTokens,
     totalCostUsd: result.usage.totalCostUsd,
+    usageStatus: result.usage.usageStatus,
+    reportedBy: result.usage.reportedBy,
+    estimated: result.usage.estimated,
     byActor,
     perTurn,
     byModel: Object.fromEntries(byModelAccumulator.entries()),
@@ -382,6 +435,17 @@ async function main(): Promise<void> {
     'utf8',
   );
   await writeFile(usageSummaryPath, JSON.stringify(usageSummary, null, 2), 'utf8');
+
+  if (authored.orchestration?.mode === 'agentic_tool' && smokeInput.authoredSpecText != null) {
+    await writeFile(join(fixtureDir, 'authored-spec.yaml'), smokeInput.authoredSpecText, 'utf8');
+    if (smokeInput.playbookBody != null && smokeInput.playbookSha256 != null) {
+      const playbookPath = join(fixtureDir, 'playbook.md');
+      const playbookHash = createHash('sha256').update(smokeInput.playbookBody).digest('hex');
+      await writeFile(playbookPath, smokeInput.playbookBody, 'utf8');
+      await writeFile(join(fixtureDir, 'playbook.sha256'), `${playbookHash}\n`, 'utf8');
+    }
+    await writeFile(join(repoRoot, 'tests/fixtures/live-smoke/agentic-tool-live-runid.txt'), `${runId}\n`, 'utf8');
+  }
 
   for (const actorName of authored.declaredActors) {
     const actor = authored.actors[actorName];

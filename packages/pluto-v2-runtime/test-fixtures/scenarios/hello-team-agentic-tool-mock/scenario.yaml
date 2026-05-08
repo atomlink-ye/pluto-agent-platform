@@ -28,5 +28,5 @@ orchestration:
   maxParseFailuresPerTurn: 2
   maxKernelRejections: 2
   maxNoProgressTurns: 3
-userTask: Produce a draft artifact and close the run.
+userTask: Delegate drafting, route a review back through the lead, and close only after both handoffs are complete.
 playbookRef: playbook.md

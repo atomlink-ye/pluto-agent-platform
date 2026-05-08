@@ -1,17 +1,22 @@
 # @pluto/v2-runtime
 
-Deterministic Pluto v2 runtime package for Slice 4.
+Pluto v2 runtime package.
 
 ## Scope
 
-- Loads authored runtime specs through `src/loader/**` only.
-- Runs authored specs through the v2 `RunKernel` with a provider-agnostic runtime adapter.
-- Ships the fake runtime adapter for fixture-backed end-to-end runs.
-- Re-exports the Lane B translator and evidence packet helpers.
+- Loads authored runtime specs through `src/loader/**`.
+- Runs authored specs through the v2 `RunKernel` with fake or Paseo-backed adapters.
+- Ships the retained deterministic regression lane and the live `agentic_tool` lane.
+- Re-exports evidence packet helpers and the archived translator surface.
 
-## Status
+## Modes
 
-This package is fake-runtime only. A live Paseo-backed runtime adapter is deferred to S5.
+| Mode | Purpose | Notes |
+| --- | --- | --- |
+| `deterministic` | legacy regression lane | keeps the retained byte-stable parity surface |
+| `agentic_tool` | live agentic lane | uses `runPaseo()` plus the in-process Pluto MCP server |
+
+`agentic_tool` is the default live-run path. `deterministic` remains opt-in for regression coverage.
 
 ## Public Surface
 
@@ -20,5 +25,8 @@ This package is fake-runtime only. A live Paseo-backed runtime adapter is deferr
 - `runScenario(...)`
 - `runFake(...)`
 - `makeFakeAdapter(...)`
+- `makePaseoAdapter(...)`
+- `makePaseoCliClient(...)`
+- `runPaseo(...)`
 - `assembleEvidencePacket(...)`
 - `translateLegacyEvents(...)`

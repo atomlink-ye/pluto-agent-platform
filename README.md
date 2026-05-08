@@ -15,7 +15,14 @@ pnpm install
 pnpm typecheck
 pnpm test
 pnpm build
-pnpm pluto:run --spec packages/pluto-v2-runtime/test-fixtures/scenarios/hello-team-paseo-mock/scenario.yaml
+pnpm pluto:run --spec packages/pluto-v2-runtime/test-fixtures/scenarios/hello-team-agentic-tool-mock/scenario.yaml
+```
+
+Example authored runtime mode:
+
+```yaml
+orchestration:
+  mode: agentic_tool
 ```
 
 ## CLI Contract
@@ -41,20 +48,7 @@ Root validation now centers on:
 ## Live Smoke
 
 ```bash
-pnpm smoke:live
+pnpm smoke:live --spec=packages/pluto-v2-runtime/test-fixtures/scenarios/hello-team-agentic-tool-mock/scenario.yaml
 ```
 
-Supported smoke env knobs:
-
-- `PASEO_PROVIDER`
-- `PASEO_MODEL`
-- `PASEO_MODE`
-- `PASEO_THINKING`
-- `PASEO_HOST`
-- `PASEO_BIN`
-- `PLUTO_V2_REPO_ROOT`
-- `PLUTO_V2_SMOKE_RUN_ID`
-- `PLUTO_V2_WAIT_TIMEOUT_SEC`
-- `PLUTO_V2_WORKSPACE_CWD`
-
-See `docs/harness.md` and `docs/testing-and-evals.md` for the retained control surface.
+The live smoke path uses the `agentic_tool` lane and the in-process Pluto MCP server. See `docs/harness.md` and `docs/testing-and-evals.md` for the retained control surface.

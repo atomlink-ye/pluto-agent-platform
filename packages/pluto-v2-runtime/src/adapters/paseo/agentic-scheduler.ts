@@ -1,9 +1,9 @@
 import type { ActorRef, AuthoredSpec, RunEvent } from '@pluto/v2-core';
 
-import type { PaseoDirective } from './paseo-directive.js';
+import type { AgenticMutation } from './agentic-mutation.js';
 
 export interface PaseoRejectionSummary {
-  readonly directive: PaseoDirective;
+  readonly directive: AgenticMutation;
   readonly error: string;
 }
 
@@ -98,7 +98,7 @@ export const budgetFailureForAgentic = budgetFailureForAgenticScheduler;
 export function pickNextAgenticSchedulerActor(args: {
   state: Pick<PaseoAgenticSchedulerState, 'currentActor' | 'delegationPointer' | 'delegationTaskId'>;
   acceptedEvent: RunEvent;
-  directive: PaseoDirective;
+  directive: AgenticMutation;
   leadActor?: ActorRef;
 }): PaseoAgenticSchedulerDecision {
   const leadActor = args.leadActor ?? LEAD_ACTOR;

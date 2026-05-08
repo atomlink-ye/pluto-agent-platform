@@ -10,7 +10,7 @@ import { afterEach, describe, expect, it } from "vitest";
 const exec = promisify(execFile);
 const tempDirs: string[] = [];
 const SPEC_PATH = join(process.cwd(), "packages/pluto-v2-runtime/test-fixtures/scenarios/hello-team-paseo-mock/scenario.yaml");
-const AGENTIC_SPEC_PATH = join(process.cwd(), "packages/pluto-v2-runtime/test-fixtures/scenarios/hello-team-agentic-mock/scenario.yaml");
+const AGENTIC_SPEC_PATH = join(process.cwd(), "packages/pluto-v2-runtime/test-fixtures/scenarios/hello-team-agentic-tool-mock/scenario.yaml");
 
 afterEach(async () => {
   await Promise.all(tempDirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
@@ -60,24 +60,25 @@ async function createAgenticFakePaseoBin(rootDir: string): Promise<string> {
     'mkdirSync(stateDir, { recursive: true });',
     'const command = args[0];',
     'const agentPath = (agentId) => join(stateDir, `${agentId}.json`);',
-    'const readAgent = (agentId) => existsSync(agentPath(agentId)) ? JSON.parse(readFileSync(agentPath(agentId), "utf8")) : { transcript: "", promptCount: 0 };',
+    'const readAgent = (agentId) => existsSync(agentPath(agentId)) ? JSON.parse(readFileSync(agentPath(agentId), "utf8")) : { transcript: "", promptCount: 0, initialized: false, cwd: null };',
     'const writeAgent = (agentId, state) => { mkdirSync(dirname(agentPath(agentId)), { recursive: true }); writeFileSync(agentPath(agentId), JSON.stringify(state), "utf8"); };',
     'const logicalTitle = (title) => title.startsWith("pluto-") ? title.slice("pluto-".length) : title;',
-    'const nextDirective = (title, promptCount) => { const actor = logicalTitle(title);',
-    '  if (actor === "role:lead" && promptCount === 0) return { kind: "create_task", payload: { title: "Draft the runtime change", ownerActor: { kind: "role", role: "generator" }, dependsOn: [] } };',
-    '  if (actor === "role:generator" && promptCount === 0) return { kind: "append_mailbox_message", payload: { fromActor: { kind: "role", role: "generator" }, toActor: { kind: "role", role: "lead" }, kind: "completion", body: "Generator completed the draft." } };',
-    '  if (actor === "role:lead" && promptCount === 1) return { kind: "complete_run", payload: { status: "succeeded", summary: "Agentic mock run completed." } };',
-    '  return { kind: "complete_run", payload: { status: "failed", summary: `Unexpected agent turn for ${title} #${promptCount}` } };',
+    'const actorForTitle = (title) => { const actor = logicalTitle(title); if (actor === "manager") return { kind: "manager" }; if (actor.startsWith("role:")) return { kind: "role", role: actor.slice("role:".length) }; return { kind: "role", role: actor }; };',
+    'const readInjectedConfig = (cwd) => { const parsed = JSON.parse(readFileSync(join(cwd, "opencode.json"), "utf8")); const url = parsed?.mcp?.pluto?.url; const auth = parsed?.mcp?.pluto?.headers?.Authorization; if (typeof url !== "string" || typeof auth !== "string" || !auth.startsWith("Bearer ")) throw new Error("invalid injected MCP config"); return { url, token: auth.slice("Bearer ".length) }; };',
+    'const postJson = async (cwd, actor, body) => { const { url, token } = readInjectedConfig(cwd); const response = await fetch(url, { method: "POST", headers: { authorization: `Bearer ${token}`, "content-type": "application/json", "mcp-protocol-version": "2025-11-25", "Pluto-Run-Actor": JSON.stringify(actor) }, body: JSON.stringify(body) }); const text = await response.text(); return text.length === 0 ? {} : JSON.parse(text); };',
+    'const ensureInitialized = async (state, title) => { if (state.initialized) return state; const actor = actorForTitle(title); await postJson(state.cwd, actor, { jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-11-25", capabilities: {} } }); await postJson(state.cwd, actor, { jsonrpc: "2.0", method: "notifications/initialized" }); await postJson(state.cwd, actor, { jsonrpc: "2.0", id: 2, method: "tools/list" }); return { ...state, initialized: true }; };',
+    'const nextToolCall = (title, promptCount) => { const actor = logicalTitle(title); if (actor === "role:lead" && promptCount === 0) return { name: "pluto_create_task", args: { title: "Draft the runtime change", ownerActor: { kind: "role", role: "generator" }, dependsOn: [] }, transcriptText: "lead delegated work\\n" }; if (actor === "role:generator" && promptCount === 0) return { name: "pluto_append_mailbox_message", args: { toActor: { kind: "role", role: "lead" }, kind: "completion", body: "Generator completed the draft." }, transcriptText: "generator completed work\\n" }; if (actor === "role:lead" && promptCount === 1) return { name: "pluto_complete_run", args: { status: "succeeded", summary: "Agentic mock run completed." }, transcriptText: "lead closed the run\\n" }; return { name: "pluto_complete_run", args: { status: "failed", summary: `Unexpected agent turn for ${title} #${promptCount}` }, transcriptText: "unexpected turn\\n" }; };',
+    'const performTurn = async (agentId, title, cwd) => { let state = readAgent(agentId); state = { ...state, cwd: cwd ?? state.cwd }; if (!state.cwd) throw new Error(`missing cwd for ${agentId}`); state = await ensureInitialized(state, title); const turn = nextToolCall(title, state.promptCount); const actor = actorForTitle(title); const result = await postJson(state.cwd, actor, { jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: turn.name, arguments: turn.args } }); if (result?.error) throw new Error(result.error.message ?? `tool call failed for ${turn.name}`); const nextTranscript = state.transcript ? `${state.transcript}${turn.transcriptText}` : turn.transcriptText; writeAgent(agentId, { ...state, transcript: nextTranscript, promptCount: state.promptCount + 1 }); };',
+    'const main = async () => {',
+    '  if (command === "run") { const titleIndex = args.indexOf("--title"); const cwdIndex = args.indexOf("--cwd"); const title = titleIndex >= 0 ? args[titleIndex + 1] : "unknown"; const cwd = cwdIndex >= 0 ? args[cwdIndex + 1] : null; const agentId = `fake-${title}`; await performTurn(agentId, title, cwd); process.stdout.write(JSON.stringify({ agentId })); return; }',
+    '  if (command === "send") { const agentId = args[1]; const title = agentId.slice("fake-".length); await performTurn(agentId, title, null); return; }',
+    '  if (command === "wait") { process.stdout.write(JSON.stringify({ exitCode: 0 })); return; }',
+    '  if (command === "logs") { const agentId = args[1]; process.stdout.write(readAgent(agentId).transcript ?? ""); return; }',
+    '  if (command === "inspect") { process.stdout.write(JSON.stringify({ usage: { inputTokens: 12, outputTokens: 6, costUsd: 0.01 } })); return; }',
+    '  if (command === "delete") { return; }',
+    '  throw new Error(`unsupported fake paseo command: ${command}`);',
     '};',
-    "const appendTranscript = (agentId, title) => { const state = readAgent(agentId); const directive = nextDirective(title, state.promptCount); const transcriptText = `\\`\\`\\`json\\n${JSON.stringify(directive)}\\n\\`\\`\\`\\n`; const nextTranscript = state.transcript ? `${state.transcript}${transcriptText}` : transcriptText; writeAgent(agentId, { transcript: nextTranscript, promptCount: state.promptCount + 1 }); };",
-    'if (command === "run") { const titleIndex = args.indexOf("--title"); const title = titleIndex >= 0 ? args[titleIndex + 1] : "unknown"; const agentId = `fake-${title}`; appendTranscript(agentId, title); process.stdout.write(JSON.stringify({ agentId })); process.exit(0); }',
-    'if (command === "send") { const agentId = args[1]; const title = agentId.slice("fake-".length); appendTranscript(agentId, title); process.exit(0); }',
-    'if (command === "wait") { process.stdout.write(JSON.stringify({ exitCode: 0 })); process.exit(0); }',
-    'if (command === "logs") { const agentId = args[1]; process.stdout.write(readAgent(agentId).transcript ?? ""); process.exit(0); }',
-    'if (command === "inspect") { process.stdout.write(JSON.stringify({ usage: { inputTokens: 12, outputTokens: 6, costUsd: 0.01 } })); process.exit(0); }',
-    'if (command === "delete") { process.exit(0); }',
-    'process.stderr.write(`unsupported fake paseo command: ${command}\\n`);',
-    'process.exit(1);',
+    'main().catch((error) => { process.stderr.write(`${error.stack || error.message}\\n`); process.exit(1); });',
   ].join("\n");
 
   await writeFile(binPath, script, "utf8");
@@ -258,7 +259,7 @@ describe("src/cli/run.ts default v2 runtime", () => {
 
     const output = JSON.parse(stdout) as { status: string; runDir: string; transcriptPaths: string[] };
     expect(output.status).toBe("succeeded");
-    expect(output.runDir).toBe(join(dataDir, "runs", "run-hello-team-agentic-mock"));
+    expect(output.runDir).toBe(join(dataDir, "runs", "run-hello-team-agentic-tool-mock"));
     expect(output.transcriptPaths.length).toBeGreaterThan(0);
 
     const events = (await readFile(join(output.runDir, "events.jsonl"), "utf8"))

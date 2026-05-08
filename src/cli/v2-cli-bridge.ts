@@ -189,7 +189,7 @@ function toCoreAuthoredSpec(loaded: LoadedAuthoredSpec): AuthoredSpec {
     return rest as AuthoredSpec;
   }
   const coreMode =
-    orchestration.mode === 'agentic_text' || orchestration.mode === 'agentic_tool'
+    orchestration.mode === 'agentic_tool'
       ? 'agentic'
       : orchestration.mode;
   return {

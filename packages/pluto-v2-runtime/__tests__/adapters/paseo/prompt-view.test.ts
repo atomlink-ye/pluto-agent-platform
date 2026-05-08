@@ -367,7 +367,7 @@ function writeLoadedAgenticSpec(): { loadedSpec: LoadedAuthoredSpec; specPath: s
       'scenarioRef: scenario/prompt-view',
       'runProfileRef: paseo-agentic',
       'orchestration:',
-      '  mode: agentic_text',
+      '  mode: agentic_tool',
       'actors:',
       '  manager:',
       '    kind: manager',

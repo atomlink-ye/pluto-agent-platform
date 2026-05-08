@@ -2,7 +2,7 @@ import { replayAll, type ActorRef, type RunEvent } from '@pluto/v2-core';
 
 import { assembleEvidencePacket } from '../../evidence/evidence-packet.js';
 import type { LoadedAuthoredSpec } from '../../loader/authored-spec-loader.js';
-import type { PaseoDirective } from './paseo-directive.js';
+import type { AgenticMutation } from './agentic-mutation.js';
 
 const MAILBOX_LIMIT = 50;
 
@@ -23,7 +23,7 @@ export interface PromptViewInput {
   readonly forActor: ActorRef;
   readonly budgets: PromptViewBudgets;
   readonly activeDelegation: ActorRef | null;
-  readonly lastRejection: { directive: PaseoDirective; error: string } | null;
+  readonly lastRejection: { directive: AgenticMutation; error: string } | null;
 }
 
 export interface PromptView {
@@ -57,9 +57,9 @@ export interface PromptView {
     readonly kind: string;
     readonly mediaType: string;
     readonly byteSize: number;
-  }>;
+  }>; 
   readonly activeDelegation: ActorRef | null;
-  readonly lastRejection: { directive: PaseoDirective; error: string } | null;
+  readonly lastRejection: { directive: AgenticMutation; error: string } | null;
 }
 
 function sameActor(left: ActorRef, right: ActorRef): boolean {

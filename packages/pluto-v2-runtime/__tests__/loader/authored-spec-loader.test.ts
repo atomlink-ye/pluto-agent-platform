@@ -202,7 +202,7 @@ describe('loadAuthoredSpec', () => {
       '  manager:',
       '    kind: manager',
       'orchestration:',
-      '  mode: agentic_text',
+      '  mode: agentic_tool',
       '  maxTurns: 30',
       '  maxParseFailuresPerTurn: 4',
       '  maxKernelRejections: 5',
@@ -212,7 +212,7 @@ describe('loadAuthoredSpec', () => {
     const authored = loadAuthoredSpec(filePath);
 
     expect(authored.orchestration).toEqual({
-      mode: 'agentic_text',
+      mode: 'agentic_tool',
       maxTurns: 30,
       maxParseFailuresPerTurn: 4,
       maxKernelRejections: 5,
@@ -244,7 +244,7 @@ describe('loadAuthoredSpec', () => {
     expect(authored.playbook).toMatchObject({ ref: 'playbooks/team-lead.md' });
   });
 
-  it('normalizes the legacy agentic alias to agentic_text', () => {
+  it('normalizes the legacy agentic alias to agentic_tool', () => {
     const filePath = writeAgenticSpec([
       'declaredActors:',
       '  - lead',
@@ -261,7 +261,7 @@ describe('loadAuthoredSpec', () => {
 
     const authored = loadAuthoredSpec(filePath);
 
-    expect(authored.orchestration?.mode).toBe('agentic_text');
+    expect(authored.orchestration?.mode).toBe('agentic_tool');
   });
 });
 
@@ -285,7 +285,7 @@ function writeAgenticSpec(lines: string[]): string {
         ? []
         : [
             'orchestration:',
-            '  mode: agentic_text',
+            '  mode: agentic_tool',
           ]),
       ...(hasUserTask ? [] : ['userTask: Ship the loader lane.']),
       ...(hasPlaybookRef ? [] : ['playbookRef: playbooks/team-lead.md']),

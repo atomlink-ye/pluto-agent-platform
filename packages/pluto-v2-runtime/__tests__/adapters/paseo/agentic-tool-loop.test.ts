@@ -6,7 +6,6 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { counterIdProvider, fixedClockProvider, type ActorRef, type RunEvent } from '@pluto/v2-core';
 
-import * as paseoDirective from '../../../src/adapters/paseo/paseo-directive.js';
 import { makePaseoAdapter } from '../../../src/adapters/paseo/paseo-adapter.js';
 import { runPaseo, type PaseoCliClient, type PaseoAgentSpec, type PaseoUsageEstimate } from '../../../src/adapters/paseo/run-paseo.js';
 import { loadAuthoredSpec, type LoadedAuthoredSpec } from '../../../src/loader/authored-spec-loader.js';
@@ -572,30 +571,6 @@ describe('agentic_tool Paseo loop', () => {
     expect(prompts[1]?.prompt).toContain('"lastRejection"');
     expect(prompts[1]?.prompt).toContain('PLUTO_TOOL_BAD_ARGS');
     expect(result.events.map((event) => event.kind)).toEqual(['run_started', 'run_completed']);
-  });
-
-  it('never invokes extractDirective in the agentic_tool lane', async () => {
-    const extractDirectiveSpy = vi.spyOn(paseoDirective, 'extractDirective');
-
-    try {
-      const { result } = await runAgenticTool([
-        {
-          actor: LEAD,
-          run: async ({ callTool }) => {
-            await callTool('pluto_complete_run', {
-              status: 'succeeded',
-              summary: 'done',
-            });
-            return { transcriptText: 'tool lane complete\n' };
-          },
-        },
-      ]);
-
-      expect(result.events.at(-1)?.kind).toBe('run_completed');
-      expect(extractDirectiveSpy).not.toHaveBeenCalled();
-    } finally {
-      extractDirectiveSpy.mockRestore();
-    }
   });
 
   it('preserves the closed reducer event sequence on the mock fixture', async () => {

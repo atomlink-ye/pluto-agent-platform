@@ -1,6 +1,6 @@
 # Pluto v2 — Agentic Orchestration (T1–T3)
 
-> **Status:** in progress, 2026-05-08.
+> **Status:** Done — main @ `c1632b1`.
 > **Authority:** this file is the canonical plan. Conflicts with
 > bundle docs / acceptance.md → plan wins.
 > **Inputs:** local OpenCode Companion discovery

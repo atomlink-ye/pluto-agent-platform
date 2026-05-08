@@ -11,11 +11,9 @@ export {
   makePaseoAdapter,
   PaseoAdapterStateError,
   type PaseoAdapterState,
-  type PaseoAgenticLoopState,
   type PaseoDeterministicAdapterState,
 } from './adapters/paseo/paseo-adapter.js';
 export { makePaseoCliClient, __internal, type PaseoAgentSession, type PaseoAgentSpec, type PaseoCliClient, type PaseoLogsResult, type PaseoUsageEstimate } from './adapters/paseo/paseo-cli-client.js';
-export { PaseoDirectiveSchema, extractDirective, type PaseoDirective } from './adapters/paseo/paseo-directive.js';
 export { runPaseo } from './adapters/paseo/run-paseo.js';
 export * from './runtime/kernel-view.js';
 export * from './runtime/runner.js';

@@ -1,0 +1,79 @@
+{
+  "schemaVersion": "1.0",
+  "kind": "evidence_packet",
+  "runId": "run-hello-team-agentic-tool-mock",
+  "status": "succeeded",
+  "summary": "Drafting and review handoffs completed through the lead.",
+  "startedAt": "2026-05-08T12:15:02.318Z",
+  "completedAt": "2026-05-08T12:24:30.119Z",
+  "generatedAt": "2026-05-08T12:24:30.119Z",
+  "citations": [
+    {
+      "eventId": "acf3be61-de24-495b-a5a4-2bf1066d48e8",
+      "kind": "run_started",
+      "text": "Run started.",
+      "observedAt": "2026-05-08T12:15:02.323Z"
+    },
+    {
+      "eventId": "7122df3a-b817-4969-bafc-c3ac57e34765",
+      "kind": "run_completed",
+      "text": "Run completed.",
+      "observedAt": "2026-05-08T12:24:30.119Z"
+    }
+  ],
+  "tasks": {
+    "5dbd1b10-dbd2-46fb-91ee-add455f50734": {
+      "title": "Draft the agentic handoff",
+      "ownerActor": {
+        "kind": "role",
+        "role": "generator"
+      },
+      "state": "queued",
+      "dependsOn": [],
+      "history": []
+    },
+    "64b0da4e-8061-4861-b1d3-b4bac393f13d": {
+      "title": "Review the agentic handoff",
+      "ownerActor": {
+        "kind": "role",
+        "role": "evaluator"
+      },
+      "state": "queued",
+      "dependsOn": [
+        "5dbd1b10-dbd2-46fb-91ee-add455f50734"
+      ],
+      "history": []
+    }
+  },
+  "mailboxMessages": [
+    {
+      "messageId": "59ba9a1f-fd6c-4f1b-b903-f23e5f5f91f1",
+      "fromActor": {
+        "kind": "role",
+        "role": "generator"
+      },
+      "toActor": {
+        "kind": "role",
+        "role": "lead"
+      },
+      "kind": "completion",
+      "body": "Drafted the agentic handoff for the run. Ready for lead review.",
+      "sequence": 2
+    },
+    {
+      "messageId": "ce87ccf0-54e5-4c00-897c-630148785095",
+      "fromActor": {
+        "kind": "role",
+        "role": "evaluator"
+      },
+      "toActor": {
+        "kind": "role",
+        "role": "lead"
+      },
+      "kind": "completion",
+      "body": "PASS: Generator completed the draft handoff and routed it back through the lead.",
+      "sequence": 4
+    }
+  ],
+  "artifacts": []
+}
