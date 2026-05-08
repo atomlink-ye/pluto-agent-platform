@@ -194,6 +194,14 @@ describe('pluto-tool argv parsing', () => {
           body: { status: 'succeeded', summary: 'done' },
         });
 
+      await expect(parseCliArgs(['wait', '--timeout-sec=12']))
+        .resolves.toMatchObject({
+          kind: 'command',
+          name: 'wait',
+          path: '/tools/wait-for-event',
+          body: { timeoutSec: 12 },
+        });
+
       await expect(parseCliArgs(['read-state']))
         .resolves.toMatchObject({ kind: 'command', name: 'read-state', method: 'GET', path: '/state' });
 

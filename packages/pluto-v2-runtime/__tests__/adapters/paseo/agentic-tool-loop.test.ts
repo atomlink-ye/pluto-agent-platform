@@ -148,6 +148,8 @@ function makeMcpAwareMockClient(script: readonly ToolScriptEntry[], prompts: Pro
           return { method: 'POST' as const, path: '/tools/publish-artifact', body: args };
         case 'pluto_complete_run':
           return { method: 'POST' as const, path: '/tools/complete-run', body: args };
+        case 'pluto_wait_for_event':
+          return { method: 'POST' as const, path: '/tools/wait-for-event', body: args };
         case 'pluto_read_state':
           return { method: 'GET' as const, path: '/state' };
         case 'pluto_read_artifact':
@@ -422,6 +424,65 @@ describe('agentic_tool Paseo loop', () => {
 
     try {
       expect(execution.prompts.map((entry) => entry.actorKey)).toEqual(['role:lead', 'role:generator', 'role:lead']);
+    } finally {
+      await execution.cleanup();
+    }
+  });
+
+  it('lets a lead suspend in wait and resume without a fallback wakeup prompt', async () => {
+    const execution = await runAgenticTool([
+      {
+        actor: LEAD,
+        run: async ({ callTool }) => {
+          await callTool('pluto_create_task', {
+            title: 'Draft the change',
+            ownerActor: GENERATOR,
+            dependsOn: [],
+          });
+          const waited = await callTool('pluto_wait_for_event', { timeoutSec: 300 });
+          expect(waited.status).toBe(200);
+          expect(waited.body).toMatchObject({
+            outcome: 'event',
+            latestEvent: { kind: 'mailbox_message_appended' },
+          });
+          await callTool('pluto_complete_run', {
+            status: 'succeeded',
+            summary: 'done',
+          });
+          return {
+            transcriptText: [
+              'pluto-tool create-task --owner=generator --title="Draft the change"',
+              'pluto-tool wait --timeout-sec=300',
+              'pluto-tool complete-run --status=succeeded --summary="done"',
+            ].join('\n'),
+          };
+        },
+      },
+      {
+        actor: GENERATOR,
+        run: async ({ callTool }) => {
+          await callTool('pluto_append_mailbox_message', {
+            toActor: LEAD,
+            kind: 'completion',
+            body: 'Draft ready.',
+          });
+          return { transcriptText: 'reported\n' };
+        },
+      },
+    ]);
+
+    try {
+      expect(execution.prompts.map((entry) => entry.actorKey)).toEqual(['role:lead', 'role:generator']);
+      expect(execution.result.events.map((event) => event.kind)).toEqual([
+        'run_started',
+        'task_created',
+        'mailbox_message_appended',
+        'run_completed',
+      ]);
+      expect(execution.result.runtimeTraces.map((trace) => trace.kind)).toEqual([
+        'wait_armed',
+        'wait_unblocked',
+      ]);
     } finally {
       await execution.cleanup();
     }

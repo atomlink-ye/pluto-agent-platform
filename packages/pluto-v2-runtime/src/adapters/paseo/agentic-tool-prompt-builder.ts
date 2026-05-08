@@ -224,6 +224,7 @@ function toolSection(toolNames: ReadonlyArray<PlutoToolName>): string {
       const description = descriptor?.description ?? 'Tool description unavailable.';
       return `- ${name}: ${description}`;
     }),
+    '- pluto_wait_for_event: Suspend until a new actor-visible Pluto event arrives.',
   ].join('\n');
 }
 
@@ -243,6 +244,7 @@ function toolCallSection(): string {
     '  pluto-tool change-task-state --task-id=<id> --to=completed',
     '  pluto-tool publish-artifact --kind=final --media-type=text/plain --byte-size=64 --body="..."',
     '  pluto-tool complete-run --status=succeeded --summary="<one-sentence>"',
+    '  pluto-tool wait --timeout-sec=300',
     '  pluto-tool read-state',
     '  pluto-tool read-artifact --artifact-id=<id>',
     '  pluto-tool read-transcript --actor-key=role:generator',
@@ -267,6 +269,7 @@ function turnRuleSection(actor: ActorRef): string {
       'Turn rule:',
       '- Read tools are available whenever you need more context.',
       '- End your turn with EXACTLY ONE mutating Pluto tool call.',
+      '- After that mutating call, prefer pluto-tool wait to suspend until the next relevant event.',
       '- Usually that means delegating, publishing a state change, or calling pluto_complete_run when the run is truly finished.',
     ].join('\n');
   }
@@ -275,6 +278,7 @@ function turnRuleSection(actor: ActorRef): string {
     'Turn rule:',
     '- Read tools are available whenever you need more context.',
     '- End your turn with EXACTLY ONE mutating Pluto tool call.',
+    '- After that mutating call, prefer pluto-tool wait to suspend until the next relevant event.',
     '- Usually that means pluto_change_task_state to a terminal state, or pluto_append_mailbox_message with kind completion to the lead.',
   ].join('\n');
 }

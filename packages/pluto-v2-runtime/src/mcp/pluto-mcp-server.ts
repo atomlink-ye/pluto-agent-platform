@@ -3,6 +3,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from 'node:ht
 
 import { ActorRefSchema, type ActorRef } from '@pluto/v2-core';
 
+import type { WaitRegistry } from '../api/wait-registry.js';
 import type { PlutoToolResult, PlutoToolSession } from '../tools/pluto-tool-handlers.js';
 import { PLUTO_TOOL_DESCRIPTORS, PLUTO_TOOL_NAMES, type PlutoToolName } from '../tools/pluto-tool-schemas.js';
 import type { TurnLeaseStore } from './turn-lease.js';
@@ -11,6 +12,18 @@ const DEFAULT_PROTOCOL_VERSION = '2025-11-25';
 const ACTOR_HEADER = 'pluto-run-actor';
 const TURN_CONSUMED_RPC_ERROR_CODE = -32004;
 const TURN_CONSUMED_ERROR = 'PLUTO_TURN_CONSUMED';
+const WAIT_TOOL_NAME = 'pluto_wait_for_event';
+const WAIT_TOOL_INPUT_SCHEMA = {
+  type: 'object',
+  properties: {
+    timeoutSec: {
+      type: 'integer',
+      minimum: 0,
+      maximum: 1200,
+    },
+  },
+  additionalProperties: false,
+} as const;
 
 const MUTATING_TOOLS = new Set<PlutoToolName>([
   'pluto_create_task',
@@ -51,6 +64,14 @@ export interface PlutoMcpServerConfig {
   bearerToken: string;
   handlers: PlutoToolHandlers;
   leaseStore: TurnLeaseStore;
+  waitService?: {
+    registry: WaitRegistry;
+    cursorForActor(actor: ActorRef): number;
+    onEventDelivered(actor: ActorRef, sequence: number): void;
+    defaultTimeoutSec?: number;
+    maxTimeoutSec?: number;
+    disconnectReason?: string;
+  };
   onRequest?: (req: { method: string; toolName?: string; lease?: ActorRef }) => void;
 }
 
@@ -114,6 +135,10 @@ function isPlutoToolName(value: unknown): value is PlutoToolName {
   return typeof value === 'string' && PLUTO_TOOL_NAMES.includes(value as PlutoToolName);
 }
 
+function isSupportedToolName(value: unknown): value is PlutoToolName | typeof WAIT_TOOL_NAME {
+  return isPlutoToolName(value) || value === WAIT_TOOL_NAME;
+}
+
 function isLeadActor(actor: ActorRef): boolean {
   return actor.kind === 'role' && actor.role === 'lead';
 }
@@ -154,6 +179,53 @@ function parseActorHeader(rawHeader: string | string[] | undefined):
 
 function toRpcToolError(id: JsonRpcId | undefined, result: Extract<PlutoToolResult, { ok: false }>): JsonRpcResponse {
   return rpcError(id, -32003, `${result.error.code}: ${result.error.message}`, result.error);
+}
+
+function parseWaitTimeoutSec(rawArgs: unknown, defaults?: { defaultTimeoutSec?: number; maxTimeoutSec?: number }): number {
+  const defaultTimeoutSec = defaults?.defaultTimeoutSec ?? 300;
+  const maxTimeoutSec = defaults?.maxTimeoutSec ?? 1200;
+  if (rawArgs == null) {
+    return defaultTimeoutSec;
+  }
+
+  if (typeof rawArgs !== 'object' || Array.isArray(rawArgs)) {
+    throw new Error('wait arguments must be a JSON object');
+  }
+
+  const timeoutSec = (rawArgs as { timeoutSec?: unknown }).timeoutSec;
+  if (timeoutSec == null) {
+    return defaultTimeoutSec;
+  }
+
+  if (typeof timeoutSec !== 'number' || !Number.isInteger(timeoutSec) || timeoutSec < 0 || timeoutSec > maxTimeoutSec) {
+    throw new Error(`timeoutSec must be an integer between 0 and ${maxTimeoutSec}`);
+  }
+
+  return timeoutSec;
+}
+
+function waitToolResult(body: unknown) {
+  return {
+    content: [{ type: 'text', text: JSON.stringify(body) }],
+  };
+}
+
+async function waitForLease(args: {
+  leaseStore: TurnLeaseStore;
+  actor: ActorRef;
+  response: ServerResponse;
+}): Promise<boolean> {
+  while (!args.leaseStore.matches(args.actor)) {
+    if (args.response.writableEnded || args.response.destroyed) {
+      return false;
+    }
+
+    await new Promise((resolve) => {
+      setTimeout(resolve, 5);
+    });
+  }
+
+  return true;
 }
 
 export async function startPlutoMcpServer(
@@ -218,6 +290,8 @@ export async function startPlutoMcpServer(
 
         const toolName = rpcRequest.method === 'tools/call' && isPlutoToolName(rpcRequest.params?.name)
           ? rpcRequest.params.name
+          : rpcRequest.method === 'tools/call' && rpcRequest.params?.name === WAIT_TOOL_NAME
+          ? rpcRequest.params.name
           : undefined;
         config.onRequest?.({
           method: rpcRequest.method,
@@ -243,21 +317,108 @@ export async function startPlutoMcpServer(
             });
           case 'tools/list':
             return rpcResult(rpcRequest.id, {
-              tools: PLUTO_TOOL_DESCRIPTORS.map((descriptor) => ({
-                name: descriptor.name,
-                description: descriptor.description,
-                inputSchema: descriptor.inputSchema,
-              })),
+              tools: [
+                ...PLUTO_TOOL_DESCRIPTORS.map((descriptor) => ({
+                  name: descriptor.name,
+                  description: descriptor.description,
+                  inputSchema: descriptor.inputSchema,
+                })),
+                {
+                  name: WAIT_TOOL_NAME,
+                  description: 'Suspend until a new actor-visible Pluto event arrives.',
+                  inputSchema: WAIT_TOOL_INPUT_SCHEMA,
+                },
+              ],
             });
           case 'tools/call': {
             const requestedToolName = rpcRequest.params?.name;
-            if (!isPlutoToolName(requestedToolName)) {
+            if (!isSupportedToolName(requestedToolName)) {
               return rpcError(rpcRequest.id, -32602, `Unknown tool: ${String(requestedToolName)}`);
             }
 
             const parsedActor = parseActorHeader(actorHeader);
             if (!parsedActor.ok) {
               return rpcError(rpcRequest.id, -32002, parsedActor.message);
+            }
+
+            if (requestedToolName === WAIT_TOOL_NAME) {
+              const waitService = config.waitService;
+              if (waitService == null) {
+                return rpcError(rpcRequest.id, -32003, 'PLUTO_WAIT_UNAVAILABLE: wait-for-event is not configured for this runtime.');
+              }
+
+              let timeoutSec: number;
+              try {
+                timeoutSec = parseWaitTimeoutSec(rpcRequest.params?.arguments, waitService);
+              } catch (error) {
+                return rpcError(
+                  rpcRequest.id,
+                  -32602,
+                  error instanceof Error ? error.message : 'invalid wait arguments',
+                );
+              }
+
+              const disconnectReason = waitService.disconnectReason ?? 'http_disconnect';
+              const socket = request.socket;
+              const onDisconnect = () => {
+                if (response.writableEnded || response.destroyed) {
+                  return;
+                }
+
+                waitService.registry.cancelForActor(parsedActor.actor, disconnectReason);
+              };
+              const disconnectPoll = setInterval(() => {
+                if (socket?.destroyed || request.destroyed || response.destroyed) {
+                  onDisconnect();
+                }
+              }, 25);
+              const onRequestClose = () => {
+                if (request.destroyed) {
+                  onDisconnect();
+                }
+              };
+
+              request.once('aborted', onDisconnect);
+              request.once('close', onRequestClose);
+              response.once('close', onDisconnect);
+              socket?.once('close', onDisconnect);
+
+              try {
+                const result = await waitService.registry.arm({
+                  actor: parsedActor.actor,
+                  fromSequence: waitService.cursorForActor(parsedActor.actor),
+                  timeoutMs: timeoutSec * 1000,
+                });
+
+                if (result.outcome === 'event') {
+                  const hasLease = await waitForLease({
+                    leaseStore: config.leaseStore,
+                    actor: parsedActor.actor,
+                    response,
+                  });
+                  if (!hasLease) {
+                    return rpcResult(rpcRequest.id, waitToolResult({
+                      outcome: 'cancelled',
+                      reason: disconnectReason,
+                    }));
+                  }
+
+                  waitService.onEventDelivered(parsedActor.actor, result.payload.latestEvent.sequence);
+                  return rpcResult(rpcRequest.id, waitToolResult({
+                    outcome: 'event',
+                    latestEvent: result.payload.latestEvent,
+                    delta: result.payload.delta,
+                  }));
+                }
+
+                return rpcResult(rpcRequest.id, waitToolResult(result));
+              } finally {
+                clearInterval(disconnectPoll);
+                request.off('aborted', onDisconnect);
+                request.off('close', onRequestClose);
+                response.off('close', onDisconnect);
+                socket?.off('close', onDisconnect);
+              }
             }
 
             if (MUTATING_TOOLS.has(requestedToolName) && !config.leaseStore.matches(parsedActor.actor)) {

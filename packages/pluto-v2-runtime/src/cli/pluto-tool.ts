@@ -20,6 +20,7 @@ type CommandName =
   | 'send-mailbox'
   | 'publish-artifact'
   | 'complete-run'
+  | 'wait'
   | 'read-state'
   | 'read-artifact'
   | 'read-transcript';
@@ -52,6 +53,7 @@ const COMMANDS: ReadonlyArray<CommandName> = [
   'send-mailbox',
   'publish-artifact',
   'complete-run',
+  'wait',
   'read-state',
   'read-artifact',
   'read-transcript',
@@ -66,6 +68,7 @@ const GLOBAL_HELP = [
   '  send-mailbox',
   '  publish-artifact',
   '  complete-run',
+  '  wait',
   '  read-state',
   '  read-artifact',
   '  read-transcript',
@@ -81,6 +84,7 @@ const HELP_BY_COMMAND: Record<CommandName, string> = {
   'send-mailbox': 'Usage: pluto-tool send-mailbox --to=<role|manager> --kind=<kind> --body=<text|@path> [--format=json|text]',
   'publish-artifact': 'Usage: pluto-tool publish-artifact --kind=<final|intermediate> --media-type=<mime> --byte-size=<n> [--body=<text|@path>] [--format=json|text]',
   'complete-run': 'Usage: pluto-tool complete-run --status=<succeeded|failed|cancelled> --summary=<text> [--format=json|text]',
+  'wait': 'Usage: pluto-tool wait [--timeout-sec=<0-1200>] [--format=json|text]',
   'read-state': 'Usage: pluto-tool read-state [--format=json|text]',
   'read-artifact': 'Usage: pluto-tool read-artifact --artifact-id=<id> [--format=json|text]',
   'read-transcript': 'Usage: pluto-tool read-transcript --actor-key=<key> [--format=json|text]',
@@ -254,6 +258,15 @@ function parsePositiveInteger(value: string, flagName: string): number {
   return parsed;
 }
 
+function parseWaitTimeoutSec(value: string): number {
+  const parsed = parsePositiveInteger(value, '--timeout-sec');
+  if (parsed > 1200) {
+    throw new Error('--timeout-sec must be 1200 or less');
+  }
+
+  return parsed;
+}
+
 export async function parseCliArgs(argv: readonly string[]): Promise<ParsedCli> {
   const [commandToken, ...rest] = argv;
   if (commandToken == null || commandToken === '--help') {
@@ -366,6 +379,20 @@ export async function parseCliArgs(argv: readonly string[]): Promise<ParsedCli> 
         body: { status, summary },
       };
     }
+    case 'wait': {
+      const timeoutSecRaw = takeOne(flags, 'timeout-sec');
+      assertKnownFlags(flags, commandToken);
+      return {
+        kind: 'command',
+        name: commandToken,
+        format,
+        method: 'POST',
+        path: '/tools/wait-for-event',
+        body: {
+          timeoutSec: timeoutSecRaw == null ? 300 : parseWaitTimeoutSec(timeoutSecRaw),
+        },
+      };
+    }
     case 'read-state':
       assertKnownFlags(flags, commandToken);
       return {
@@ -463,11 +490,26 @@ function textSummary(command: ParsedCommand, result: unknown): string {
         : `artifact publish rejected: ${String(record.reason ?? 'unknown')}`;
     case 'complete-run':
       return record.accepted === true ? 'run completed' : `run completion rejected: ${String(record.reason ?? 'unknown')}`;
+    case 'wait':
+      if (record.outcome === 'event') {
+        return `event received: ${String((record.latestEvent as { kind?: string })?.kind ?? 'unknown')}`;
+      }
+      if (record.outcome === 'timeout') {
+        return 'wait timed out';
+      }
+      return `wait cancelled: ${String(record.reason ?? 'unknown')}`;
     case 'read-artifact':
       return JSON.stringify(result, null, 2);
     case 'read-transcript':
       return JSON.stringify(result, null, 2);
   }
+}
+
+function isCancelledWaitResult(command: ParsedCommand, result: unknown): boolean {
+  return command.name === 'wait'
+    && result != null
+    && typeof result === 'object'
+    && (result as { outcome?: unknown }).outcome === 'cancelled';
 }
 
 export async function runCli(
@@ -486,11 +528,11 @@ export async function runCli(
     const result = await callApi(runtimeEnv, parsed);
     if (parsed.format === 'text') {
       io.stdout.write(`${textSummary(parsed, result.data)}\n`);
-      return 0;
+      return isCancelledWaitResult(parsed, result.data) ? 1 : 0;
     }
 
     io.stdout.write(`${JSON.stringify(result.data, null, 2)}\n`);
-    return 0;
+    return isCancelledWaitResult(parsed, result.data) ? 1 : 0;
   } catch (error) {
     io.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
     return 1;

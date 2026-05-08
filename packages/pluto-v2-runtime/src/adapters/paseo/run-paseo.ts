@@ -20,6 +20,7 @@ import {
 import { actorKey } from '../../../../pluto-v2-core/src/core/team-context.js';
 
 import { startPlutoLocalApi } from '../../api/pluto-local-api.js';
+import { makeWaitRegistry, type WaitTraceEvent } from '../../api/wait-registry.js';
 import { assembleEvidencePacket, type EvidencePacket } from '../../evidence/evidence-packet.js';
 import type { UsageStatus } from '../../evidence/usage-summary-builder.js';
 import type { LoadedAuthoredSpec } from '../../loader/authored-spec-loader.js';
@@ -119,6 +120,10 @@ type UsageSummary = {
   perTurn: ReadonlyArray<UsagePerTurn>;
 };
 
+type AgenticToolUsageSummary = UsageSummary & {
+  waitTraces: ReadonlyArray<WaitTraceEvent>;
+};
+
 type RuntimeAuthoredInput = AuthoredSpec | LoadedAuthoredSpec;
 
 type AgenticToolLoopState = ReturnType<typeof createInitialAgenticLoopState>;
@@ -133,6 +138,21 @@ type ObservedMutatingToolCall = {
 
 type AgentInjection = {
   cwd?: string;
+};
+
+type AgentSessionState = {
+  agentId: string;
+  idlePromise: Promise<AgentIdleOutcome> | null;
+};
+
+type AgentIdleOutcome = {
+  exitCode: number;
+  failure: string | null;
+};
+
+type Deferred<T> = {
+  promise: Promise<T>;
+  resolve: (value: T) => void;
 };
 
 export interface PaseoAgentEnvHandoff {
@@ -333,6 +353,14 @@ function runtimeModeOf(authored: RuntimeAuthoredInput): string | undefined {
   return authored.orchestration?.mode;
 }
 
+function createDeferred<T>(): Deferred<T> {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((innerResolve) => {
+    resolve = innerResolve;
+  });
+  return { promise, resolve };
+}
+
 function isAgenticToolMode(authored: RuntimeAuthoredInput): authored is LoadedAuthoredSpec {
   return runtimeModeOf(authored) === 'agentic_tool';
 }
@@ -453,7 +481,7 @@ async function runAgenticToolLoop(
     waitTimeoutSec: number;
     workspaceCwd?: string;
   },
-): Promise<UsageSummary> {
+): Promise<AgenticToolUsageSummary> {
   const leadActor = leadActorFromSpec(authored);
   const stateSeed = createInitialAgenticLoopState({ spec: authored });
   let state: AgenticToolLoopState = {
@@ -461,15 +489,90 @@ async function runAgenticToolLoop(
     currentActor: leadActor,
     awaitingResponseFor: leadActor,
   };
-  const agentByActorKey = new Map<string, string>();
-  const wakeupCursorByActorKey = new Map<string, number>();
+  const agentSessionByActorKey = new Map<string, AgentSessionState>();
+  const deliveryCursorByActorKey = new Map<string, number>();
+  const waitCursorByActorKey = new Map<string, number>();
   const transcriptByActor = new Map<string, string>();
+  const waitTraceBuffer: WaitTraceEvent[] = [];
+  const pendingMutationByActorKey = new Map<string, Deferred<ObservedMutatingToolCall>>();
+  const pendingArmByActorKey = new Map<string, Deferred<void>>();
   const usage = createUsageAccumulator();
   const leaseStore = makeTurnLeaseStore(leadActor);
   const bearerToken = randomUUID();
   const workspaceCwd = options.workspaceCwd ?? process.cwd();
   const runRootDir = join(workspaceCwd, '.pluto', 'runs', kernel.state.runId);
-  let observedMutatingToolCall: ObservedMutatingToolCall | null = null;
+
+  const promptViewForActor = (actor: ActorRef) => buildPromptView({
+    spec: authored,
+    events: kernel.eventLog.read(0, kernel.eventLog.head + 1),
+    forActor: actor,
+    budgets: {
+      turnIndex: state.turnIndex,
+      maxTurns: state.maxTurns,
+      parseFailuresThisTurn: 0,
+      maxParseFailuresPerTurn: 0,
+      kernelRejections: state.kernelRejections,
+      maxKernelRejections: state.maxKernelRejections,
+      noProgressTurns: state.noProgressTurns,
+      maxNoProgressTurns: state.maxNoProgressTurns,
+    },
+    activeDelegation: state.delegationPointer,
+    lastRejection: state.lastRejection,
+  });
+
+  const pushWaitTrace = (event: WaitTraceEvent) => {
+    waitTraceBuffer.push(event);
+    if (waitTraceBuffer.length > 128) {
+      waitTraceBuffer.shift();
+    }
+
+    if (event.kind === 'wait_armed') {
+      pendingArmByActorKey.get(event.actor)?.resolve();
+    }
+  };
+
+  const waitRegistry = makeWaitRegistry({
+    events: () => kernel.eventLog.read(0, kernel.eventLog.head + 1),
+    getPromptViewForActor: promptViewForActor,
+    onTrace: pushWaitTrace,
+  });
+
+  const rememberDeliveredEvent = (actor: ActorRef, sequence: number) => {
+    const key = actorKey(actor);
+    deliveryCursorByActorKey.set(key, sequence);
+    waitCursorByActorKey.set(key, sequence);
+  };
+
+  const rememberActorMutationEvent = (actor: ActorRef, sequence: number) => {
+    waitCursorByActorKey.set(actorKey(actor), sequence);
+  };
+
+  const readAgentSnapshot = async (key: string, agentId: string) => {
+    const fullTranscript = await options.client.readTranscript(agentId, TRANSCRIPT_TAIL_LINES).catch(() => transcriptByActor.get(key) ?? '');
+    transcriptByActor.set(key, fullTranscript);
+    const usageEstimate = await options.client.usageEstimate(agentId).catch(() => ({}));
+    return { usageEstimate };
+  };
+
+  const startIdleWatcher = (key: string, session: AgentSessionState): Promise<AgentIdleOutcome> => {
+    const idlePromise = options.client.waitIdle(session.agentId, options.waitTimeoutSec)
+      .then((wait) => ({
+        exitCode: wait.exitCode,
+        failure: null,
+      }))
+      .catch((error) => ({
+        exitCode: 1,
+        failure: error instanceof Error ? error.message : String(error),
+      }));
+    session.idlePromise = idlePromise;
+    void idlePromise.finally(() => {
+      const current = agentSessionByActorKey.get(key);
+      if (current?.idlePromise === idlePromise) {
+        current.idlePromise = null;
+      }
+    });
+    return idlePromise;
+  };
 
   const handlers = makeObservedPlutoHandlers({
     baseHandlers: makePlutoToolHandlers({
@@ -501,23 +604,7 @@ async function runAgenticToolLoop(
       },
       promptViewer: {
         forActor(actor) {
-          return buildPromptView({
-            spec: authored,
-            events: kernel.eventLog.read(0, kernel.eventLog.head + 1),
-            forActor: actor,
-            budgets: {
-              turnIndex: state.turnIndex,
-              maxTurns: state.maxTurns,
-              parseFailuresThisTurn: 0,
-              maxParseFailuresPerTurn: 0,
-              kernelRejections: state.kernelRejections,
-              maxKernelRejections: state.maxKernelRejections,
-              noProgressTurns: state.noProgressTurns,
-              maxNoProgressTurns: state.maxNoProgressTurns,
-            },
-            activeDelegation: state.delegationPointer,
-            lastRejection: state.lastRejection,
-          });
+          return promptViewForActor(actor);
         },
       },
     }),
@@ -528,7 +615,12 @@ async function runAgenticToolLoop(
       }
 
       if (leaseStore.matches(call.actor)) {
-        observedMutatingToolCall = call;
+        pendingMutationByActorKey.get(actorKey(call.actor))?.resolve(call);
+      }
+
+      if (call.event != null && call.event.kind !== 'request_rejected') {
+        rememberActorMutationEvent(call.actor, call.event.sequence);
+        waitRegistry.notify(call.event, promptViewForActor);
       }
     },
   });
@@ -537,11 +629,27 @@ async function runAgenticToolLoop(
     bearerToken,
     handlers,
     leaseStore,
+    waitService: {
+      registry: waitRegistry,
+      cursorForActor(actor) {
+        const key = actorKey(actor);
+        return waitCursorByActorKey.get(key) ?? deliveryCursorByActorKey.get(key) ?? -1;
+      },
+      onEventDelivered: rememberDeliveredEvent,
+    },
   });
   const localApi = await startPlutoLocalApi({
     bearerToken,
     handlers,
     leaseStore,
+    waitService: {
+      registry: waitRegistry,
+      cursorForActor(actor) {
+        const key = actorKey(actor);
+        return waitCursorByActorKey.get(key) ?? deliveryCursorByActorKey.get(key) ?? -1;
+      },
+      onEventDelivered: rememberDeliveredEvent,
+    },
   });
 
   try {
@@ -561,23 +669,7 @@ async function runAgenticToolLoop(
       const actor = state.currentActor ?? leadActor;
       const key = actorKey(actor);
       const events = kernel.eventLog.read(0, kernel.eventLog.head + 1);
-      const promptView = buildPromptView({
-        spec: authored,
-        events,
-        forActor: actor,
-        budgets: {
-          turnIndex: state.turnIndex,
-          maxTurns: state.maxTurns,
-          parseFailuresThisTurn: 0,
-          maxParseFailuresPerTurn: 0,
-          kernelRejections: state.kernelRejections,
-          maxKernelRejections: state.maxKernelRejections,
-          noProgressTurns: state.noProgressTurns,
-          maxNoProgressTurns: state.maxNoProgressTurns,
-        },
-        activeDelegation: state.delegationPointer,
-        lastRejection: state.lastRejection,
-      });
+      const promptView = promptViewForActor(actor);
       const latestEvent = latestRunEvent(events);
       const handoff = {
         apiUrl: localApi.url,
@@ -597,69 +689,103 @@ async function runAgenticToolLoop(
       };
 
       leaseStore.setCurrent(actor);
-      observedMutatingToolCall = null;
+      const mutationDeferred = createDeferred<ObservedMutatingToolCall>();
+      const armDeferred = createDeferred<void>();
+      pendingMutationByActorKey.set(key, mutationDeferred);
+      pendingArmByActorKey.set(key, armDeferred);
 
-      let agentId = agentByActorKey.get(key);
-      const prompt = agentId == null
-        ? buildAgenticToolPrompt({
-            actor,
-            role: actor.kind === 'role' ? actor.role : null,
-            promptView,
-            playbook: authored.playbook,
-            userTask: authored.userTask ?? null,
-            toolNames: PLUTO_TOOL_NAMES,
-          })
-        : buildWakeupPrompt({
-            actor,
-            latestEvent,
-            delta: computeWakeupDelta({
-              events,
-              fromSequence: wakeupCursorByActorKey.get(key) ?? (() => {
-                throw new Error(`missing wakeup cursor for existing actor ${key}`);
-              })(),
-              forActor: actor,
-              currentPromptView: promptView,
-            }),
-          });
-      if (agentId == null) {
+      let session = agentSessionByActorKey.get(key);
+      const sessionBusy = session?.idlePromise != null;
+      if (session == null) {
+        const prompt = buildAgenticToolPrompt({
+          actor,
+          role: actor.kind === 'role' ? actor.role : null,
+          promptView,
+          playbook: authored.playbook,
+          userTask: authored.userTask ?? null,
+          toolNames: PLUTO_TOOL_NAMES,
+        });
         const injection = await prepareAgentInjection({
           runId: kernel.state.runId,
           actor,
           workspaceCwd,
         });
 
-        const session = await options.client.spawnAgent({
+        const spawnedSession = await options.client.spawnAgent({
           ...actorSpec,
           initialPrompt: prompt,
           ...(injection.cwd == null ? {} : { cwd: injection.cwd }),
         });
-        agentId = session.agentId;
-        agentByActorKey.set(key, agentId);
-        wakeupCursorByActorKey.set(key, latestEvent.sequence);
+        rememberDeliveredEvent(actor, latestEvent.sequence);
+        const sessionState: AgentSessionState = {
+          agentId: spawnedSession.agentId,
+          idlePromise: null,
+        };
+        agentSessionByActorKey.set(key, sessionState);
+        startIdleWatcher(key, sessionState);
+        session = sessionState;
       } else {
-        await options.client.sendPrompt(agentId, prompt);
-        wakeupCursorByActorKey.set(key, latestEvent.sequence);
+        if (!sessionBusy) {
+          if (session.idlePromise != null) {
+            await session.idlePromise;
+          }
+
+          const prompt = buildWakeupPrompt({
+            actor,
+            latestEvent,
+            delta: computeWakeupDelta({
+              events,
+              fromSequence: deliveryCursorByActorKey.get(key) ?? (() => {
+                throw new Error(`missing wakeup cursor for existing actor ${key}`);
+              })(),
+              forActor: actor,
+              currentPromptView: promptView,
+            }),
+          });
+          await options.client.sendPrompt(session.agentId, prompt);
+          rememberDeliveredEvent(actor, latestEvent.sequence);
+          startIdleWatcher(key, session);
+        }
       }
+
+      if (session == null || session.idlePromise == null) {
+        throw new Error(`missing active session for ${key}`);
+      }
+
+      const idlePromise = session.idlePromise;
 
       let waitExitCode = 0;
       let waitFailure: string | null = null;
-      try {
-        const wait = await options.client.waitIdle(agentId, options.waitTimeoutSec);
-        waitExitCode = wait.exitCode;
-      } catch (error) {
-        waitExitCode = 1;
-        waitFailure = error instanceof Error ? error.message : String(error);
-      }
+      let observed: ObservedMutatingToolCall | null = null;
+      const turnOutcome = await Promise.race([
+        mutationDeferred.promise.then((call) => ({ kind: 'mutation' as const, call })),
+        idlePromise.then((idle) => ({ kind: 'idle' as const, idle })),
+      ]);
+      pendingMutationByActorKey.delete(key);
 
-      const fullTranscript = await options.client.readTranscript(agentId, TRANSCRIPT_TAIL_LINES).catch(() => transcriptByActor.get(key) ?? '');
-      transcriptByActor.set(key, fullTranscript);
-      const usageEstimate = await options.client.usageEstimate(agentId).catch(() => ({}));
+      if (turnOutcome.kind === 'idle') {
+        waitExitCode = turnOutcome.idle.exitCode;
+        waitFailure = turnOutcome.idle.failure;
+      } else {
+        observed = turnOutcome.call;
+        const parkedOrIdle = await Promise.race([
+          idlePromise.then((idle) => ({ kind: 'idle' as const, idle })),
+          armDeferred.promise.then(() => ({ kind: 'armed' as const })),
+        ]);
+        if (parkedOrIdle.kind === 'idle') {
+          waitExitCode = parkedOrIdle.idle.exitCode;
+          waitFailure = parkedOrIdle.idle.failure;
+        }
+      }
+      pendingArmByActorKey.delete(key);
+
+      const snapshot = await readAgentSnapshot(key, session.agentId);
 
       usage.accumulate({
         turn: state.turnIndex,
         actor,
         waitExitCode,
-        ...usageEstimate,
+        ...snapshot.usageEstimate,
       });
 
       if (waitFailure != null || waitExitCode !== 0) {
@@ -683,7 +809,7 @@ async function runAgenticToolLoop(
         continue;
       }
 
-      if (observedMutatingToolCall == null) {
+      if (observed == null) {
         state = {
           ...state,
           currentActor: actor,
@@ -694,8 +820,6 @@ async function runAgenticToolLoop(
         };
         continue;
       }
-
-      const observed: ObservedMutatingToolCall = observedMutatingToolCall;
       const attemptedDirective = buildToolAttemptDirective(observed.toolName as (typeof MUTATING_TOOL_NAMES)[number], observed.rawArgs);
       if (!observed.result.ok) {
         const rejectionState = withKernelRejection(
@@ -783,13 +907,17 @@ async function runAgenticToolLoop(
       };
     }
   } finally {
+    waitRegistry.cancelAll('run_shutdown');
     leaseStore.setCurrent(null);
     await localApi.shutdown();
     await server.shutdown();
-    await cleanupAgents(options.client, agentByActorKey.values());
+    await cleanupAgents(options.client, Array.from(agentSessionByActorKey.values(), (session) => session.agentId));
   }
 
-  return usage.finalize();
+  return {
+    ...usage.finalize(),
+    waitTraces: waitTraceBuffer,
+  } satisfies AgenticToolUsageSummary;
 }
 
 export async function runPaseo<S>(
@@ -810,6 +938,7 @@ export async function runPaseo<S>(
   views: ProjectionViews;
   evidencePacket: EvidencePacket;
   usage: UsageSummary;
+  runtimeTraces: ReadonlyArray<WaitTraceEvent>;
 }> {
   if (!authored.declaredActors.includes('manager')) {
     throw new Error('runPaseo requires manager in declaredActors');
@@ -852,6 +981,7 @@ export async function runPaseo<S>(
       views,
       evidencePacket,
       usage,
+      runtimeTraces: usage.waitTraces,
     };
   }
 
@@ -933,5 +1063,6 @@ export async function runPaseo<S>(
     views,
     evidencePacket,
     usage: usage.finalize(),
+    runtimeTraces: [],
   };
 }

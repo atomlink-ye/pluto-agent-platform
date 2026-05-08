@@ -3,6 +3,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from 'node:ht
 
 import { ACTOR_ROLE_VALUES, ActorRefSchema, type ActorRef } from '@pluto/v2-core';
 
+import type { WaitRegistry } from './wait-registry.js';
 import type { PlutoToolHandlers } from '../mcp/pluto-mcp-server.js';
 import type { TurnLeaseStore } from '../mcp/turn-lease.js';
 import type { PlutoToolResult, PlutoToolSession } from '../tools/pluto-tool-handlers.js';
@@ -20,8 +21,10 @@ const MUTATING_TOOLS = new Set<PlutoToolName>([
 
 type LocalApiResponseKind = 'json' | 'artifact' | 'transcript';
 
+type LocalApiToolName = PlutoToolName | 'pluto_wait_for_event';
+
 type LocalApiRoute = {
-  readonly toolName: PlutoToolName;
+  readonly toolName: LocalApiToolName;
   readonly args: unknown;
   readonly responseKind: LocalApiResponseKind;
 };
@@ -32,10 +35,18 @@ export interface PlutoLocalApiConfig {
   bearerToken: string;
   handlers: PlutoToolHandlers;
   leaseStore: TurnLeaseStore;
+  waitService?: {
+    registry: WaitRegistry;
+    cursorForActor(actor: ActorRef): number;
+    onEventDelivered(actor: ActorRef, sequence: number): void;
+    defaultTimeoutSec?: number;
+    maxTimeoutSec?: number;
+    disconnectReason?: string;
+  };
   onRequest?: (request: {
     method: string;
     path: string;
-    toolName?: PlutoToolName;
+    toolName?: LocalApiToolName;
     lease?: ActorRef;
   }) => void;
 }
@@ -181,6 +192,47 @@ function statusCodeForToolError(result: Extract<PlutoToolResult, { ok: false }>)
   }
 }
 
+function parseWaitTimeoutSec(body: unknown, defaults?: { defaultTimeoutSec?: number; maxTimeoutSec?: number }): number {
+  const defaultTimeoutSec = defaults?.defaultTimeoutSec ?? 300;
+  const maxTimeoutSec = defaults?.maxTimeoutSec ?? 1200;
+  if (body == null) {
+    return defaultTimeoutSec;
+  }
+
+  if (typeof body !== 'object' || Array.isArray(body)) {
+    throw new Error('wait-for-event body must be a JSON object');
+  }
+
+  const timeoutSec = (body as { timeoutSec?: unknown }).timeoutSec;
+  if (timeoutSec == null) {
+    return defaultTimeoutSec;
+  }
+
+  if (typeof timeoutSec !== 'number' || !Number.isInteger(timeoutSec) || timeoutSec < 0 || timeoutSec > maxTimeoutSec) {
+    throw new Error(`timeoutSec must be an integer between 0 and ${maxTimeoutSec}`);
+  }
+
+  return timeoutSec;
+}
+
+async function waitForLease(args: {
+  leaseStore: TurnLeaseStore;
+  actor: ActorRef;
+  response: ServerResponse;
+}): Promise<boolean> {
+  while (!args.leaseStore.matches(args.actor)) {
+    if (args.response.writableEnded || args.response.destroyed) {
+      return false;
+    }
+
+    await new Promise((resolve) => {
+      setTimeout(resolve, 5);
+    });
+  }
+
+  return true;
+}
+
 function routeFor(method: string, pathname: string, body: unknown): LocalApiRoute | null {
   switch (`${method} ${pathname}`) {
     case 'POST /v1/tools/create-task':
@@ -210,6 +262,12 @@ function routeFor(method: string, pathname: string, body: unknown): LocalApiRout
     case 'POST /v1/tools/complete-run':
       return {
         toolName: 'pluto_complete_run',
+        args: body,
+        responseKind: 'json',
+      };
+    case 'POST /v1/tools/wait-for-event':
+      return {
+        toolName: 'pluto_wait_for_event',
         args: body,
         responseKind: 'json',
       };
@@ -261,7 +319,100 @@ async function runRoute(args: {
   config: PlutoLocalApiConfig;
   route: LocalApiRoute;
   session: PlutoToolSession;
+  request: IncomingMessage;
+  response: ServerResponse;
 }): Promise<{ status: number; body: unknown; contentType: 'json' | 'text' }> {
+  if (args.route.toolName === 'pluto_wait_for_event') {
+    const waitService = args.config.waitService;
+    if (waitService == null) {
+      return {
+        status: 503,
+        body: {
+          error: {
+            code: 'PLUTO_WAIT_UNAVAILABLE',
+            message: 'wait-for-event is not configured for this runtime.',
+          },
+        },
+        contentType: 'json',
+      };
+    }
+
+    const timeoutSec = parseWaitTimeoutSec(args.route.args, waitService);
+    const disconnectReason = waitService.disconnectReason ?? 'http_disconnect';
+    const socket = args.request.socket;
+    const onDisconnect = () => {
+      if (args.response.writableEnded || args.response.destroyed) {
+        return;
+      }
+
+      waitService.registry.cancelForActor(args.session.currentActor, disconnectReason);
+    };
+    const disconnectPoll = setInterval(() => {
+      if (socket?.destroyed || args.request.destroyed || args.response.destroyed) {
+        onDisconnect();
+      }
+    }, 25);
+    const onRequestClose = () => {
+      if (args.request.destroyed) {
+        onDisconnect();
+      }
+    };
+
+    args.request.once('aborted', onDisconnect);
+    args.request.once('close', onRequestClose);
+    args.response.once('close', onDisconnect);
+    socket?.once('close', onDisconnect);
+
+    try {
+      const result = await waitService.registry.arm({
+        actor: args.session.currentActor,
+        fromSequence: waitService.cursorForActor(args.session.currentActor),
+        timeoutMs: timeoutSec * 1000,
+      });
+
+      if (result.outcome === 'event') {
+        const hasLease = await waitForLease({
+          leaseStore: args.config.leaseStore,
+          actor: args.session.currentActor,
+          response: args.response,
+        });
+        if (!hasLease) {
+          return {
+            status: 200,
+            body: {
+              outcome: 'cancelled',
+              reason: disconnectReason,
+            },
+            contentType: 'json',
+          };
+        }
+
+        waitService.onEventDelivered(args.session.currentActor, result.payload.latestEvent.sequence);
+        return {
+          status: 200,
+          body: {
+            outcome: 'event',
+            latestEvent: result.payload.latestEvent,
+            delta: result.payload.delta,
+          },
+          contentType: 'json',
+        };
+      }
+
+      return {
+        status: 200,
+        body: result,
+        contentType: 'json',
+      };
+    } finally {
+      clearInterval(disconnectPoll);
+      args.request.off('aborted', onDisconnect);
+      args.request.off('close', onRequestClose);
+      args.response.off('close', onDisconnect);
+      socket?.off('close', onDisconnect);
+    }
+  }
+
   if (MUTATING_TOOLS.has(args.route.toolName) && !args.config.leaseStore.matches(args.session.currentActor)) {
     return {
       status: 409,
@@ -393,17 +544,22 @@ export async function startPlutoLocalApi(
     }
 
     try {
-      const result = await runRoute({
-        config,
-        route,
-        session: {
-          currentActor: parsedActor.actor,
-          isLead: isLeadActor(parsedActor.actor),
-        },
-      });
-      if (result.contentType === 'json') {
-        writeJson(response, result.status, result.body);
-        return;
+        const result = await runRoute({
+          config,
+          route,
+          request,
+          response,
+          session: {
+            currentActor: parsedActor.actor,
+            isLead: isLeadActor(parsedActor.actor),
+          },
+        });
+        if (response.writableEnded || response.destroyed) {
+          return;
+        }
+        if (result.contentType === 'json') {
+          writeJson(response, result.status, result.body);
+          return;
       }
 
       writeText(response, result.status, String(result.body));

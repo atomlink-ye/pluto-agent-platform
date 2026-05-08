@@ -135,8 +135,10 @@ describe('buildAgenticToolPrompt', () => {
     expect(prompt).toContain('## How to call Pluto tools');
     expect(prompt).toContain('pluto-tool create-task --owner=generator --title="Draft haiku v1"');
     expect(prompt).toContain('pluto-tool send-mailbox --to=lead --kind=completion --body="Draft attached: ..."');
+    expect(prompt).toContain('pluto-tool wait --timeout-sec=300');
     expect(prompt).toContain('pluto-tool read-transcript --actor-key=role:generator');
     expect(prompt).toContain('End your turn with EXACTLY ONE mutating Pluto tool call.');
+    expect(prompt).toContain('After that mutating call, prefer pluto-tool wait');
     expect(prompt).not.toContain('curl');
     expect(prompt).not.toContain('mcporter');
     expect(prompt).not.toContain('Bearer auth is preconfigured');

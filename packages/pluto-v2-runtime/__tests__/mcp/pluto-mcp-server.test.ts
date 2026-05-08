@@ -239,7 +239,7 @@ describe('startPlutoMcpServer', () => {
 
       const listResponse = await postMcp(handle.url, rpc('tools/list'));
       const listResult = expectRpcSuccess(listResponse) as { tools: Array<{ name: string }> };
-      expect(listResult.tools.map((tool) => tool.name)).toEqual([...PLUTO_TOOL_NAMES]);
+      expect(listResult.tools.map((tool) => tool.name)).toEqual([...PLUTO_TOOL_NAMES, 'pluto_wait_for_event']);
       expect(listResult.tools.every((tool) => tool.name.startsWith('pluto_'))).toBe(true);
     });
   });
