@@ -404,15 +404,24 @@ its **reasoning** can include arbitrary tool use first
 (reading the repo, reading artifact bodies, reading sub-actor
 transcripts on disk, etc.).
 
-The lead's prompt MUST set this expectation explicitly.
-Concrete framing line landed in T3-R3
-agentic-prompt-builder:
+The lead's prompt MUST set this expectation explicitly. The
+framing line (lifted from Claude Code's global instructions —
+the Claude-vetted version of the "lead-must-verify" principle)
+landed in T3-R3 `agentic-prompt-builder` for the **lead variant
+only**:
 
-> You have to understand the current status. Rather than just
-> trust the message.
+> Never delegate understanding. You stay responsible for what
+> success looks like and whether the run is meeting it. The
+> PromptView is a snapshot — verify it via tool use (read /
+> grep / bash / glob) when the situation is non-trivial.
 
-Sub-actors are also LLM agents (paseo-spawned), with the same
-tool-use power within their delegated turn.
+Sub-actors are also LLM agents (paseo-spawned) with the same
+tool-use power within their delegated turn, but they do NOT
+carry the "never delegate understanding" framing — that
+principle belongs to the orchestrator role. Sub-actor system
+instructions stay narrow ("You are the {role} actor on a Pluto
+v2 agentic run.") so they focus on executing their delegated
+turn.
 
 The 13 user stories below are read against this framing.
 
