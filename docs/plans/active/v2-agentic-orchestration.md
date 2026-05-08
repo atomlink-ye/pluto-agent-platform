@@ -419,7 +419,7 @@ exact replay oracle.
 
 | Slice | State | Branch | Evidence |
 |---|---|---|---|
-| T1 | Not started | — | — |
+| T1 | Done | `main` @ `b3873ce` | AuthoredSpec extensions (`orchestration?`, `userTask?`, `playbookRef?`) closed-strict + agentic-mode validation (lead/manager/userTask/playbookRef rejection paths). NEW `prompt-view.ts` (pure function from `replayAll(events)` projections; mailbox cap 50; sub-actor scoping; byte-stable). NEW `playbook-resolver.ts` (markdown loader; sha256). NEW shared evidence helpers `final-report-builder.ts` + `usage-summary-builder.ts` factored out of smoke-live; `usageStatus: 'reported'\|'unavailable'` flag added. CLI `pluto:run --spec` now writes full `.pluto/runs/<runId>/` directory (events.jsonl + projections + evidence + final-report + usage + transcripts) on BOTH success and failure paths; `--workspace` defaulting respected. Loader switched to `yaml.DEFAULT_SCHEMA` so numeric orchestration budgets parse correctly. Loader-typed `LoadedAuthoredSpec` carries playbook metadata (no more cast-only field). Total tests: core 186→196 (+10), runtime 65→85 (+20), root 32→34 (+2). 4 commits ahead of S7: `3824cac` initial + `ac0aa55` 7-objection fix-up + `de4f84f` closure artifacts + `b3873ce` REPORT wording. Discovery (local OpenCode @oracle + @council, READY_TO_PLAN; reconciled with external GPT Pro independent review). Acceptance R1 NEEDS_FIX (7 objections: playbook-metadata cast, run-dir workspace path, failed-run dir, YAML FAILSAFE, gate-6 stat assertion, diff-hygiene list, missing closure proofs) → R2 READY_TO_MERGE 2026-05-08. Zero v2-core kernel mutation; zero `paseo-adapter.ts` / `smoke-live.ts` / parity-fixture mutation |
 | T2 | Not started | — | — |
 | T3 | Not started | — | — |
 
@@ -444,4 +444,4 @@ For T1 → T2 → T3 in order:
 
 ## Last updated
 
-2026-05-08 — discovery + reconciliation done; T1 next.
+2026-05-08 — T1 merged at `main` @ `b3873ce`; T2 next.
