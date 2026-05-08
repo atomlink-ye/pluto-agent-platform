@@ -45,6 +45,30 @@ Tool surface:
 
 There is no text parser in the `agentic_tool` control plane. Model text is audit output only; state changes happen through validated tool calls.
 
+## Actor API
+
+T5-S1 introduced the stable actor handoff, T5-S2b added actor wait, and T5-S3a makes `pluto-tool` the canonical test and docs entrypoint for that contract.
+
+For `agentic_tool` runs, the runtime injects these env vars into each actor session:
+
+- `PLUTO_RUN_API_URL`
+- `PLUTO_RUN_TOKEN`
+- `PLUTO_RUN_ACTOR`
+
+Actors should call Pluto through `pluto-tool`, not by fabricating HTTP headers or bearer auth directly. The current CLI surface is:
+
+- `pluto-tool read-state`
+- `pluto-tool create-task --owner=<role|manager> --title=<text>`
+- `pluto-tool change-task-state --task-id=<id> --to=<state>`
+- `pluto-tool send-mailbox --to=<role|manager> --kind=<kind> --body=<text|@path>`
+- `pluto-tool publish-artifact --kind=<final|intermediate> --media-type=<mime> --byte-size=<n> [--body=<text|@path>]`
+- `pluto-tool complete-run --status=<succeeded|failed|cancelled> --summary=<text>`
+- `pluto-tool wait --timeout-sec=<0-1200>`
+
+`send-mailbox` is the CLI wrapper for the `append-mailbox-message` API tool. The CLI also exposes `read-artifact` and `read-transcript` for targeted evidence lookup.
+
+See `docs/notes/t5-d2b-wait-feasibility.md` and `docs/plans/active/v2-actor-loop-hardening.md` for the wait-path provenance and acceptance context.
+
 ## Live Smoke Knobs
 
 | Knob | Env Var | Purpose |
