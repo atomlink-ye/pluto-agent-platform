@@ -15,6 +15,7 @@ import {
   type ProtocolRequest,
   type ReplayViews,
   type RunEvent,
+  type RunState,
   type TeamContext,
 } from '@pluto/v2-core';
 import { actorKey } from '../../../../pluto-v2-core/src/core/team-context.js';
@@ -36,7 +37,7 @@ import { buildAgenticToolPrompt, buildWakeupPrompt } from './agentic-tool-prompt
 import { createInitialAgenticLoopState } from './agentic-loop-state.js';
 import { leadActorFromSpec, pickNextAgenticActor, withKernelRejection } from './agentic-scheduler.js';
 import { buildPromptView } from './prompt-view.js';
-import { planDelegatedTaskCloseout } from './task-closeout.js';
+import { planDelegatedTaskCloseout, type DelegatedTaskCloseoutPlan } from './task-closeout.js';
 import { computeWakeupDelta } from './wakeup-delta.js';
 
 export type PaseoLabel = `${string}=${string}`;
@@ -122,7 +123,7 @@ type UsageSummary = {
 };
 
 type AgenticToolUsageSummary = UsageSummary & {
-  waitTraces: ReadonlyArray<WaitTraceEvent>;
+  runtimeTraces: ReadonlyArray<RuntimeTraceEvent>;
 };
 
 type RuntimeAuthoredInput = AuthoredSpec | LoadedAuthoredSpec;
@@ -135,7 +136,28 @@ type ObservedMutatingToolCall = {
   rawArgs: unknown;
   result: PlutoToolResult;
   event: RunEvent | null;
+  plannedDelegatedTaskCloseout: DelegatedTaskCloseoutPlan | null;
+  deferredWaitNotifyEvent: RunEvent | null;
 };
+
+export type TaskCloseoutRejectedTraceEvent = {
+  readonly kind: 'task_closeout_rejected';
+  readonly actor: string;
+  readonly taskId: string;
+  readonly reason: string;
+};
+
+export type RuntimeTraceEvent = WaitTraceEvent | TaskCloseoutRejectedTraceEvent;
+
+class PaseoRuntimeError extends Error {
+  readonly runtimeTraces: ReadonlyArray<RuntimeTraceEvent>;
+
+  constructor(message: string, runtimeTraces: ReadonlyArray<RuntimeTraceEvent>) {
+    super(message);
+    this.name = 'PaseoRuntimeError';
+    this.runtimeTraces = runtimeTraces;
+  }
+}
 
 type AgentInjection = {
   cwd?: string;
@@ -438,6 +460,27 @@ function buildDiagnosticDirective(actor: ActorRef, body: string): AgenticMutatio
   } as AgenticMutation;
 }
 
+function planObservedDelegatedTaskCloseout(args: {
+  actor: ActorRef;
+  toolName: (typeof MUTATING_TOOL_NAMES)[number];
+  rawArgs: unknown;
+  acceptedEvent: RunEvent;
+  leadActor: ActorRef;
+  delegationPointer: ActorRef | null;
+  delegationTaskId: string | null;
+  runState: RunState;
+}): DelegatedTaskCloseoutPlan | null {
+  return planDelegatedTaskCloseout({
+    actor: args.actor,
+    acceptedEvent: args.acceptedEvent,
+    directive: buildToolAttemptDirective(args.toolName, args.rawArgs),
+    leadActor: args.leadActor,
+    delegationPointer: args.delegationPointer,
+    delegationTaskId: args.delegationTaskId,
+    runState: args.runState,
+  });
+}
+
 function toolErrorMessage(result: Extract<PlutoToolResult, { ok: false }>): string {
   return `${result.error.code}: ${result.error.message}`;
 }
@@ -462,6 +505,8 @@ function makeObservedPlutoHandlers(args: {
         rawArgs,
         result,
         event: lastEventSince(args.kernel, beforeEventCount),
+        plannedDelegatedTaskCloseout: null,
+        deferredWaitNotifyEvent: null,
       });
       return result;
     };
@@ -512,7 +557,7 @@ async function runAgenticToolLoop(
   const deliveryCursorByActorKey = new Map<string, number>();
   const waitCursorByActorKey = new Map<string, number>();
   const transcriptByActor = new Map<string, string>();
-  const waitTraceBuffer: WaitTraceEvent[] = [];
+  const runtimeTraceBuffer: RuntimeTraceEvent[] = [];
   const pendingMutationByActorKey = new Map<string, Deferred<ObservedMutatingToolCall>>();
   const pendingArmByActorKey = new Map<string, Deferred<void>>();
   const usage = createUsageAccumulator();
@@ -539,10 +584,10 @@ async function runAgenticToolLoop(
     lastRejection: state.lastRejection,
   });
 
-  const pushWaitTrace = (event: WaitTraceEvent) => {
-    waitTraceBuffer.push(event);
-    if (waitTraceBuffer.length > 128) {
-      waitTraceBuffer.shift();
+  const pushRuntimeTrace = (event: RuntimeTraceEvent) => {
+    runtimeTraceBuffer.push(event);
+    if (runtimeTraceBuffer.length > 128) {
+      runtimeTraceBuffer.shift();
     }
 
     if (event.kind === 'wait_armed') {
@@ -553,7 +598,7 @@ async function runAgenticToolLoop(
   const waitRegistry = makeWaitRegistry({
     events: () => kernel.eventLog.read(0, kernel.eventLog.head + 1),
     getPromptViewForActor: promptViewForActor,
-    onTrace: pushWaitTrace,
+    onTrace: pushRuntimeTrace,
   });
   const waitShutdownController = new AbortController();
 
@@ -630,6 +675,21 @@ async function runAgenticToolLoop(
     }),
     kernel,
     onObserved(call) {
+      const plannedDelegatedTaskCloseout = call.event != null && call.event.kind !== 'request_rejected'
+        ? planObservedDelegatedTaskCloseout({
+          actor: call.actor,
+          toolName: call.toolName as (typeof MUTATING_TOOL_NAMES)[number],
+          rawArgs: call.rawArgs,
+          acceptedEvent: call.event,
+          leadActor,
+          delegationPointer: state.delegationPointer,
+          delegationTaskId: state.delegationTaskId,
+          runState: kernel.state,
+        })
+        : null;
+      call.plannedDelegatedTaskCloseout = plannedDelegatedTaskCloseout;
+      call.deferredWaitNotifyEvent = plannedDelegatedTaskCloseout == null ? null : call.event;
+
       if (!MUTATING_TOOL_NAME_SET.has(call.toolName)) {
         return;
       }
@@ -640,7 +700,9 @@ async function runAgenticToolLoop(
 
       if (call.event != null && call.event.kind !== 'request_rejected') {
         rememberActorMutationEvent(call.actor, call.event.sequence);
-        waitRegistry.notify(call.event, promptViewForActor);
+        if (plannedDelegatedTaskCloseout == null) {
+          waitRegistry.notify(call.event, promptViewForActor);
+        }
       }
     },
   });
@@ -905,15 +967,17 @@ async function runAgenticToolLoop(
         continue;
       }
 
-      const synthesizedCloseout = planDelegatedTaskCloseout({
-        actor,
-        acceptedEvent: observed.event,
-        directive: attemptedDirective,
-        leadActor,
-        delegationPointer: state.delegationPointer,
-        delegationTaskId: state.delegationTaskId,
-        runState: kernel.state,
-      });
+      const synthesizedCloseout = observed.plannedDelegatedTaskCloseout
+        ?? planObservedDelegatedTaskCloseout({
+          actor,
+          toolName: observed.toolName as (typeof MUTATING_TOOL_NAMES)[number],
+          rawArgs: observed.rawArgs,
+          acceptedEvent: observed.event,
+          leadActor,
+          delegationPointer: state.delegationPointer,
+          delegationTaskId: state.delegationTaskId,
+          runState: kernel.state,
+        });
       if (synthesizedCloseout != null) {
         const synthesizedEvent = kernel.submit(
           buildChangeTaskStateRequest(
@@ -925,13 +989,25 @@ async function runAgenticToolLoop(
         ).event;
 
         if (synthesizedEvent.kind === 'request_rejected') {
-          throw new Error(
+          pushRuntimeTrace({
+            kind: 'task_closeout_rejected',
+            actor: actorKey(synthesizedCloseout.actor),
+            taskId: synthesizedCloseout.taskId,
+            reason: synthesizedEvent.payload.detail,
+          });
+          if (observed.deferredWaitNotifyEvent != null) {
+            waitRegistry.notify(observed.deferredWaitNotifyEvent, promptViewForActor);
+          }
+          throw new PaseoRuntimeError(
             `Driver-synthesized task close-out rejected for ${actorKey(synthesizedCloseout.actor)} task ${synthesizedCloseout.taskId}: ${synthesizedEvent.payload.detail}`,
+            runtimeTraceBuffer,
           );
         }
 
         rememberActorMutationEvent(synthesizedCloseout.actor, synthesizedEvent.sequence);
         waitRegistry.notify(synthesizedEvent, promptViewForActor);
+      } else if (observed.deferredWaitNotifyEvent != null) {
+        waitRegistry.notify(observed.deferredWaitNotifyEvent, promptViewForActor);
       }
 
       if (observed.toolName === 'pluto_complete_run' && observed.event.kind === 'run_completed') {
@@ -970,7 +1046,7 @@ async function runAgenticToolLoop(
 
   return {
     ...usage.finalize(),
-    waitTraces: waitTraceBuffer,
+    runtimeTraces: runtimeTraceBuffer,
   } satisfies AgenticToolUsageSummary;
 }
 
@@ -992,7 +1068,7 @@ export async function runPaseo<S>(
   views: ProjectionViews;
   evidencePacket: EvidencePacket;
   usage: UsageSummary;
-  runtimeTraces: ReadonlyArray<WaitTraceEvent>;
+  runtimeTraces: ReadonlyArray<RuntimeTraceEvent>;
 }> {
   if (!authored.declaredActors.includes('manager')) {
     throw new Error('runPaseo requires manager in declaredActors');
@@ -1035,7 +1111,7 @@ export async function runPaseo<S>(
       views,
       evidencePacket,
       usage,
-      runtimeTraces: usage.waitTraces,
+      runtimeTraces: usage.runtimeTraces,
     };
   }
 

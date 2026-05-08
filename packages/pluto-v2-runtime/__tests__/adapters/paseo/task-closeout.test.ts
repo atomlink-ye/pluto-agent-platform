@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 
 import { describe, expect, it, vi } from 'vitest';
 
-import { counterIdProvider, fixedClockProvider, type ActorRef, type RunEvent, type RunState } from '@pluto/v2-core';
+import { RunKernel, counterIdProvider, fixedClockProvider, type ActorRef, type RunEvent, type RunState } from '@pluto/v2-core';
 
 import type { AgenticMutation } from '../../../src/adapters/paseo/agentic-mutation.js';
 import { makePaseoAdapter } from '../../../src/adapters/paseo/paseo-adapter.js';
@@ -20,6 +20,7 @@ const TOOL_SCENARIO_PATH = fileURLToPath(
 
 const LEAD: ActorRef = { kind: 'role', role: 'lead' };
 const GENERATOR: ActorRef = { kind: 'role', role: 'generator' };
+const EVALUATOR: ActorRef = { kind: 'role', role: 'evaluator' };
 
 type PromptRecord = {
   actorKey: string;
@@ -249,11 +250,11 @@ async function runAgenticTool(script: readonly ToolScriptEntry[], specOverrides?
   }
 }
 
-function mailboxDirective(kind: 'plan' | 'completion' | 'final'): AgenticMutation {
+function mailboxDirective(kind: 'plan' | 'completion' | 'final', fromActor: ActorRef = GENERATOR): AgenticMutation {
   return {
     kind: 'append_mailbox_message',
     payload: {
-      fromActor: GENERATOR,
+      fromActor,
       toActor: LEAD,
       kind,
       body: `${kind} body`,
@@ -261,14 +262,14 @@ function mailboxDirective(kind: 'plan' | 'completion' | 'final'): AgenticMutatio
   };
 }
 
-function mailboxEvent(kind: 'plan' | 'completion' | 'final'): RunEvent {
+function mailboxEvent(kind: 'plan' | 'completion' | 'final', fromActor: ActorRef = GENERATOR): RunEvent {
   return {
     eventId: 'event-1',
     runId: 'run-1',
     sequence: 1,
     timestamp: FIXED_TIME,
     schemaVersion: '1.0',
-    actor: GENERATOR,
+    actor: fromActor,
     requestId: 'request-1',
     causationId: null,
     correlationId: null,
@@ -277,7 +278,7 @@ function mailboxEvent(kind: 'plan' | 'completion' | 'final'): RunEvent {
     kind: 'mailbox_message_appended',
     payload: {
       messageId: 'message-1',
-      fromActor: GENERATOR,
+      fromActor,
       toActor: LEAD,
       kind,
       body: `${kind} body`,
@@ -338,6 +339,18 @@ describe('task close-out synthesis planning', () => {
       leadActor: LEAD,
       delegationPointer: null,
       delegationTaskId: null,
+      runState: runStateWithTask('queued'),
+    })).toBeNull();
+  });
+
+  it('does not plan close-out when completion arrives from a different actor than the open delegation', () => {
+    expect(planDelegatedTaskCloseout({
+      actor: EVALUATOR,
+      acceptedEvent: mailboxEvent('completion', EVALUATOR),
+      directive: mailboxDirective('completion', EVALUATOR),
+      leadActor: LEAD,
+      delegationPointer: GENERATOR,
+      delegationTaskId: 'task-1',
       runState: runStateWithTask('queued'),
     })).toBeNull();
   });
@@ -467,6 +480,145 @@ describe('task close-out synthesis in the Paseo driver', () => {
       expect(execution.result.events.filter((event) => event.kind === 'request_rejected')).toEqual([]);
     } finally {
       await execution.cleanup();
+    }
+  });
+
+  it('wakes a parked lead with mailbox plus synthesized close-out and advances the wait cursor past both events', async () => {
+    const execution = await runAgenticTool([
+      {
+        actor: LEAD,
+        run: async ({ callTool }) => {
+          await callTool('pluto_create_task', {
+            title: 'Implement',
+            ownerActor: GENERATOR,
+            dependsOn: [],
+          });
+          const waited = await callTool('pluto_wait_for_event', { timeoutSec: 300 });
+          expect(waited.status).toBe(200);
+          expect(waited.body).toMatchObject({
+            outcome: 'event',
+            latestEvent: { kind: 'task_state_changed' },
+            delta: {
+              newMailbox: [
+                {
+                  kind: 'completion',
+                  from: GENERATOR,
+                  to: LEAD,
+                  body: 'Handled.',
+                },
+              ],
+              updatedTasks: [
+                {
+                  ownerActor: GENERATOR,
+                  state: 'completed',
+                },
+              ],
+            },
+          });
+          const waitedAgain = await callTool('pluto_wait_for_event', { timeoutSec: 0 });
+          expect(waitedAgain.status).toBe(200);
+          expect(waitedAgain.body).toEqual({ outcome: 'timeout' });
+          await callTool('pluto_complete_run', {
+            status: 'succeeded',
+            summary: 'done',
+          });
+          return { transcriptText: 'waited\nclosed\n' };
+        },
+      },
+      {
+        actor: GENERATOR,
+        run: async ({ callTool }) => {
+          await callTool('pluto_append_mailbox_message', {
+            toActor: LEAD,
+            kind: 'completion',
+            body: 'Handled.',
+          });
+          return { transcriptText: 'reported\n' };
+        },
+      },
+    ]);
+
+    try {
+      expect(execution.result.events.map((event) => event.kind)).toEqual([
+        'run_started',
+        'task_created',
+        'mailbox_message_appended',
+        'task_state_changed',
+        'run_completed',
+      ]);
+      expect(execution.result.runtimeTraces.map((trace) => trace.kind)).toEqual([
+        'wait_armed',
+        'wait_unblocked',
+        'wait_armed',
+        'wait_timed_out',
+      ]);
+    } finally {
+      await execution.cleanup();
+    }
+  });
+
+  it('emits a task_closeout_rejected trace before throwing on synthesized close-out rejection', async () => {
+    const originalSubmit = RunKernel.prototype.submit;
+    const submitSpy = vi.spyOn(RunKernel.prototype, 'submit').mockImplementation(function submit(this: RunKernel, rawRequest, ctx) {
+      const request = rawRequest as {
+        intent?: string;
+        actor?: ActorRef;
+        payload?: { taskId?: string; to?: string };
+      };
+      if (
+        request.intent === 'change_task_state'
+        && request.actor?.kind === 'role'
+        && request.actor.role === 'generator'
+        && request.payload?.to === 'completed'
+      ) {
+        return originalSubmit.call(this, {
+          ...request,
+          payload: {
+            ...request.payload,
+            taskId: 'missing-task-for-closeout-rejection-test',
+          },
+        }, ctx);
+      }
+
+      return originalSubmit.call(this, rawRequest, ctx);
+    });
+
+    try {
+      await expect(runAgenticTool([
+        {
+          actor: LEAD,
+          run: async ({ callTool }) => {
+            await callTool('pluto_create_task', {
+              title: 'Implement',
+              ownerActor: GENERATOR,
+              dependsOn: [],
+            });
+            return { transcriptText: 'delegated\n' };
+          },
+        },
+        {
+          actor: GENERATOR,
+          run: async ({ callTool }) => {
+            await callTool('pluto_append_mailbox_message', {
+              toActor: LEAD,
+              kind: 'completion',
+              body: 'Handled.',
+            });
+            return { transcriptText: 'reported\n' };
+          },
+        },
+      ])).rejects.toMatchObject({
+        message: expect.stringContaining('Driver-synthesized task close-out rejected'),
+        runtimeTraces: expect.arrayContaining([
+          expect.objectContaining({
+            kind: 'task_closeout_rejected',
+            actor: 'role:generator',
+            reason: 'Task missing-task-for-closeout-rejection-test is unknown.',
+          }),
+        ]),
+      });
+    } finally {
+      submitSpy.mockRestore();
     }
   });
 

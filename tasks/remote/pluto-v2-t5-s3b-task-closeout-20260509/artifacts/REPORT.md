@@ -59,3 +59,22 @@
 
 - `git push origin pluto/v2/t5-s3b-task-closeout` failed on repository auth.
 - Local manager push is still required.
+
+## Fix-up commit
+
+- BLOCKER fix option chosen: **A**.
+  - `packages/pluto-v2-runtime/src/adapters/paseo/run-paseo.ts:677-705` now plans close-out before `waitRegistry.notify(...)` and defers mailbox wakeups that will synthesize task completion.
+  - `packages/pluto-v2-runtime/src/adapters/paseo/run-paseo.ts:970-1010` now notifies parked waiters with the synthesized `task_state_changed` event on success, or falls back to the queued mailbox event when synthesis is rejected/not used.
+- NEEDS_FIX trace marker: `task_closeout_rejected`.
+  - Emitted at `packages/pluto-v2-runtime/src/adapters/paseo/run-paseo.ts:991-1004` immediately before the thrown runtime error, and carried on the thrown error's `runtimeTraces` payload.
+- NIT test added: `does not plan close-out when completion arrives from a different actor than the open delegation` in `packages/pluto-v2-runtime/__tests__/adapters/paseo/task-closeout.test.ts:346-355`.
+- Additional coverage added:
+  - parked lead wait payload now asserts both mailbox + synthesized close-out and a post-close-out timeout cursor advance in `packages/pluto-v2-runtime/__tests__/adapters/paseo/task-closeout.test.ts:486-550`
+  - synthesized rejection trace emission in `packages/pluto-v2-runtime/__tests__/adapters/paseo/task-closeout.test.ts:552-616`
+  - parked wait wake payload assertion updated in `packages/pluto-v2-runtime/__tests__/adapters/paseo/agentic-tool-loop.test.ts:449-520`
+- Updated gates:
+  - `pnpm --filter @pluto/v2-runtime typecheck`: pass
+  - `pnpm exec tsc -p tsconfig.json --noEmit`: pass
+  - `pnpm --filter @pluto/v2-runtime test`: 181/183 passed, 2 skipped
+  - `pnpm test`: 35/35 passed
+  - `pnpm install`: interactive reinstall prompt plus a pre-existing non-interactive `frozen-lockfile` mismatch on this checkout; no repo files were changed to satisfy that environment-only issue

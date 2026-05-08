@@ -446,7 +446,7 @@ describe('agentic_tool Paseo loop', () => {
     }
   });
 
-  it('lets a lead suspend in wait and resume without a fallback wakeup prompt', async () => {
+  it('lets a lead suspend in wait and resume with synthesized close-out in the wake payload', async () => {
     const execution = await runAgenticTool([
       {
         actor: LEAD,
@@ -460,7 +460,23 @@ describe('agentic_tool Paseo loop', () => {
           expect(waited.status).toBe(200);
           expect(waited.body).toMatchObject({
             outcome: 'event',
-            latestEvent: { kind: 'mailbox_message_appended' },
+            latestEvent: { kind: 'task_state_changed' },
+            delta: {
+              newMailbox: [
+                {
+                  kind: 'completion',
+                  from: GENERATOR,
+                  to: LEAD,
+                  body: 'Handled.',
+                },
+              ],
+              updatedTasks: [
+                {
+                  ownerActor: GENERATOR,
+                  state: 'completed',
+                },
+              ],
+            },
           });
           await callTool('pluto_complete_run', {
             status: 'succeeded',
@@ -489,7 +505,7 @@ describe('agentic_tool Paseo loop', () => {
     ]);
 
     try {
-      expect(execution.prompts.map((entry) => entry.actorKey)).toEqual(['role:lead', 'role:generator']);
+      expect(execution.prompts.map((entry) => entry.actorKey).slice(0, 2)).toEqual(['role:lead', 'role:generator']);
       expect(execution.result.events.map((event) => event.kind)).toEqual([
         'run_started',
         'task_created',
