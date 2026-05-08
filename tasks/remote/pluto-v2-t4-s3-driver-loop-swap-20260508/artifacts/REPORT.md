@@ -36,3 +36,26 @@
 - `extractDirective` is not used in the `agentic_tool` lane; coverage asserts that path stays out of the call graph.
 - The primary MCP injection path is the per-actor temp `opencode.json`; `OPENCODE_CONFIG_CONTENT` remains a fallback only if that file path cannot be created.
 - The branch still needs a successful authenticated `git push`, and the report force-add commit below will need the same operator-side push if auth remains unavailable.
+
+## Fix-up addendum
+
+- Summary: the lease store now tracks per-turn mutation consumption, the MCP server consumes that lease on the first mutating tool call, and later mutating calls in the same lease are rejected with `PLUTO_TURN_CONSUMED` before any handler or kernel mutation runs. Read tools remain unrestricted.
+- Files touched in this fix-up:
+  - `packages/pluto-v2-runtime/src/mcp/turn-lease.ts`
+  - `packages/pluto-v2-runtime/src/mcp/pluto-mcp-server.ts`
+  - `packages/pluto-v2-runtime/src/adapters/paseo/run-paseo.ts`
+  - `packages/pluto-v2-runtime/__tests__/mcp/turn-lease.test.ts`
+  - `packages/pluto-v2-runtime/__tests__/mcp/pluto-mcp-server.test.ts`
+  - `packages/pluto-v2-runtime/__tests__/adapters/paseo/agentic-tool-loop.test.ts`
+  - `tasks/remote/pluto-v2-t4-s3-driver-loop-swap-20260508/artifacts/REPORT.md`
+- Fix commit SHA: `24ca456`
+- Final branch SHA: recorded after the follow-up docs commit and push in the operator handoff/final response.
+- Test count delta: `+5` runtime tests (`turn-lease` +3, `pluto-mcp-server` +1, `agentic-tool-loop` +1).
+- Gates:
+  - Passed: `pnpm --filter @pluto/v2-core typecheck`
+  - Passed: `pnpm --filter @pluto/v2-runtime typecheck`
+  - Passed: `pnpm --filter @pluto/v2-runtime test -- turn-lease.test.ts pluto-mcp-server.test.ts agentic-tool-loop.test.ts agentic-tool-prompt-builder.test.ts`
+  - Passed: `pnpm --filter @pluto/v2-runtime test`
+  - Passed: `pnpm test`
+  - Passed: `pnpm --filter @pluto/v2-runtime build`
+  - Pre-existing out-of-scope failure remains: `pnpm exec tsc -p tsconfig.json --noEmit` at `src/cli/v2-cli-bridge.ts:416` (`LoadedAuthoredSpec` vs `AuthoredSpec` assignment on the branch as checked out; no runtime-package file in the allowed edit set owns that root typing mismatch).
