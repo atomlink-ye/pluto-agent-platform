@@ -555,7 +555,7 @@ async function runAgenticToolLoop(
     }),
     kernel,
     onObserved(call) {
-      if (!MUTATING_TOOL_NAME_SET.has(call.toolName) || observedMutatingToolCall !== null) {
+      if (!MUTATING_TOOL_NAME_SET.has(call.toolName)) {
         return;
       }
 

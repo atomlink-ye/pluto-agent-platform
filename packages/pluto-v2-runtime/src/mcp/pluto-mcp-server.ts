@@ -9,6 +9,8 @@ import type { TurnLeaseStore } from './turn-lease.js';
 
 const DEFAULT_PROTOCOL_VERSION = '2025-11-25';
 const ACTOR_HEADER = 'pluto-run-actor';
+const TURN_CONSUMED_RPC_ERROR_CODE = -32004;
+const TURN_CONSUMED_ERROR = 'PLUTO_TURN_CONSUMED';
 
 const MUTATING_TOOLS = new Set<PlutoToolName>([
   'pluto_create_task',
@@ -264,6 +266,19 @@ export async function startPlutoMcpServer(
                 -32001,
                 `Lease mismatch for ${requestedToolName}. Current mutating turn belongs to another actor.`,
                 {
+                  actor: parsedActor.actor,
+                  lease: config.leaseStore.current(),
+                },
+              );
+            }
+
+            if (MUTATING_TOOLS.has(requestedToolName) && !config.leaseStore.consumeMutation()) {
+              return rpcError(
+                rpcRequest.id,
+                TURN_CONSUMED_RPC_ERROR_CODE,
+                `${TURN_CONSUMED_ERROR}: First mutating tool call already consumed this turn.`,
+                {
+                  code: TURN_CONSUMED_ERROR,
                   actor: parsedActor.actor,
                   lease: config.leaseStore.current(),
                 },

@@ -4,6 +4,7 @@ export interface TurnLeaseStore {
   current(): ActorRef | null;
   setCurrent(actor: ActorRef | null): void;
   matches(actor: ActorRef): boolean;
+  consumeMutation(): boolean;
 }
 
 function sameActor(left: ActorRef, right: ActorRef): boolean {
@@ -20,6 +21,7 @@ function sameActor(left: ActorRef, right: ActorRef): boolean {
 
 export function makeTurnLeaseStore(initial: ActorRef | null = null): TurnLeaseStore {
   let currentActor = initial;
+  let mutationConsumed = false;
 
   return {
     current() {
@@ -28,10 +30,20 @@ export function makeTurnLeaseStore(initial: ActorRef | null = null): TurnLeaseSt
 
     setCurrent(actor) {
       currentActor = actor;
+      mutationConsumed = false;
     },
 
     matches(actor) {
       return currentActor !== null && sameActor(currentActor, actor);
+    },
+
+    consumeMutation() {
+      if (currentActor === null || mutationConsumed) {
+        return false;
+      }
+
+      mutationConsumed = true;
+      return true;
     },
   };
 }

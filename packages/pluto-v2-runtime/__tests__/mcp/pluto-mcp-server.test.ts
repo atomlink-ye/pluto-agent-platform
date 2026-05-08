@@ -286,6 +286,55 @@ describe('startPlutoMcpServer', () => {
     });
   });
 
+  it('rejects a second mutating tool call within the same lease after the first succeeds', async () => {
+    await withServer({ leaseActor: leadActor() }, async ({ handle, kernel }) => {
+      const submitSpy = vi.spyOn(kernel, 'submit');
+
+      const firstResponse = await postMcp(
+        handle.url,
+        rpc('tools/call', {
+          name: 'pluto_create_task',
+          arguments: {
+            title: 'First task',
+            ownerActor: { kind: 'role', role: 'lead' },
+            dependsOn: [],
+          },
+        }),
+        { actor: leadActor() },
+      );
+
+      expect(toolJson(expectRpcSuccess(firstResponse))).toMatchObject({
+        accepted: true,
+        taskId: expect.any(String),
+      });
+
+      const secondResponse = await postMcp(
+        handle.url,
+        rpc('tools/call', {
+          name: 'pluto_create_task',
+          arguments: {
+            title: 'Second task',
+            ownerActor: { kind: 'role', role: 'lead' },
+            dependsOn: [],
+          },
+        }),
+        { actor: leadActor() },
+      );
+
+      const error = expectRpcError(secondResponse);
+      expect(error.code).toBe(-32004);
+      expect(error.message).toContain('PLUTO_TURN_CONSUMED');
+      expect(error.data).toMatchObject({
+        code: 'PLUTO_TURN_CONSUMED',
+        actor: { kind: 'role', role: 'lead' },
+        lease: { kind: 'role', role: 'lead' },
+      });
+      expect(submitSpy).toHaveBeenCalledTimes(1);
+      expect(kernel.eventLog.read()).toHaveLength(1);
+      expect(kernel.eventLog.read()[0]?.kind).toBe('task_created');
+    });
+  });
+
   it('rejects pluto_create_task when the actor is outside the current lease', async () => {
     await withServer({ leaseActor: leadActor() }, async ({ handle, kernel }) => {
       const response = await postMcp(

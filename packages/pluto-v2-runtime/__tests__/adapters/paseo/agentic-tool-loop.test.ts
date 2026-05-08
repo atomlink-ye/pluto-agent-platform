@@ -119,6 +119,13 @@ function readInjectedConfig(spec: PaseoAgentSpec): { url: string; token: string 
   };
 }
 
+function toolResultJson(result: unknown) {
+  const toolResult = result as { content: Array<{ type: string; text: string }> };
+  const firstChunk = toolResult.content[0];
+  expect(firstChunk?.type).toBe('text');
+  return JSON.parse(firstChunk?.text ?? 'null');
+}
+
 function makeMcpAwareMockClient(script: readonly ToolScriptEntry[], prompts: PromptRecord[]) {
   const grouped = new Map<string, ToolScriptEntry[]>();
   const cursors = new Map<string, number>();
@@ -415,6 +422,59 @@ describe('agentic_tool Paseo loop', () => {
 
     expect(result.events.at(-1)?.kind).toBe('run_completed');
     expect(result.events.at(-1)?.payload).toMatchObject({ status: 'succeeded', summary: 'done' });
+  });
+
+  it('rejects a second mutating tool call within the same turn even if the first succeeded', async () => {
+    let firstResponse: ToolRpcResponse | null = null;
+    let secondResponse: ToolRpcResponse | null = null;
+
+    const { result } = await runAgenticTool([
+      {
+        actor: LEAD,
+        run: async ({ callTool }) => {
+          firstResponse = await callTool('pluto_create_task', {
+            title: 'Only task',
+            ownerActor: LEAD,
+            dependsOn: [],
+          });
+          secondResponse = await callTool('pluto_create_task', {
+            title: 'Blocked task',
+            ownerActor: LEAD,
+            dependsOn: [],
+          });
+          return { transcriptText: 'attempted two writes\n' };
+        },
+      },
+      {
+        actor: LEAD,
+        run: async ({ callTool }) => {
+          await callTool('pluto_complete_run', {
+            status: 'succeeded',
+            summary: 'closed after single write',
+          });
+          return { transcriptText: 'closed\n' };
+        },
+      },
+    ]);
+
+    expect(firstResponse).not.toBeNull();
+    expect(secondResponse).not.toBeNull();
+
+    expect(firstResponse!.status).toBe(200);
+    expect(firstResponse!.json.error).toBeUndefined();
+    expect(toolResultJson(firstResponse!.json.result)).toMatchObject({
+      accepted: true,
+      taskId: expect.any(String),
+    });
+
+    expect(secondResponse!.status).toBe(200);
+    expect(secondResponse!.json.error).toMatchObject({
+      code: -32004,
+      message: expect.stringContaining('PLUTO_TURN_CONSUMED'),
+    });
+
+    expect(result.events.map((event) => event.kind)).toEqual(['run_started', 'task_created', 'run_completed']);
+    expect(Object.keys(result.views.task.tasks)).toHaveLength(1);
   });
 
   it('surfaces sub-actor complete_run rejection and returns control to lead', async () => {

@@ -28,4 +28,29 @@ describe('makeTurnLeaseStore', () => {
     expect(store.current()).toEqual({ kind: 'role', role: 'lead' });
     expect(store.matches({ kind: 'role', role: 'lead' })).toBe(true);
   });
+
+  it('consumes the first mutation for the active lease', () => {
+    const store = makeTurnLeaseStore({ kind: 'role', role: 'lead' });
+
+    expect(store.consumeMutation()).toBe(true);
+  });
+
+  it('rejects a second mutation within the same lease', () => {
+    const store = makeTurnLeaseStore({ kind: 'role', role: 'lead' });
+
+    expect(store.consumeMutation()).toBe(true);
+    expect(store.consumeMutation()).toBe(false);
+  });
+
+  it('resets mutation consumption when the lease changes', () => {
+    const store = makeTurnLeaseStore({ kind: 'role', role: 'lead' });
+
+    expect(store.consumeMutation()).toBe(true);
+
+    store.setCurrent({ kind: 'role', role: 'generator' });
+    expect(store.consumeMutation()).toBe(true);
+
+    store.setCurrent(null);
+    expect(store.consumeMutation()).toBe(false);
+  });
 });
