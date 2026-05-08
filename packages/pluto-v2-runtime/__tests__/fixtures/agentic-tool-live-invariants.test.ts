@@ -117,4 +117,20 @@ describe('agentic_tool live smoke invariants', () => {
     expect(leadTranscript).not.toContain('curl');
     expect(leadTranscript).not.toContain('mcporter');
   });
+
+  it.skip('keeps post-bootstrap prompt sizes at or below thirty percent of the bootstrap prompt after recapture', () => {
+    const runId = readRunId();
+    const fixtureDir = join(FIXTURES_ROOT, runId, 'paseo-prompts');
+    const promptFiles = ['role:lead-turn-1.txt', 'role:lead-turn-2.txt', 'role:lead-turn-3.txt']
+      .map((fileName) => join(fixtureDir, fileName))
+      .filter((filePath) => existsSync(filePath));
+
+    expect(promptFiles.length).toBeGreaterThanOrEqual(2);
+
+    const bootstrapPrompt = readFileSync(promptFiles[0]!, 'utf8');
+    for (const promptFile of promptFiles.slice(1)) {
+      const wakeupPrompt = readFileSync(promptFile, 'utf8');
+      expect(wakeupPrompt.length).toBeLessThanOrEqual(bootstrapPrompt.length * 0.3);
+    }
+  });
 });

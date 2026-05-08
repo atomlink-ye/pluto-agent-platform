@@ -1,4 +1,4 @@
-import type { ActorRef } from '@pluto/v2-core';
+import type { ActorRef, RunEvent } from '@pluto/v2-core';
 
 import type { LoadedPlaybook } from '../../loader/authored-spec-loader.js';
 import { PLUTO_TOOL_DESCRIPTORS, type PlutoToolName } from '../../tools/pluto-tool-schemas.js';
@@ -12,6 +12,29 @@ export interface AgenticToolPromptInput {
   readonly userTask: string | null;
   readonly toolNames: ReadonlyArray<PlutoToolName>;
   readonly maxBytes?: number;
+}
+
+export type TaskView = PromptView['tasks'][number];
+export type MailboxMessageView = PromptView['mailbox'][number];
+export type ArtifactView = PromptView['artifacts'][number];
+export type PromptViewDelegation = PromptView['activeDelegation'];
+export type PromptViewBudgets = PromptView['budgets'];
+export type PromptViewRejection = PromptView['lastRejection'];
+
+export interface WakeupPromptDelta {
+  readonly newTasks: readonly TaskView[];
+  readonly updatedTasks: readonly TaskView[];
+  readonly newMailbox: readonly MailboxMessageView[];
+  readonly newArtifacts: readonly ArtifactView[];
+  readonly delegation: PromptViewDelegation;
+  readonly budgets: PromptViewBudgets;
+  readonly lastRejection: PromptViewRejection;
+}
+
+export interface WakeupPromptInput {
+  readonly actor: ActorRef;
+  readonly latestEvent: RunEvent;
+  readonly delta: WakeupPromptDelta;
 }
 
 export const DEFAULT_AGENTIC_TOOL_PROMPT_MAX_BYTES = 32 * 1024;
@@ -256,6 +279,57 @@ function turnRuleSection(actor: ActorRef): string {
   ].join('\n');
 }
 
+function actorRefForWakeup(actor: ActorRef | null): string | null {
+  if (actor == null) {
+    return null;
+  }
+
+  return actor.kind === 'role' ? `role:${actor.role}` : actor.kind;
+}
+
+function clampWakeupText(value: string, maxChars: number): string {
+  if (value.length <= maxChars) {
+    return value;
+  }
+
+  return `${value.slice(0, Math.max(0, maxChars - 16))}...[truncated]`;
+}
+
+function wakeupDeltaJson(delta: WakeupPromptDelta): string {
+  return JSON.stringify({
+    newTasks: delta.newTasks.map((task) => ([
+      task.id,
+      task.state,
+      actorRefForWakeup(task.ownerActor),
+      clampWakeupText(task.title, 44),
+    ])),
+    updatedTasks: delta.updatedTasks.map((task) => ([
+      task.id,
+      task.state,
+      actorRefForWakeup(task.ownerActor),
+      clampWakeupText(task.title, 44),
+    ])),
+    newMailbox: delta.newMailbox.map((message) => ([
+      message.sequence,
+      actorRefForWakeup(message.from),
+      actorRefForWakeup(message.to),
+      message.kind,
+      clampWakeupText(message.body, 44),
+    ])),
+    newArtifacts: delta.newArtifacts.map((artifact) => ([
+      artifact.id,
+      artifact.kind,
+      artifact.mediaType,
+      artifact.byteSize,
+    ])),
+    delegation: actorRefForWakeup(delta.delegation),
+    budgets: delta.budgets,
+    lastRejection: delta.lastRejection == null
+      ? null
+      : [delta.lastRejection.directive.kind, clampWakeupText(delta.lastRejection.error, 80)],
+  });
+}
+
 export function buildAgenticToolPrompt(input: AgenticToolPromptInput): string {
   const maxBytes = input.maxBytes ?? DEFAULT_AGENTIC_TOOL_PROMPT_MAX_BYTES;
   const roleLabel = input.role ?? (input.actor.kind === 'role' ? input.actor.role : null);
@@ -302,4 +376,16 @@ export function buildAgenticToolPrompt(input: AgenticToolPromptInput): string {
     `${playbookHeader}\n`,
     `PromptView JSON:\n${promptViewJsonCandidates.at(-1) ?? '{}'}`,
   ]);
+}
+
+export function buildWakeupPrompt(input: WakeupPromptInput): string {
+  return [
+    `[wakeup turn ${input.delta.budgets.turnIndex + 1}]`,
+    `new event: ${input.latestEvent.kind} from ${actorLabel(input.latestEvent.actor, null)}`,
+    '',
+    'delta:',
+    wakeupDeltaJson(input.delta),
+    '',
+    'end your turn with one mutating pluto-tool call.',
+  ].join('\n');
 }

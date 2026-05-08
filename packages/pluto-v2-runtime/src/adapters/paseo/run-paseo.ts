@@ -31,10 +31,11 @@ import type { RuntimeAdapter } from '../../runtime/runtime-adapter.js';
 import { makePlutoToolHandlers, type PlutoToolResult } from '../../tools/pluto-tool-handlers.js';
 import { PLUTO_TOOL_NAMES, type PlutoToolName } from '../../tools/pluto-tool-schemas.js';
 import type { AgenticMutation } from './agentic-mutation.js';
-import { buildAgenticToolPrompt } from './agentic-tool-prompt-builder.js';
+import { buildAgenticToolPrompt, buildWakeupPrompt } from './agentic-tool-prompt-builder.js';
 import { createInitialAgenticLoopState } from './agentic-loop-state.js';
 import { leadActorFromSpec, pickNextAgenticActor, withKernelRejection } from './agentic-scheduler.js';
 import { buildPromptView } from './prompt-view.js';
+import { computeWakeupDelta } from './wakeup-delta.js';
 
 export type PaseoLabel = `${string}=${string}`;
 
@@ -240,6 +241,15 @@ function buildCompleteRunRequest(
     clientTimestamp: options.clockProvider.nowIso(),
     schemaVersion: SCHEMA_VERSION,
   };
+}
+
+function latestRunEvent(events: readonly RunEvent[]): RunEvent {
+  const event = events.at(-1);
+  if (event == null) {
+    throw new Error('agentic_tool loop requires at least one run event');
+  }
+
+  return event;
 }
 
 function createUsageAccumulator() {
@@ -452,6 +462,7 @@ async function runAgenticToolLoop(
     awaitingResponseFor: leadActor,
   };
   const agentByActorKey = new Map<string, string>();
+  const wakeupCursorByActorKey = new Map<string, number>();
   const transcriptByActor = new Map<string, string>();
   const usage = createUsageAccumulator();
   const leaseStore = makeTurnLeaseStore(leadActor);
@@ -549,9 +560,10 @@ async function runAgenticToolLoop(
 
       const actor = state.currentActor ?? leadActor;
       const key = actorKey(actor);
+      const events = kernel.eventLog.read(0, kernel.eventLog.head + 1);
       const promptView = buildPromptView({
         spec: authored,
-        events: kernel.eventLog.read(0, kernel.eventLog.head + 1),
+        events,
         forActor: actor,
         budgets: {
           turnIndex: state.turnIndex,
@@ -566,14 +578,7 @@ async function runAgenticToolLoop(
         activeDelegation: state.delegationPointer,
         lastRejection: state.lastRejection,
       });
-      const prompt = buildAgenticToolPrompt({
-        actor,
-        role: actor.kind === 'role' ? actor.role : null,
-        promptView,
-        playbook: authored.playbook,
-        userTask: authored.userTask ?? null,
-        toolNames: PLUTO_TOOL_NAMES,
-      });
+      const latestEvent = latestRunEvent(events);
       const handoff = {
         apiUrl: localApi.url,
         bearerToken,
@@ -595,6 +600,27 @@ async function runAgenticToolLoop(
       observedMutatingToolCall = null;
 
       let agentId = agentByActorKey.get(key);
+      const prompt = agentId == null
+        ? buildAgenticToolPrompt({
+            actor,
+            role: actor.kind === 'role' ? actor.role : null,
+            promptView,
+            playbook: authored.playbook,
+            userTask: authored.userTask ?? null,
+            toolNames: PLUTO_TOOL_NAMES,
+          })
+        : buildWakeupPrompt({
+            actor,
+            latestEvent,
+            delta: computeWakeupDelta({
+              events,
+              fromSequence: wakeupCursorByActorKey.get(key) ?? (() => {
+                throw new Error(`missing wakeup cursor for existing actor ${key}`);
+              })(),
+              forActor: actor,
+              currentPromptView: promptView,
+            }),
+          });
       if (agentId == null) {
         const injection = await prepareAgentInjection({
           runId: kernel.state.runId,
@@ -609,8 +635,10 @@ async function runAgenticToolLoop(
         });
         agentId = session.agentId;
         agentByActorKey.set(key, agentId);
+        wakeupCursorByActorKey.set(key, latestEvent.sequence);
       } else {
         await options.client.sendPrompt(agentId, prompt);
+        wakeupCursorByActorKey.set(key, latestEvent.sequence);
       }
 
       let waitExitCode = 0;

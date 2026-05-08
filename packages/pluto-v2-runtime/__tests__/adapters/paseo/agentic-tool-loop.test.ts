@@ -94,6 +94,15 @@ function taskIdFromPrompt(prompt: string): string {
   return match[1];
 }
 
+function wakeupDeltaFromPrompt(prompt: string): Record<string, unknown> {
+  const match = prompt.match(/\ndelta:\n([\s\S]*)\n\nend your turn with one mutating pluto-tool call\.$/);
+  if (match?.[1] == null) {
+    throw new Error('wakeup delta not found in prompt');
+  }
+
+  return JSON.parse(match[1]) as Record<string, unknown>;
+}
+
 function readInjectedApi(spec: PaseoAgentSpec): { url: string; token: string; actor: string } {
   const url = spec.env?.PLUTO_RUN_API_URL;
   const token = spec.env?.PLUTO_RUN_TOKEN;
@@ -672,6 +681,108 @@ describe('agentic_tool Paseo loop', () => {
         'artifact_published',
         'mailbox_message_appended',
         'run_completed',
+      ]);
+    } finally {
+      await execution.cleanup();
+    }
+  });
+
+  it('thins repeat prompts to wakeup deltas and does not replay prior actor changes', async () => {
+    const execution = await runAgenticTool([
+      {
+        actor: LEAD,
+        run: async ({ callTool }) => {
+          await callTool('pluto_create_task', {
+            title: 'Implement',
+            ownerActor: GENERATOR,
+            dependsOn: [],
+          });
+          return { transcriptText: 'delegated\n' };
+        },
+      },
+      {
+        actor: GENERATOR,
+        run: async ({ prompt, callTool }) => {
+          await callTool('pluto_change_task_state', {
+            taskId: taskIdFromPrompt(prompt),
+            to: 'running',
+          });
+          return { transcriptText: 'started\n' };
+        },
+      },
+      {
+        actor: GENERATOR,
+        run: async ({ callTool }) => {
+          await callTool('pluto_publish_artifact', {
+            kind: 'intermediate',
+            mediaType: 'text/markdown',
+            byteSize: 128,
+            body: 'artifact body',
+          });
+          return { transcriptText: 'published\n' };
+        },
+      },
+      {
+        actor: GENERATOR,
+        run: async ({ callTool }) => {
+          await callTool('pluto_append_mailbox_message', {
+            toActor: LEAD,
+            kind: 'completion',
+            body: 'artifact ready',
+          });
+          return { transcriptText: 'reported\n' };
+        },
+      },
+      {
+        actor: LEAD,
+        run: async ({ callTool }) => {
+          await callTool('pluto_complete_run', {
+            status: 'succeeded',
+            summary: 'done',
+          });
+          return { transcriptText: 'closed\n' };
+        },
+      },
+    ]);
+
+    try {
+      const generatorPrompts = execution.prompts
+        .filter((entry) => entry.actorKey === 'role:generator')
+        .map((entry) => entry.prompt);
+      const leadWakeupPrompt = execution.prompts.at(-1)?.prompt ?? '';
+      const generatorBootstrap = generatorPrompts[0] ?? '';
+      const generatorWakeupOne = generatorPrompts[1] ?? '';
+      const generatorWakeupTwo = generatorPrompts[2] ?? '';
+      const firstWakeupDelta = wakeupDeltaFromPrompt(generatorWakeupOne);
+      const secondWakeupDelta = wakeupDeltaFromPrompt(generatorWakeupTwo);
+      const firstUpdatedTasks = firstWakeupDelta.updatedTasks as unknown[];
+      const secondUpdatedTasks = secondWakeupDelta.updatedTasks as unknown[];
+      const secondNewArtifacts = secondWakeupDelta.newArtifacts as unknown[];
+
+      expect(generatorPrompts).toHaveLength(3);
+      expect(generatorBootstrap).toContain('Available Pluto tools:');
+      expect(generatorWakeupOne).toContain('[wakeup turn');
+      expect(generatorWakeupTwo).toContain('[wakeup turn');
+      expect(generatorWakeupOne.length).toBeLessThan(generatorBootstrap.length * 0.3);
+      expect(generatorWakeupTwo.length).toBeLessThan(generatorBootstrap.length * 0.3);
+      for (const prompt of [generatorWakeupOne, generatorWakeupTwo, leadWakeupPrompt]) {
+        expect(prompt).not.toContain('Available Pluto tools');
+        expect(prompt).not.toContain('## How to call Pluto tools');
+        expect(prompt).not.toContain('Never delegate understanding');
+      }
+      expect(Array.isArray(firstUpdatedTasks)).toBe(true);
+      expect(firstUpdatedTasks[0]).toEqual([
+        expect.any(String),
+        'running',
+        'role:generator',
+        expect.any(String),
+      ]);
+      expect(secondUpdatedTasks).toEqual([]);
+      expect(secondNewArtifacts[0]).toEqual([
+        expect.any(String),
+        'intermediate',
+        'text/markdown',
+        128,
       ]);
     } finally {
       await execution.cleanup();
