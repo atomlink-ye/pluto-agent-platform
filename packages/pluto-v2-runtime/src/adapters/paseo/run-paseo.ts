@@ -19,6 +19,7 @@ import {
 } from '@pluto/v2-core';
 import { actorKey } from '../../../../pluto-v2-core/src/core/team-context.js';
 
+import { startPlutoLocalApi } from '../../api/pluto-local-api.js';
 import { assembleEvidencePacket, type EvidencePacket } from '../../evidence/evidence-packet.js';
 import type { UsageStatus } from '../../evidence/usage-summary-builder.js';
 import type { LoadedAuthoredSpec } from '../../loader/authored-spec-loader.js';
@@ -131,9 +132,13 @@ type ObservedMutatingToolCall = {
 
 type AgentInjection = {
   cwd?: string;
-  env?: Readonly<Record<string, string>>;
-  cleanupPath?: string;
 };
+
+export interface PaseoAgentEnvHandoff {
+  readonly apiUrl: string;
+  readonly bearerToken: string;
+  readonly actorKey: string;
+}
 
 const MUTATING_TOOL_NAMES = [
   'pluto_create_task',
@@ -415,57 +420,16 @@ function makeObservedPlutoHandlers(args: {
   };
 }
 
-function createOpencodeConfigPayload(mcpEndpoint: string, bearerToken: string) {
-  return {
-    $schema: 'https://opencode.ai/config.json',
-    mcp: {
-      pluto: {
-        type: 'remote',
-        url: mcpEndpoint,
-        enabled: true,
-        oauth: false,
-        headers: {
-          Authorization: `Bearer ${bearerToken}`,
-        },
-      },
-    },
-  };
-}
-
 async function prepareAgentInjection(args: {
   runId: string;
   actor: ActorRef;
-  mcpEndpoint: string;
-  bearerToken: string;
+  workspaceCwd: string;
 }): Promise<AgentInjection> {
-  const configPayload = createOpencodeConfigPayload(args.mcpEndpoint, args.bearerToken);
-  const configJson = JSON.stringify(configPayload, null, 2);
-  const actorDir = join(process.cwd(), '.pluto', 'runs', args.runId, 'agents', actorKey(args.actor));
-
-  try {
-    await mkdir(actorDir, { recursive: true });
-    await writeFile(join(actorDir, 'opencode.json'), configJson, 'utf8');
-    return {
-      cwd: actorDir,
-      cleanupPath: actorDir,
-    };
-  } catch {
-    return {
-      env: {
-        OPENCODE_CONFIG_CONTENT: JSON.stringify(configPayload),
-      },
-    };
-  }
-}
-
-async function cleanupPaths(paths: Iterable<string>): Promise<void> {
-  for (const path of paths) {
-    try {
-      await rm(path, { recursive: true, force: true });
-    } catch {
-      // Best-effort cleanup only.
-    }
-  }
+  const actorDir = join(args.workspaceCwd, '.pluto', 'runs', args.runId, 'agents', actorKey(args.actor));
+  await mkdir(actorDir, { recursive: true });
+  return {
+    cwd: actorDir,
+  };
 }
 
 async function runAgenticToolLoop(
@@ -475,8 +439,9 @@ async function runAgenticToolLoop(
     client: PaseoCliClient;
     idProvider: IdProvider;
     clockProvider: ClockProvider;
-    paseoAgentSpec: (actor: ActorRef) => PaseoAgentSpec;
+    paseoAgentSpec: (actor: ActorRef, handoff?: PaseoAgentEnvHandoff) => PaseoAgentSpec;
     waitTimeoutSec: number;
+    workspaceCwd?: string;
   },
 ): Promise<UsageSummary> {
   const leadActor = leadActorFromSpec(authored);
@@ -488,11 +453,11 @@ async function runAgenticToolLoop(
   };
   const agentByActorKey = new Map<string, string>();
   const transcriptByActor = new Map<string, string>();
-  const agentCleanupPaths = new Set<string>();
   const usage = createUsageAccumulator();
   const leaseStore = makeTurnLeaseStore(leadActor);
   const bearerToken = randomUUID();
-  const runRootDir = join(process.cwd(), '.pluto', 'runs', kernel.state.runId);
+  const workspaceCwd = options.workspaceCwd ?? process.cwd();
+  const runRootDir = join(workspaceCwd, '.pluto', 'runs', kernel.state.runId);
   let observedMutatingToolCall: ObservedMutatingToolCall | null = null;
 
   const handlers = makeObservedPlutoHandlers({
@@ -562,6 +527,11 @@ async function runAgenticToolLoop(
     handlers,
     leaseStore,
   });
+  const localApi = await startPlutoLocalApi({
+    bearerToken,
+    handlers,
+    leaseStore,
+  });
 
   try {
     for (;;) {
@@ -602,11 +572,13 @@ async function runAgenticToolLoop(
         promptView,
         playbook: authored.playbook,
         userTask: authored.userTask ?? null,
-        mcpEndpoint: server.url,
-        bearerToken,
         toolNames: PLUTO_TOOL_NAMES,
       });
-      const baseAgentSpec = options.paseoAgentSpec(actor);
+      const baseAgentSpec = options.paseoAgentSpec(actor, {
+        apiUrl: localApi.url,
+        bearerToken,
+        actorKey: key,
+      });
 
       leaseStore.setCurrent(actor);
       observedMutatingToolCall = null;
@@ -616,25 +588,13 @@ async function runAgenticToolLoop(
         const injection = await prepareAgentInjection({
           runId: kernel.state.runId,
           actor,
-          mcpEndpoint: server.url,
-          bearerToken,
+          workspaceCwd,
         });
-        if (injection.cleanupPath != null) {
-          agentCleanupPaths.add(injection.cleanupPath);
-        }
 
         const session = await options.client.spawnAgent({
           ...baseAgentSpec,
           initialPrompt: prompt,
           ...(injection.cwd == null ? {} : { cwd: injection.cwd }),
-          ...(injection.env == null
-            ? {}
-            : {
-                env: {
-                  ...(baseAgentSpec.env ?? {}),
-                  ...injection.env,
-                },
-              }),
         });
         agentId = session.agentId;
         agentByActorKey.set(key, agentId);
@@ -785,9 +745,9 @@ async function runAgenticToolLoop(
     }
   } finally {
     leaseStore.setCurrent(null);
+    await localApi.shutdown();
     await server.shutdown();
     await cleanupAgents(options.client, agentByActorKey.values());
-    await cleanupPaths(agentCleanupPaths);
   }
 
   return usage.finalize();
@@ -800,10 +760,11 @@ export async function runPaseo<S>(
     client: PaseoCliClient;
     idProvider: IdProvider;
     clockProvider: ClockProvider;
-    paseoAgentSpec: (actor: ActorRef) => PaseoAgentSpec;
+    paseoAgentSpec: (actor: ActorRef, handoff?: PaseoAgentEnvHandoff) => PaseoAgentSpec;
     correlationId?: string | null;
     maxSteps?: number;
     waitTimeoutSec?: number;
+    workspaceCwd?: string;
   },
 ): Promise<{
   events: ReadonlyArray<RunEvent>;
@@ -841,6 +802,7 @@ export async function runPaseo<S>(
       clockProvider: options.clockProvider,
       paseoAgentSpec: options.paseoAgentSpec,
       waitTimeoutSec: options.waitTimeoutSec ?? DEFAULT_WAIT_TIMEOUT_SEC,
+      workspaceCwd: options.workspaceCwd,
     });
     const events = stripAcceptedRequestKey(kernel.eventLog.read(0, kernel.eventLog.head + 1));
     const views = replayAll(events);

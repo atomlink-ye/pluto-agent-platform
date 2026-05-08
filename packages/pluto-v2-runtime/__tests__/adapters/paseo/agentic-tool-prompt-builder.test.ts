@@ -90,8 +90,6 @@ function buildPrompt(actor: ActorRef): string {
     },
     playbook: PLAYBOOK,
     userTask: BASE_PROMPT_VIEW.userTask,
-    mcpEndpoint: 'http://127.0.0.1:43123/mcp',
-    bearerToken: 'token-123',
     toolNames: PLUTO_TOOL_NAMES,
   });
 }
@@ -127,14 +125,22 @@ describe('buildAgenticToolPrompt', () => {
     }
   });
 
-  it('lists Pluto tools and the exact one-write turn rule', () => {
+  it('shows literal pluto-tool usage without leaking curl, mcporter, token, or URL details', () => {
     const prompt = buildPrompt(LEAD);
 
     expect(prompt).toContain('Available Pluto tools:');
     expect(prompt).toContain('pluto_create_task');
     expect(prompt).toContain('pluto_complete_run');
     expect(prompt).toContain('pluto_read_transcript');
+    expect(prompt).toContain('## How to call Pluto tools');
+    expect(prompt).toContain('pluto-tool create-task --owner=generator --title="Draft haiku v1"');
+    expect(prompt).toContain('pluto-tool send-mailbox --to=lead --kind=completion --body="Draft attached: ..."');
+    expect(prompt).toContain('pluto-tool read-transcript --actor-key=role:generator');
     expect(prompt).toContain('End your turn with EXACTLY ONE mutating Pluto tool call.');
-    expect(prompt).toContain('Pluto MCP endpoint: http://127.0.0.1:43123/mcp');
+    expect(prompt).not.toContain('curl');
+    expect(prompt).not.toContain('mcporter');
+    expect(prompt).not.toContain('Bearer auth is preconfigured');
+    expect(prompt).not.toContain('token-123');
+    expect(prompt).not.toContain('http://127.0.0.1');
   });
 });

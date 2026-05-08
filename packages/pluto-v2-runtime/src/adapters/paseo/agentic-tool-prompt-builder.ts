@@ -10,8 +10,6 @@ export interface AgenticToolPromptInput {
   readonly promptView: PromptView;
   readonly playbook: LoadedPlaybook | null;
   readonly userTask: string | null;
-  readonly mcpEndpoint: string;
-  readonly bearerToken: string;
   readonly toolNames: ReadonlyArray<PlutoToolName>;
   readonly maxBytes?: number;
 }
@@ -206,6 +204,32 @@ function toolSection(toolNames: ReadonlyArray<PlutoToolName>): string {
   ].join('\n');
 }
 
+function toolCallSection(): string {
+  return [
+    '## How to call Pluto tools',
+    '',
+    'You have a CLI tool named `pluto-tool` available in your shell.',
+    'It is already configured for this run. Auth and actor identity',
+    'are bound from the shell environment, so you do not need to pass',
+    'tokens, headers, or URLs yourself.',
+    '',
+    'Examples:',
+    '',
+    '  pluto-tool create-task --owner=generator --title="Draft haiku v1"',
+    '  pluto-tool send-mailbox --to=lead --kind=completion --body="Draft attached: ..."',
+    '  pluto-tool change-task-state --task-id=<id> --to=completed',
+    '  pluto-tool publish-artifact --kind=final --media-type=text/plain --byte-size=64 --body="..."',
+    '  pluto-tool complete-run --status=succeeded --summary="<one-sentence>"',
+    '  pluto-tool read-state',
+    '  pluto-tool read-artifact --artifact-id=<id>',
+    '  pluto-tool read-transcript --actor-key=role:generator',
+    '',
+    'Run `pluto-tool --help` or `pluto-tool <subcommand> --help` for',
+    'flag details. Output is JSON by default; pass --format=text for a',
+    'short human summary.',
+  ].join('\n');
+}
+
 function promptHeader(actor: ActorRef, role: string | null): string {
   if (isLeadActor(actor)) {
     return 'You are the lead actor for a Pluto v2 tool-driven run.';
@@ -246,18 +270,12 @@ export function buildAgenticToolPrompt(input: AgenticToolPromptInput): string {
     ? `User task:\n${input.userTask}`
     : '';
   const playbookHeader = isLeadActor(input.actor) ? 'Playbook:' : `Playbook for ${actorLabel(input.actor, roleLabel)}:`;
-  const connectionSection = [
-    `Pluto MCP endpoint: ${input.mcpEndpoint}`,
-    input.bearerToken.trim().length > 0
-      ? 'Bearer auth is preconfigured for this session.'
-      : 'Bearer auth is unavailable for this session.',
-  ].join('\n');
   const fixedSections = [
     promptHeader(input.actor, roleLabel),
     isLeadActor(input.actor) ? LEAD_FRAMING : '',
     userTaskSection,
     toolSection(input.toolNames),
-    connectionSection,
+    toolCallSection(),
     turnRuleSection(input.actor),
   ];
 

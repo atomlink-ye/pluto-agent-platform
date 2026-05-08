@@ -1,4 +1,6 @@
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync } from 'node:fs';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -24,29 +26,31 @@ type PromptRecord = {
   cwd?: string;
 };
 
-type ToolRpcResponse = {
+type ToolHttpResponse = {
   readonly status: number;
-  readonly json: {
-    readonly result?: unknown;
-    readonly error?: {
-      readonly code: number;
-      readonly message: string;
-      readonly data?: unknown;
-    };
-  };
+  readonly body: unknown;
+  readonly text: string;
 };
 
 type ToolTurnContext = {
   readonly actor: ActorRef;
   readonly prompt: string;
   readonly spec: PaseoAgentSpec;
-  callTool(toolName: string, args: unknown): Promise<ToolRpcResponse>;
+  callTool(toolName: string, args: unknown): Promise<ToolHttpResponse>;
 };
 
 type ToolScriptEntry = {
   readonly actor: ActorRef;
   readonly run: (context: ToolTurnContext) => Promise<{ transcriptText?: string; waitExitCode?: number }>;
   readonly usage?: Required<PaseoUsageEstimate>;
+};
+
+type AgenticToolExecution = {
+  readonly prompts: PromptRecord[];
+  readonly result: Awaited<ReturnType<typeof runPaseo>>;
+  readonly spawnSpecs: PaseoAgentSpec[];
+  readonly workspaceCwd: string;
+  readonly cleanup: () => Promise<void>;
 };
 
 function actorKey(actor: ActorRef): string {
@@ -90,39 +94,15 @@ function taskIdFromPrompt(prompt: string): string {
   return match[1];
 }
 
-function readInjectedConfig(spec: PaseoAgentSpec): { url: string; token: string } {
-  const configText = spec.cwd != null && existsSync(join(spec.cwd, 'opencode.json'))
-    ? readFileSync(join(spec.cwd, 'opencode.json'), 'utf8')
-    : spec.env?.OPENCODE_CONFIG_CONTENT;
-  if (configText == null) {
-    throw new Error('missing MCP config injection');
+function readInjectedApi(spec: PaseoAgentSpec): { url: string; token: string; actor: string } {
+  const url = spec.env?.PLUTO_RUN_API_URL;
+  const token = spec.env?.PLUTO_RUN_TOKEN;
+  const actor = spec.env?.PLUTO_RUN_ACTOR;
+  if (typeof url !== 'string' || typeof token !== 'string' || typeof actor !== 'string') {
+    throw new Error('missing run API env handoff');
   }
 
-  const parsed = JSON.parse(configText) as {
-    mcp?: {
-      pluto?: {
-        url?: string;
-        headers?: { Authorization?: string };
-      };
-    };
-  };
-  const url = parsed.mcp?.pluto?.url;
-  const authorization = parsed.mcp?.pluto?.headers?.Authorization;
-  if (typeof url !== 'string' || typeof authorization !== 'string' || !authorization.startsWith('Bearer ')) {
-    throw new Error('invalid MCP config payload');
-  }
-
-  return {
-    url,
-    token: authorization.slice('Bearer '.length),
-  };
-}
-
-function toolResultJson(result: unknown) {
-  const toolResult = result as { content: Array<{ type: string; text: string }> };
-  const firstChunk = toolResult.content[0];
-  expect(firstChunk?.type).toBe('text');
-  return JSON.parse(firstChunk?.text ?? 'null');
+  return { url, token, actor };
 }
 
 function makeMcpAwareMockClient(script: readonly ToolScriptEntry[], prompts: PromptRecord[]) {
@@ -131,7 +111,6 @@ function makeMcpAwareMockClient(script: readonly ToolScriptEntry[], prompts: Pro
   const cumulativeTranscript = new Map<string, string>();
   const promptByActor = new Map<string, string>();
   const specByActor = new Map<string, PaseoAgentSpec>();
-  const initializedAgents = new Set<string>();
   const spawnSpecs: PaseoAgentSpec[] = [];
 
   for (const entry of script) {
@@ -141,59 +120,56 @@ function makeMcpAwareMockClient(script: readonly ToolScriptEntry[], prompts: Pro
     grouped.set(key, entries);
   }
 
-  async function postJson(spec: PaseoAgentSpec, actor: ActorRef, body: unknown): Promise<ToolRpcResponse> {
-    const { url, token } = readInjectedConfig(spec);
-    const response = await fetch(url, {
-      method: 'POST',
-      headers: {
-        authorization: `Bearer ${token}`,
-        'content-type': 'application/json',
-        'mcp-protocol-version': '2025-11-25',
-        'Pluto-Run-Actor': JSON.stringify(actor),
-      },
-      body: JSON.stringify(body),
-    });
-    const text = await response.text();
-    return {
-      status: response.status,
-      json: text.length === 0 ? {} : JSON.parse(text) as ToolRpcResponse['json'],
-    };
-  }
-
-  async function callTool(agentId: string, actor: ActorRef, toolName: string, args: unknown): Promise<ToolRpcResponse> {
+  async function callTool(agentId: string, toolName: string, args: unknown): Promise<ToolHttpResponse> {
     const spec = specByActor.get(agentId);
     if (spec == null) {
       throw new Error(`missing spec for ${agentId}`);
     }
 
-    if (!initializedAgents.has(agentId)) {
-      await postJson(spec, actor, {
-        jsonrpc: '2.0',
-        id: 1,
-        method: 'initialize',
-        params: { protocolVersion: '2025-11-25', capabilities: {} },
-      });
-      await postJson(spec, actor, {
-        jsonrpc: '2.0',
-        method: 'notifications/initialized',
-      });
-      await postJson(spec, actor, {
-        jsonrpc: '2.0',
-        id: 2,
-        method: 'tools/list',
-      });
-      initializedAgents.add(agentId);
-    }
+    const { url, token, actor } = readInjectedApi(spec);
+    const route = (() => {
+      switch (toolName) {
+        case 'pluto_create_task':
+          return { method: 'POST' as const, path: '/tools/create-task', body: args };
+        case 'pluto_change_task_state':
+          return { method: 'POST' as const, path: '/tools/change-task-state', body: args };
+        case 'pluto_append_mailbox_message':
+          return { method: 'POST' as const, path: '/tools/append-mailbox-message', body: args };
+        case 'pluto_publish_artifact':
+          return { method: 'POST' as const, path: '/tools/publish-artifact', body: args };
+        case 'pluto_complete_run':
+          return { method: 'POST' as const, path: '/tools/complete-run', body: args };
+        case 'pluto_read_state':
+          return { method: 'GET' as const, path: '/state' };
+        case 'pluto_read_artifact':
+          return { method: 'GET' as const, path: `/artifacts/${encodeURIComponent(String((args as { artifactId: string }).artifactId))}` };
+        case 'pluto_read_transcript':
+          return { method: 'GET' as const, path: `/transcripts/${encodeURIComponent(String((args as { actorKey: string }).actorKey))}` };
+        default:
+          throw new Error(`unsupported tool ${toolName}`);
+      }
+    })();
 
-    return postJson(spec, actor, {
-      jsonrpc: '2.0',
-      id: 3,
-      method: 'tools/call',
-      params: {
-        name: toolName,
-        arguments: args,
+    const response = await fetch(`${url}${route.path}`, {
+      method: route.method,
+      headers: {
+        authorization: `Bearer ${token}`,
+        'Pluto-Run-Actor': actor,
+        ...(route.method === 'POST' ? { 'content-type': 'application/json' } : {}),
       },
+      ...(route.method === 'POST' ? { body: JSON.stringify(route.body) } : {}),
     });
+    const text = await response.text();
+
+    return {
+      status: response.status,
+      body: text.length === 0
+        ? null
+        : (response.headers.get('content-type') ?? '').includes('application/json')
+          ? JSON.parse(text)
+          : text,
+      text,
+    };
   }
 
   const client: PaseoCliClient = {
@@ -224,7 +200,7 @@ function makeMcpAwareMockClient(script: readonly ToolScriptEntry[], prompts: Pro
         actor: entry.actor,
         prompt: promptByActor.get(key) ?? '',
         spec,
-        callTool: (toolName, args) => callTool(agentId, entry.actor, toolName, args),
+        callTool: (toolName, toolArgs) => callTool(agentId, toolName, toolArgs),
       });
       cumulativeTranscript.set(
         key,
@@ -247,36 +223,50 @@ function makeMcpAwareMockClient(script: readonly ToolScriptEntry[], prompts: Pro
   return { client, spawnSpecs };
 }
 
-async function runAgenticTool(script: readonly ToolScriptEntry[], specOverrides?: Partial<LoadedAuthoredSpec>) {
+async function runAgenticTool(script: readonly ToolScriptEntry[], specOverrides?: Partial<LoadedAuthoredSpec>): Promise<AgenticToolExecution> {
   const prompts: PromptRecord[] = [];
   const spec = buildSpec(specOverrides);
   const mock = makeMcpAwareMockClient(script, prompts);
-  const result = await runPaseo(
-    spec,
-    makePaseoAdapter({
-      idProvider: counterIdProvider(100),
-      clockProvider: fixedClockProvider(FIXED_TIME),
-    }),
-    {
-      client: mock.client,
-      idProvider: counterIdProvider(1),
-      clockProvider: fixedClockProvider(FIXED_TIME),
-      paseoAgentSpec: (actor) => ({
-        provider: 'opencode',
-        model: 'openai/gpt-5.4',
-        mode: 'build',
-        title: actorKey(actor),
-        initialPrompt: `bootstrap for ${actorKey(actor)}`,
-      }),
-    },
-  );
+  const workspaceCwd = await mkdtemp(join(tmpdir(), 'pluto-agentic-tool-'));
 
-  return { prompts, result, spawnSpecs: mock.spawnSpecs };
+  try {
+    const result = await runPaseo(
+      spec,
+      makePaseoAdapter({
+        idProvider: counterIdProvider(100),
+        clockProvider: fixedClockProvider(FIXED_TIME),
+      }),
+      {
+        client: mock.client,
+        idProvider: counterIdProvider(1),
+        clockProvider: fixedClockProvider(FIXED_TIME),
+        paseoAgentSpec: (actor) => ({
+          provider: 'opencode',
+          model: 'openai/gpt-5.4',
+          mode: 'build',
+          title: actorKey(actor),
+          initialPrompt: `bootstrap for ${actorKey(actor)}`,
+        }),
+        workspaceCwd,
+      },
+    );
+
+    return {
+      prompts,
+      result,
+      spawnSpecs: mock.spawnSpecs,
+      workspaceCwd,
+      cleanup: () => rm(workspaceCwd, { recursive: true, force: true }),
+    };
+  } catch (error) {
+    await rm(workspaceCwd, { recursive: true, force: true });
+    throw error;
+  }
 }
 
 describe('agentic_tool Paseo loop', () => {
-  it('delegates from lead by task creation and cleans up per-actor cwd injection', async () => {
-    const { prompts, result, spawnSpecs } = await runAgenticTool([
+  it('delegates from lead by task creation and uses env handoff in per-actor cwd dirs', async () => {
+    const execution = await runAgenticTool([
       {
         actor: LEAD,
         run: async ({ callTool }) => {
@@ -285,7 +275,7 @@ describe('agentic_tool Paseo loop', () => {
             ownerActor: GENERATOR,
             dependsOn: [],
           });
-          return { transcriptText: 'lead delegated\n' };
+          return { transcriptText: 'pluto-tool create-task --owner=generator --title="Draft the change"\n' };
         },
       },
       {
@@ -296,7 +286,7 @@ describe('agentic_tool Paseo loop', () => {
             kind: 'completion',
             body: 'Draft is ready.',
           });
-          return { transcriptText: 'generator completed\n' };
+          return { transcriptText: 'pluto-tool send-mailbox --to=lead --kind=completion --body="Draft is ready."\n' };
         },
       },
       {
@@ -306,30 +296,45 @@ describe('agentic_tool Paseo loop', () => {
             status: 'succeeded',
             summary: 'done',
           });
-          return { transcriptText: 'lead closed\n' };
+          return { transcriptText: 'pluto-tool complete-run --status=succeeded --summary="done"\n' };
         },
       },
     ]);
 
-    expect(prompts.map((entry) => entry.actorKey)).toEqual(['role:lead', 'role:generator', 'role:lead']);
-    expect(result.events.map((event) => event.kind)).toEqual([
-      'run_started',
-      'task_created',
-      'mailbox_message_appended',
-      'run_completed',
-    ]);
-    expect(spawnSpecs.map((spec) => spec.cwd)).toEqual([
-      expect.stringContaining('.pluto/runs/run-hello-team-agentic-tool-mock/agents/role:lead'),
-      expect.stringContaining('.pluto/runs/run-hello-team-agentic-tool-mock/agents/role:generator'),
-    ]);
-    for (const spec of spawnSpecs) {
-      expect(spec.cwd).toBeDefined();
-      expect(existsSync(spec.cwd ?? '')).toBe(false);
+    try {
+      expect(execution.prompts.map((entry) => entry.actorKey)).toEqual(['role:lead', 'role:generator', 'role:lead']);
+      expect(execution.prompts[0]?.prompt).toContain('## How to call Pluto tools');
+      expect(execution.prompts[0]?.prompt).toContain('pluto-tool create-task');
+      expect(execution.prompts[0]?.prompt).not.toContain('curl');
+      expect(execution.prompts[0]?.prompt).not.toContain('mcporter');
+      expect(execution.result.events.map((event) => event.kind)).toEqual([
+        'run_started',
+        'task_created',
+        'mailbox_message_appended',
+        'run_completed',
+      ]);
+      expect(execution.spawnSpecs.map((spec) => spec.cwd)).toEqual([
+        expect.stringContaining(`${execution.workspaceCwd}/.pluto/runs/run-hello-team-agentic-tool-mock/agents/role:lead`),
+        expect.stringContaining(`${execution.workspaceCwd}/.pluto/runs/run-hello-team-agentic-tool-mock/agents/role:generator`),
+      ]);
+      for (const spec of execution.spawnSpecs) {
+        expect(spec.cwd).toBeDefined();
+        expect(spec.env).toMatchObject({
+          PLUTO_RUN_API_URL: expect.stringMatching(/^http:\/\/127\.0\.0\.1:\d+\/v1$/),
+          PLUTO_RUN_TOKEN: expect.any(String),
+          PLUTO_RUN_ACTOR: expect.stringMatching(/^role:/),
+        });
+        expect(spec.env?.OPENCODE_CONFIG_CONTENT).toBeUndefined();
+        expect(existsSync(spec.cwd ?? '')).toBe(true);
+        expect(existsSync(join(spec.cwd ?? '', 'opencode.json'))).toBe(false);
+      }
+    } finally {
+      await execution.cleanup();
     }
   });
 
   it('returns to lead when a delegated task is completed by task-state transition', async () => {
-    const { prompts } = await runAgenticTool([
+    const execution = await runAgenticTool([
       {
         actor: LEAD,
         run: async ({ callTool }) => {
@@ -363,11 +368,15 @@ describe('agentic_tool Paseo loop', () => {
       },
     ]);
 
-    expect(prompts.map((entry) => entry.actorKey)).toEqual(['role:lead', 'role:generator', 'role:lead']);
+    try {
+      expect(execution.prompts.map((entry) => entry.actorKey)).toEqual(['role:lead', 'role:generator', 'role:lead']);
+    } finally {
+      await execution.cleanup();
+    }
   });
 
   it('returns to lead when a delegated actor sends a completion mailbox message', async () => {
-    const { prompts } = await runAgenticTool([
+    const execution = await runAgenticTool([
       {
         actor: LEAD,
         run: async ({ callTool }) => {
@@ -402,11 +411,15 @@ describe('agentic_tool Paseo loop', () => {
       },
     ]);
 
-    expect(prompts.map((entry) => entry.actorKey)).toEqual(['role:lead', 'role:generator', 'role:lead']);
+    try {
+      expect(execution.prompts.map((entry) => entry.actorKey)).toEqual(['role:lead', 'role:generator', 'role:lead']);
+    } finally {
+      await execution.cleanup();
+    }
   });
 
   it('completes the run when the lead emits pluto_complete_run', async () => {
-    const { result } = await runAgenticTool([
+    const execution = await runAgenticTool([
       {
         actor: LEAD,
         run: async ({ callTool }) => {
@@ -419,15 +432,19 @@ describe('agentic_tool Paseo loop', () => {
       },
     ]);
 
-    expect(result.events.at(-1)?.kind).toBe('run_completed');
-    expect(result.events.at(-1)?.payload).toMatchObject({ status: 'succeeded', summary: 'done' });
+    try {
+      expect(execution.result.events.at(-1)?.kind).toBe('run_completed');
+      expect(execution.result.events.at(-1)?.payload).toMatchObject({ status: 'succeeded', summary: 'done' });
+    } finally {
+      await execution.cleanup();
+    }
   });
 
   it('rejects a second mutating tool call within the same turn even if the first succeeded', async () => {
-    let firstResponse: ToolRpcResponse | null = null;
-    let secondResponse: ToolRpcResponse | null = null;
+    let firstResponse: ToolHttpResponse | null = null;
+    let secondResponse: ToolHttpResponse | null = null;
 
-    const { result } = await runAgenticTool([
+    const execution = await runAgenticTool([
       {
         actor: LEAD,
         run: async ({ callTool }) => {
@@ -456,28 +473,32 @@ describe('agentic_tool Paseo loop', () => {
       },
     ]);
 
-    expect(firstResponse).not.toBeNull();
-    expect(secondResponse).not.toBeNull();
+    try {
+      expect(firstResponse).not.toBeNull();
+      expect(secondResponse).not.toBeNull();
 
-    expect(firstResponse!.status).toBe(200);
-    expect(firstResponse!.json.error).toBeUndefined();
-    expect(toolResultJson(firstResponse!.json.result)).toMatchObject({
-      accepted: true,
-      taskId: expect.any(String),
-    });
+      expect(firstResponse!.status).toBe(200);
+      expect(firstResponse!.body).toMatchObject({
+        accepted: true,
+        taskId: expect.any(String),
+      });
 
-    expect(secondResponse!.status).toBe(200);
-    expect(secondResponse!.json.error).toMatchObject({
-      code: -32004,
-      message: expect.stringContaining('PLUTO_TURN_CONSUMED'),
-    });
+      expect(secondResponse!.status).toBe(409);
+      expect(secondResponse!.body).toMatchObject({
+        error: {
+          code: 'PLUTO_TURN_CONSUMED',
+        },
+      });
 
-    expect(result.events.map((event) => event.kind)).toEqual(['run_started', 'task_created', 'run_completed']);
-    expect(Object.keys(result.views.task.tasks)).toHaveLength(1);
+      expect(execution.result.events.map((event) => event.kind)).toEqual(['run_started', 'task_created', 'run_completed']);
+      expect(Object.keys(execution.result.views.task.tasks)).toHaveLength(1);
+    } finally {
+      await execution.cleanup();
+    }
   });
 
   it('surfaces sub-actor complete_run rejection and returns control to lead', async () => {
-    const { prompts, result } = await runAgenticTool([
+    const execution = await runAgenticTool([
       {
         actor: LEAD,
         run: async ({ callTool }) => {
@@ -511,15 +532,19 @@ describe('agentic_tool Paseo loop', () => {
       },
     ]);
 
-    expect(prompts.map((entry) => entry.actorKey)).toEqual(['role:lead', 'role:generator', 'role:lead']);
-    expect(prompts[2]?.prompt).toContain('"lastRejection"');
-    expect(prompts[2]?.prompt).toContain('PLUTO_TOOL_LEAD_ONLY');
-    expect(result.events.map((event) => event.kind)).toEqual(['run_started', 'mailbox_message_appended', 'run_completed']);
-    expect(result.events.at(-1)?.payload).toMatchObject({ status: 'succeeded', summary: 'lead closed the run' });
+    try {
+      expect(execution.prompts.map((entry) => entry.actorKey)).toEqual(['role:lead', 'role:generator', 'role:lead']);
+      expect(execution.prompts[2]?.prompt).toContain('"lastRejection"');
+      expect(execution.prompts[2]?.prompt).toContain('PLUTO_TOOL_LEAD_ONLY');
+      expect(execution.result.events.map((event) => event.kind)).toEqual(['run_started', 'mailbox_message_appended', 'run_completed']);
+      expect(execution.result.events.at(-1)?.payload).toMatchObject({ status: 'succeeded', summary: 'lead closed the run' });
+    } finally {
+      await execution.cleanup();
+    }
   });
 
   it('fails after repeated idle turns with no mutating tool call', async () => {
-    const { prompts, result } = await runAgenticTool(
+    const execution = await runAgenticTool(
       [
         {
           actor: LEAD,
@@ -539,12 +564,16 @@ describe('agentic_tool Paseo loop', () => {
       },
     );
 
-    expect(prompts.map((entry) => entry.actorKey)).toEqual(['role:lead', 'role:lead']);
-    expect(result.events.at(-1)?.payload).toMatchObject({ status: 'failed', summary: 'maxNoProgressTurns exhausted' });
+    try {
+      expect(execution.prompts.map((entry) => entry.actorKey)).toEqual(['role:lead', 'role:lead']);
+      expect(execution.result.events.at(-1)?.payload).toMatchObject({ status: 'failed', summary: 'maxNoProgressTurns exhausted' });
+    } finally {
+      await execution.cleanup();
+    }
   });
 
   it('surfaces schema-invalid tool args and returns control to lead', async () => {
-    const { prompts, result } = await runAgenticTool([
+    const execution = await runAgenticTool([
       {
         actor: LEAD,
         run: async ({ callTool }) => {
@@ -567,14 +596,18 @@ describe('agentic_tool Paseo loop', () => {
       },
     ]);
 
-    expect(prompts.map((entry) => entry.actorKey)).toEqual(['role:lead', 'role:lead']);
-    expect(prompts[1]?.prompt).toContain('"lastRejection"');
-    expect(prompts[1]?.prompt).toContain('PLUTO_TOOL_BAD_ARGS');
-    expect(result.events.map((event) => event.kind)).toEqual(['run_started', 'run_completed']);
+    try {
+      expect(execution.prompts.map((entry) => entry.actorKey)).toEqual(['role:lead', 'role:lead']);
+      expect(execution.prompts[1]?.prompt).toContain('"lastRejection"');
+      expect(execution.prompts[1]?.prompt).toContain('PLUTO_TOOL_BAD_ARGS');
+      expect(execution.result.events.map((event) => event.kind)).toEqual(['run_started', 'run_completed']);
+    } finally {
+      await execution.cleanup();
+    }
   });
 
   it('preserves the closed reducer event sequence on the mock fixture', async () => {
-    const { result } = await runAgenticTool([
+    const execution = await runAgenticTool([
       {
         actor: LEAD,
         run: async ({ callTool }) => {
@@ -631,13 +664,17 @@ describe('agentic_tool Paseo loop', () => {
       },
     ]);
 
-    expect(result.events.map((event: RunEvent) => event.kind)).toEqual([
-      'run_started',
-      'task_created',
-      'task_state_changed',
-      'artifact_published',
-      'mailbox_message_appended',
-      'run_completed',
-    ]);
+    try {
+      expect(execution.result.events.map((event: RunEvent) => event.kind)).toEqual([
+        'run_started',
+        'task_created',
+        'task_state_changed',
+        'artifact_published',
+        'mailbox_message_appended',
+        'run_completed',
+      ]);
+    } finally {
+      await execution.cleanup();
+    }
   });
 });

@@ -55,6 +55,12 @@ const PROJECTIONS_MAILBOX_FILE = 'mailbox.jsonl';
 const PROJECTIONS_ARTIFACTS_FILE = 'artifacts.json';
 const TRANSCRIPT_DIR = 'paseo-transcripts';
 
+type PaseoAgentEnvHandoff = {
+  readonly apiUrl: string;
+  readonly bearerToken: string;
+  readonly actorKey: string;
+};
+
 function actorKeyOf(actor: ActorRef): string {
   switch (actor.kind) {
     case 'manager':
@@ -77,7 +83,11 @@ function actorBootstrapPrompt(actor: ActorRef): string {
   }
 }
 
-function buildPaseoAgentSpec(actor: ActorRef, workspaceCwd: string): PaseoAgentSpec {
+function buildPaseoAgentSpec(
+  actor: ActorRef,
+  workspaceCwd: string,
+  handoff?: PaseoAgentEnvHandoff,
+): PaseoAgentSpec {
   const provider = process.env.PASEO_PROVIDER ?? 'opencode';
   const model = process.env.PASEO_MODEL ?? 'openai/gpt-5.4-mini';
   const mode = process.env.PASEO_MODE ?? 'build';
@@ -92,6 +102,15 @@ function buildPaseoAgentSpec(actor: ActorRef, workspaceCwd: string): PaseoAgentS
     labels: ['slice=v2-cli'],
     initialPrompt: actorBootstrapPrompt(actor),
     cwd: workspaceCwd,
+    ...(handoff == null
+      ? {}
+      : {
+          env: {
+            PLUTO_RUN_API_URL: handoff.apiUrl,
+            PLUTO_RUN_TOKEN: handoff.bearerToken,
+            PLUTO_RUN_ACTOR: handoff.actorKey,
+          },
+        }),
   };
 }
 
@@ -453,13 +472,14 @@ export async function runViaV2Bridge(
       client,
       idProvider: deps.defaultIdProvider,
       clockProvider: deps.defaultClockProvider,
-      paseoAgentSpec: (actor) => {
-        const spec = buildPaseoAgentSpec(actor, input.workspaceCwd);
+      paseoAgentSpec: (actor, handoff) => {
+        const spec = buildPaseoAgentSpec(actor, input.workspaceCwd, handoff);
         promptByTitle.set(spec.title, spec.initialPrompt);
         specByTitle.set(spec.title, spec);
         return spec;
       },
       waitTimeoutSec: 600,
+      workspaceCwd: input.workspaceCwd,
     });
 
     status = normalizeBridgeStatus(

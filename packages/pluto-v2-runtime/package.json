@@ -4,6 +4,9 @@
   "private": true,
   "type": "module",
   "description": "Deterministic fake runtime package for Pluto v2.",
+  "bin": {
+    "pluto-tool": "./dist/src/cli/pluto-tool.js"
+  },
   "scripts": {
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "build": "tsc -p tsconfig.json",

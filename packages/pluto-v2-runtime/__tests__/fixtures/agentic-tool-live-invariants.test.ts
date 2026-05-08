@@ -107,4 +107,14 @@ describe('agentic_tool live smoke invariants', () => {
     expect(playbookSha).toBe(createHash('sha256').update(playbookText).digest('hex'));
     expect(usageSummary.totalTurns).toBeLessThanOrEqual(50);
   });
+
+  it.skip('records pluto-tool invocations instead of curl or mcporter in the captured transcript fixture', () => {
+    const runId = readRunId();
+    const fixtureDir = join(FIXTURES_ROOT, runId, 'paseo-transcripts');
+    const leadTranscript = readFileSync(join(fixtureDir, 'role:lead.txt'), 'utf8');
+
+    expect(leadTranscript).toContain('pluto-tool');
+    expect(leadTranscript).not.toContain('curl');
+    expect(leadTranscript).not.toContain('mcporter');
+  });
 });
