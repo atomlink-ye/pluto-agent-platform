@@ -35,7 +35,7 @@ async function runCli(args: string[]): Promise<{ stdout: string; stderr: string;
 
 async function installV2PackageShims(): Promise<void> {
   const shimRoots = [
-    join(process.cwd(), "node_modules", "@pluto"),
+    join(process.cwd(), "src", "node_modules", "@pluto"),
     join(process.cwd(), "packages", "pluto-v2-runtime", "node_modules", "@pluto"),
   ];
   const packages = [
