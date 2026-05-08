@@ -1,16 +1,17 @@
 import { mkdir, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { basename, extname, join, resolve } from 'node:path';
 import process from 'node:process';
 
-import type {
+import {
+  buildUsageSummary,
   loadAuthoredSpec,
   makePaseoAdapter,
   makePaseoCliClient,
-  PaseoAgentSpec,
-  PaseoCliClient,
+  renderFinalReport,
   runPaseo,
 } from '@pluto/v2-runtime';
-import type { ActorRef, ClockProvider, IdProvider } from '@pluto/v2-core';
+import type { PaseoAgentSpec, PaseoCliClient } from '@pluto/v2-runtime';
+import { replayAll, type ActorRef, type AuthoredSpec, type ClockProvider, type IdProvider } from '@pluto/v2-core';
 
 import { classifyPaseoError } from './v2-cli-bridge-error.js';
 
@@ -18,6 +19,7 @@ export interface V2BridgeInput {
   readonly specPath: string;
   readonly workspaceCwd: string;
   readonly evidenceOutputDir: string;
+  readonly runRootDir?: string;
   readonly paseoHost?: string;
   readonly paseoBin?: string;
   readonly stderr: NodeJS.WritableStream;
@@ -26,6 +28,7 @@ export interface V2BridgeInput {
 export interface V2BridgeResult {
   readonly status: 'succeeded' | 'failed' | 'cancelled';
   readonly summary: string | null;
+  readonly runDir: string;
   readonly evidencePacketPath: string;
   readonly transcriptPaths: ReadonlyArray<string>;
   readonly exitCode: 0 | 1 | 2;
@@ -41,6 +44,13 @@ export interface V2BridgeDeps {
 }
 
 const EVIDENCE_PACKET_FILE = 'evidence-packet.json';
+const EVENTS_FILE = 'events.jsonl';
+const FINAL_REPORT_FILE = 'final-report.md';
+const USAGE_SUMMARY_FILE = 'usage-summary.json';
+const PROJECTIONS_DIR = 'projections';
+const PROJECTIONS_TASKS_FILE = 'tasks.json';
+const PROJECTIONS_MAILBOX_FILE = 'mailbox.jsonl';
+const PROJECTIONS_ARTIFACTS_FILE = 'artifacts.json';
 const TRANSCRIPT_DIR = 'paseo-transcripts';
 
 function actorKeyOf(actor: ActorRef): string {
@@ -123,10 +133,10 @@ function wrapPaseoClient(
 }
 
 async function writeTranscripts(
-  evidenceOutputDir: string,
+  runDir: string,
   transcriptByActor: ReadonlyMap<string, string>,
 ): Promise<ReadonlyArray<string>> {
-  const transcriptDir = join(evidenceOutputDir, TRANSCRIPT_DIR);
+  const transcriptDir = join(runDir, TRANSCRIPT_DIR);
   await mkdir(transcriptDir, { recursive: true });
 
   const transcriptPaths: string[] = [];
@@ -137,6 +147,83 @@ async function writeTranscripts(
   }
 
   return transcriptPaths;
+}
+
+function toJsonl(lines: ReadonlyArray<unknown>): string {
+  return `${lines.map((line) => JSON.stringify(line)).join('\n')}\n`;
+}
+
+function fallbackRunId(specPath: string): string {
+  return basename(specPath, extname(specPath)) || 'v2-cli';
+}
+
+function resolveRunDir(input: Pick<V2BridgeInput, 'workspaceCwd' | 'evidenceOutputDir' | 'runRootDir' | 'specPath'>, runId: string): string {
+  if (input.runRootDir) {
+    return resolve(input.runRootDir, runId);
+  }
+
+  const evidenceDir = resolve(input.evidenceOutputDir);
+  if (basename(evidenceDir) === 'evidence') {
+    return join(resolve(evidenceDir, '..'), 'runs', runId);
+  }
+
+  return join(resolve(input.workspaceCwd), '.pluto', 'runs', runId);
+}
+
+async function writeRunArtifacts(args: {
+  readonly runDir: string;
+  readonly authored: AuthoredSpec;
+  readonly result: Awaited<ReturnType<typeof runPaseo>>;
+  readonly transcriptByActor: ReadonlyMap<string, string>;
+  readonly specByTitle: ReadonlyMap<string, PaseoAgentSpec>;
+}): Promise<ReadonlyArray<string>> {
+  const evidencePacketPath = join(args.runDir, EVIDENCE_PACKET_FILE);
+  const finalReportPath = join(args.runDir, FINAL_REPORT_FILE);
+  const usageSummaryPath = join(args.runDir, USAGE_SUMMARY_FILE);
+  const eventsPath = join(args.runDir, EVENTS_FILE);
+  const projectionsDir = join(args.runDir, PROJECTIONS_DIR);
+  const tasksPath = join(projectionsDir, PROJECTIONS_TASKS_FILE);
+  const mailboxPath = join(projectionsDir, PROJECTIONS_MAILBOX_FILE);
+  const artifactsPath = join(projectionsDir, PROJECTIONS_ARTIFACTS_FILE);
+
+  await mkdir(projectionsDir, { recursive: true });
+
+  const views = replayAll(args.result.events);
+  const actorSpecByKey = new Map<string, PaseoAgentSpec>();
+  for (const [title, spec] of args.specByTitle.entries()) {
+    const actorKey = title.startsWith('pluto-') ? title.slice('pluto-'.length) : title;
+    actorSpecByKey.set(actorKey, spec);
+  }
+
+  const usageSummary = buildUsageSummary({
+    authored: args.authored,
+    evidencePacket: args.result.evidencePacket,
+    usage: args.result.usage,
+    actorSpecByKey,
+    evidencePacketPath,
+  });
+
+  await writeFile(eventsPath, toJsonl(args.result.events), 'utf8');
+  await writeFile(tasksPath, JSON.stringify(views.task.tasks, null, 2), 'utf8');
+  await writeFile(mailboxPath, toJsonl(views.mailbox.messages), 'utf8');
+  await writeFile(artifactsPath, JSON.stringify(args.result.evidencePacket.artifacts, null, 2), 'utf8');
+  await writeFile(evidencePacketPath, JSON.stringify(args.result.evidencePacket, null, 2), 'utf8');
+  await writeFile(
+    finalReportPath,
+    renderFinalReport({
+      runId: args.authored.runId,
+      status: args.result.evidencePacket.status,
+      summary: args.result.evidencePacket.summary,
+      evidence: views.evidence,
+      tasks: views.task,
+      mailbox: views.mailbox,
+      artifacts: args.result.evidencePacket.artifacts,
+    }),
+    'utf8',
+  );
+  await writeFile(usageSummaryPath, JSON.stringify(usageSummary, null, 2), 'utf8');
+
+  return writeTranscripts(args.runDir, args.transcriptByActor);
 }
 
 function toExitCode(status: V2BridgeResult['status']): 0 | 1 {
@@ -204,11 +291,11 @@ function formatBridgeError(error: unknown): string {
 }
 
 async function writeTranscriptsBestEffort(
-  evidenceOutputDir: string,
+  runDir: string,
   transcriptByActor: ReadonlyMap<string, string>,
 ): Promise<ReadonlyArray<string>> {
   try {
-    return await writeTranscripts(evidenceOutputDir, transcriptByActor);
+    return await writeTranscripts(runDir, transcriptByActor);
   } catch {
     return [];
   }
@@ -218,12 +305,16 @@ export async function runViaV2Bridge(
   input: V2BridgeInput,
   deps: V2BridgeDeps,
 ): Promise<V2BridgeResult> {
-  const evidencePacketPath = join(input.evidenceOutputDir, EVIDENCE_PACKET_FILE);
   const promptByTitle = new Map<string, string>();
+  const specByTitle = new Map<string, PaseoAgentSpec>();
   const transcriptByActor = new Map<string, string>();
+  let runDir = resolveRunDir(input, fallbackRunId(input.specPath));
+  let evidencePacketPath = join(runDir, EVIDENCE_PACKET_FILE);
 
   try {
     const authored = deps.loadAuthoredSpec(input.specPath);
+    runDir = resolveRunDir(input, authored.runId);
+    evidencePacketPath = join(runDir, EVIDENCE_PACKET_FILE);
     const rawClient = deps.makePaseoCliClient({
       cwd: input.workspaceCwd,
       ...(input.paseoHost ? { host: input.paseoHost } : {}),
@@ -242,14 +333,19 @@ export async function runViaV2Bridge(
       paseoAgentSpec: (actor) => {
         const spec = buildPaseoAgentSpec(actor, input.workspaceCwd);
         promptByTitle.set(spec.title, spec.initialPrompt);
+        specByTitle.set(spec.title, spec);
         return spec;
       },
       waitTimeoutSec: 600,
     });
 
-    await mkdir(input.evidenceOutputDir, { recursive: true });
-    await writeFile(evidencePacketPath, JSON.stringify(result.evidencePacket, null, 2), 'utf8');
-    const transcriptPaths = await writeTranscripts(input.evidenceOutputDir, transcriptByActor);
+    const transcriptPaths = await writeRunArtifacts({
+      runDir,
+      authored,
+      result,
+      transcriptByActor,
+      specByTitle,
+    });
 
     const status = normalizeBridgeStatus(
       result.evidencePacket.status === 'in_progress' ? 'failed' : result.evidencePacket.status,
@@ -258,17 +354,19 @@ export async function runViaV2Bridge(
     return {
       status,
       summary: normalizeSummary(result.evidencePacket.summary),
+      runDir,
       evidencePacketPath,
       transcriptPaths,
       exitCode: toExitCode(status),
     };
   } catch (error) {
-    const transcriptPaths = await writeTranscriptsBestEffort(input.evidenceOutputDir, transcriptByActor);
+    const transcriptPaths = await writeTranscriptsBestEffort(runDir, transcriptByActor);
     const summary = formatBridgeError(error);
     input.stderr.write(`${summary}\n`);
     return {
       status: 'failed',
       summary,
+      runDir,
       evidencePacketPath,
       transcriptPaths,
       exitCode: classifyPaseoError(error) === 'capability_unavailable' ? 2 : 1,

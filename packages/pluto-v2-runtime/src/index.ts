@@ -2,6 +2,8 @@ export * from './adapters/fake/fake-adapter.js';
 export * from './adapters/fake/fake-run.js';
 export * from './adapters/fake/fake-script.js';
 export * from './evidence/evidence-packet.js';
+export * from './evidence/final-report-builder.js';
+export * from './evidence/usage-summary-builder.js';
 export * from './legacy/v1-translator.js';
 export * from './loader/authored-spec-loader.js';
 export * from './loader/scenario-loader.js';

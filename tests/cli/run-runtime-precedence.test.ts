@@ -171,8 +171,9 @@ describe("src/cli/run.ts runtime precedence", () => {
       .join("\n");
     expect(result.exitCode).toBe(0);
     expect(filteredStderr).toBe("");
-    const output = JSON.parse(result.stdout) as { status: string; evidencePacketPath: string };
+    const output = JSON.parse(result.stdout) as { status: string; runDir: string; evidencePacketPath: string };
     expect(output.status).toBe("succeeded");
-    expect(output.evidencePacketPath).toBe(join(dataDir, "runs", "scenario", "evidence-packet.json"));
+    expect(output.runDir).toBe(join(dataDir, "runs", "run-hello-team-paseo-mock"));
+    expect(output.evidencePacketPath).toBe(join(output.runDir, "evidence-packet.json"));
   }, 30_000);
 });

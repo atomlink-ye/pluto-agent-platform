@@ -74,4 +74,55 @@ describe('AuthoredSpecSchema fakeScript', () => {
 
     expect(parsed.fakeScript).toHaveLength(1);
   });
+
+  it('accepts strict agentic orchestration fields on authored specs', () => {
+    const parsed = AuthoredSpecSchema.parse({
+      runId: 'run-1',
+      scenarioRef: 'scenario/hello-team',
+      runProfileRef: 'fake-smoke',
+      actors: {
+        manager: { kind: 'manager' },
+        lead: { kind: 'role', role: 'lead' },
+      },
+      declaredActors: ['manager', 'lead'],
+      orchestration: {
+        mode: 'agentic',
+        maxTurns: 20,
+        maxParseFailuresPerTurn: 2,
+        maxKernelRejections: 3,
+        maxNoProgressTurns: 3,
+      },
+      userTask: 'Ship the T1 lane 1 schema changes.',
+      playbookRef: 'playbooks/team-lead.md',
+    });
+
+    expect(parsed.orchestration).toEqual({
+      mode: 'agentic',
+      maxTurns: 20,
+      maxParseFailuresPerTurn: 2,
+      maxKernelRejections: 3,
+      maxNoProgressTurns: 3,
+    });
+    expect(parsed.userTask).toBe('Ship the T1 lane 1 schema changes.');
+    expect(parsed.playbookRef).toBe('playbooks/team-lead.md');
+  });
+
+  it('rejects unknown orchestration fields while keeping AuthoredSpecSchema strict', () => {
+    expect(() =>
+      AuthoredSpecSchema.parse({
+        runId: 'run-1',
+        scenarioRef: 'scenario/hello-team',
+        runProfileRef: 'fake-smoke',
+        actors: {
+          manager: { kind: 'manager' },
+          lead: { kind: 'role', role: 'lead' },
+        },
+        declaredActors: ['manager', 'lead'],
+        orchestration: {
+          mode: 'agentic',
+          extra: true,
+        },
+      }),
+    ).toThrow(/unrecognized key/i);
+  });
 });

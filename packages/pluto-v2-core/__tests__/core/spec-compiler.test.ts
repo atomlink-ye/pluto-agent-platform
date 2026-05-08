@@ -29,6 +29,22 @@ function createBaseSpec(): AuthoredSpec {
   };
 }
 
+function createAgenticSpec(overrides: Partial<AuthoredSpec> = {}): AuthoredSpec {
+  return {
+    ...createBaseSpec(),
+    orchestration: {
+      mode: 'agentic',
+      maxTurns: 20,
+      maxParseFailuresPerTurn: 2,
+      maxKernelRejections: 3,
+      maxNoProgressTurns: 3,
+    },
+    userTask: 'Coordinate the team to complete the user task.',
+    playbookRef: 'playbooks/team-lead.md',
+    ...overrides,
+  };
+}
+
 function createAuthoredCanonicalPolicy() {
   return {
     append_mailbox_message: [
@@ -75,6 +91,33 @@ function expectCompileError(spec: unknown, code: SpecCompileErrorCode) {
 describe('compile', () => {
   it('compiles a well-formed authored spec into TeamContext', () => {
     const compiled = compile(createBaseSpec());
+
+    expect(compiled).toEqual({
+      runId: 'run-1',
+      scenarioRef: 'scenario/hello-team',
+      runProfileRef: 'fake-smoke',
+      declaredActors: [
+        { kind: 'manager' },
+        { kind: 'role', role: 'lead' },
+        { kind: 'role', role: 'planner' },
+        { kind: 'role', role: 'generator' },
+        { kind: 'role', role: 'evaluator' },
+        { kind: 'system' },
+      ],
+      initialTasks: [
+        {
+          taskId: 'task-1',
+          title: 'Implement Lane E',
+          ownerActor: { kind: 'role', role: 'generator' },
+          dependsOn: [],
+        },
+      ],
+      policy: AUTHORITY_MATRIX,
+    });
+  });
+
+  it('accepts a valid agentic authored spec while preserving the compiled TeamContext shape', () => {
+    const compiled = compile(createAgenticSpec());
 
     expect(compiled).toEqual({
       runId: 'run-1',
@@ -180,5 +223,136 @@ describe('compile', () => {
       },
       'actor_role_unknown',
     );
+  });
+
+  it('throws orchestration_invalid when agentic mode omits a declared lead actor', () => {
+    expectCompileError(
+      createAgenticSpec({
+        declaredActors: ['manager', 'planner', 'generator', 'evaluator', 'system'],
+      }),
+      'orchestration_invalid',
+    );
+
+    expect(() =>
+      compile(
+        createAgenticSpec({
+          declaredActors: ['manager', 'planner', 'generator', 'evaluator', 'system'],
+        }),
+      ),
+    ).toThrow(/agentic.*declaredActors.*lead/i);
+  });
+
+  it('throws orchestration_invalid when agentic mode maps actors.lead to the wrong actor kind', () => {
+    expectCompileError(
+      createAgenticSpec({
+        actors: {
+          ...createBaseSpec().actors,
+          lead: { kind: 'system' },
+        },
+      }),
+      'orchestration_invalid',
+    );
+
+    expect(() =>
+      compile(
+        createAgenticSpec({
+          actors: {
+            ...createBaseSpec().actors,
+            lead: { kind: 'system' },
+          },
+        }),
+      ),
+    ).toThrow(/agentic.*actors\.lead/i);
+  });
+
+  it('throws orchestration_invalid when agentic mode omits the manager actor', () => {
+    expectCompileError(
+      createAgenticSpec({
+        declaredActors: ['lead', 'planner', 'generator', 'evaluator', 'system'],
+      }),
+      'orchestration_invalid',
+    );
+
+    expect(() =>
+      compile(
+        createAgenticSpec({
+          declaredActors: ['lead', 'planner', 'generator', 'evaluator', 'system'],
+        }),
+      ),
+    ).toThrow(/agentic.*declaredActors.*manager/i);
+  });
+
+  it('throws orchestration_invalid when agentic mode maps actors.manager to the wrong actor kind', () => {
+    expectCompileError(
+      createAgenticSpec({
+        actors: {
+          ...createBaseSpec().actors,
+          manager: { kind: 'role', role: 'lead' },
+        },
+      }),
+      'orchestration_invalid',
+    );
+
+    expect(() =>
+      compile(
+        createAgenticSpec({
+          actors: {
+            ...createBaseSpec().actors,
+            manager: { kind: 'role', role: 'lead' },
+          },
+        }),
+      ),
+    ).toThrow(/agentic.*actors\.manager/i);
+  });
+
+  it('throws orchestration_invalid when agentic mode provides an empty userTask', () => {
+    expectCompileError(
+      createAgenticSpec({
+        userTask: '   ',
+      }),
+      'orchestration_invalid',
+    );
+
+    expect(() =>
+      compile(
+        createAgenticSpec({
+          userTask: '   ',
+        }),
+      ),
+    ).toThrow(/agentic.*userTask/i);
+  });
+
+  it('throws orchestration_invalid when agentic mode omits playbookRef', () => {
+    expectCompileError(
+      createAgenticSpec({
+        playbookRef: undefined,
+      }),
+      'orchestration_invalid',
+    );
+
+    expect(() =>
+      compile(
+        createAgenticSpec({
+          playbookRef: undefined,
+        }),
+      ),
+    ).toThrow(/agentic.*playbookRef/i);
+  });
+
+  it('throws orchestration_invalid when agentic mode uses a non-markdown playbookRef', () => {
+    expectCompileError(
+      createAgenticSpec({
+        playbookRef: 'playbooks/team-lead.txt',
+      }),
+      'orchestration_invalid',
+    );
+
+    expect(() =>
+      compile(
+        createAgenticSpec({
+          playbookRef: 'playbooks/team-lead.txt',
+        }),
+      ),
+    ).toThrow(/agentic.*playbookRef.*markdown/i);
   });
 });

@@ -23,6 +23,7 @@ export const SPEC_COMPILE_ERROR_CODE_VALUES = [
   'policy_invalid',
   'intent_payload_mismatch',
   'actor_role_unknown',
+  'orchestration_invalid',
 ] as const;
 
 export const SpecCompileErrorCodeSchema = z.enum(SPEC_COMPILE_ERROR_CODE_VALUES);
@@ -314,6 +315,66 @@ function compilePolicy(policy: AuthoredSpec['policy']): AuthorityPolicy {
   return TeamContextSchema.shape.policy.parse(normalized);
 }
 
+function validateAgenticOrchestration(parsed: AuthoredSpec): void {
+  if (parsed.orchestration?.mode !== 'agentic') {
+    return;
+  }
+
+  if (!parsed.declaredActors.includes('lead')) {
+    fail(
+      'orchestration_invalid',
+      'agentic orchestration requires declaredActors to include "lead"',
+      ['declaredActors'],
+    );
+  }
+
+  const leadActor = parsed.actors.lead;
+  if (leadActor == null || leadActor.kind !== 'role' || leadActor.role !== 'lead') {
+    fail(
+      'orchestration_invalid',
+      'agentic orchestration requires actors.lead to be { kind: "role", role: "lead" }',
+      ['actors', 'lead'],
+    );
+  }
+
+  if (!parsed.declaredActors.includes('manager')) {
+    fail(
+      'orchestration_invalid',
+      'agentic orchestration requires declaredActors to include "manager"',
+      ['declaredActors'],
+    );
+  }
+
+  const managerActor = parsed.actors.manager;
+  if (managerActor == null || managerActor.kind !== 'manager') {
+    fail(
+      'orchestration_invalid',
+      'agentic orchestration requires actors.manager to be { kind: "manager" }',
+      ['actors', 'manager'],
+    );
+  }
+
+  if (parsed.userTask == null || parsed.userTask.trim().length === 0) {
+    fail('orchestration_invalid', 'agentic orchestration requires userTask to be non-empty', ['userTask']);
+  }
+
+  if (parsed.playbookRef == null || parsed.playbookRef.trim().length === 0) {
+    fail(
+      'orchestration_invalid',
+      'agentic orchestration requires playbookRef to be a non-empty markdown path',
+      ['playbookRef'],
+    );
+  }
+
+  if (!parsed.playbookRef.trim().toLowerCase().endsWith('.md')) {
+    fail(
+      'orchestration_invalid',
+      'agentic orchestration requires playbookRef to reference a markdown file',
+      ['playbookRef'],
+    );
+  }
+}
+
 export function compile(authored: AuthoredSpec): TeamContext {
   const parsed = AuthoredSpecSchema.parse(authored);
 
@@ -321,11 +382,15 @@ export function compile(authored: AuthoredSpec): TeamContext {
     Object.entries(parsed.actors).map(([name, actor]) => [name, compileActorRef(name, actor)]),
   ) as Record<string, ActorRef>;
 
+  validateAgenticOrchestration(parsed);
+
+  const declaredActors = compileDeclaredActors(actorMap, parsed.declaredActors);
+
   return TeamContextSchema.parse({
     runId: parsed.runId,
     scenarioRef: parsed.scenarioRef,
     runProfileRef: parsed.runProfileRef,
-    declaredActors: compileDeclaredActors(actorMap, parsed.declaredActors),
+    declaredActors,
     initialTasks: compileInitialTasks(parsed, actorMap),
     policy: compilePolicy(parsed.policy),
   });

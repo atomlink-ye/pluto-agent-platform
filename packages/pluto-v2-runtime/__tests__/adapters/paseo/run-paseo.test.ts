@@ -231,6 +231,9 @@ describe('runPaseo', () => {
       outputTokens: 11,
       costUsd: 0.03,
     });
+    expect(result.usage.usageStatus).toBe('reported');
+    expect(result.usage.reportedBy).toBe('paseo.usageEstimate');
+    expect(result.usage.estimated).toBe(true);
     expect(result.usage.perTurn).toEqual([
       {
         turnIndex: 0,
@@ -249,6 +252,34 @@ describe('runPaseo', () => {
         waitExitCode: 0,
       },
     ]);
+  });
+
+  it('marks usage as unavailable when all per-turn usage values are zero', async () => {
+    const client = makeMockClient([
+      {
+        actor: generatorActor,
+        transcriptText: 'no usage\n',
+        usage: { inputTokens: 0, outputTokens: 0, costUsd: 0 },
+        waitExitCode: 0,
+      },
+    ]);
+    const adapter = makeAdapter({
+      pendingTurns: [{ actor: generatorActor, prompt: 'prompt-1' }],
+      stepFactory: (state) => ({
+        kind: 'done',
+        completion: { status: 'succeeded', summary: `turns:${state.turnIndex}` },
+        nextState: state,
+      }),
+    });
+
+    const result = await runWith({ client, adapter, maxSteps: 1 });
+
+    expect(result.usage.totalInputTokens).toBe(0);
+    expect(result.usage.totalOutputTokens).toBe(0);
+    expect(result.usage.totalCostUsd).toBe(0);
+    expect(result.usage.usageStatus).toBe('unavailable');
+    expect(result.usage.reportedBy).toBe('paseo.usageEstimate');
+    expect(result.usage.estimated).toBe(false);
   });
 
   it('does not count model phases against maxSteps', async () => {

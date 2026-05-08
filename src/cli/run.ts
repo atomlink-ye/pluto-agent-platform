@@ -225,6 +225,10 @@ function resolveV2EvidenceOutputDir(flags: CliFlags): string {
   return join(resolveCliDataDir(flags), "runs", runId);
 }
 
+function resolveV2RunRootDir(flags: CliFlags): string {
+  return join(resolveCliDataDir(flags), "runs");
+}
+
 async function runV2(flags: CliFlags): Promise<void> {
   const specPath = flags.spec;
   if (!specPath) {
@@ -239,6 +243,7 @@ async function runV2(flags: CliFlags): Promise<void> {
     specPath: resolve(specPath),
     workspaceCwd: resolve(flags.workspace ?? flags.root),
     evidenceOutputDir: resolveV2EvidenceOutputDir(flags),
+    runRootDir: resolveV2RunRootDir(flags),
     ...(process.env["PASEO_HOST"] ? { paseoHost: process.env["PASEO_HOST"] } : {}),
     ...(process.env["PASEO_BIN"] ? { paseoBin: process.env["PASEO_BIN"] } : {}),
     stderr: process.stderr,

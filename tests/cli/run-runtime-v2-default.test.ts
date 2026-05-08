@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { access, chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -74,7 +74,7 @@ async function installV2PackageShims(): Promise<void> {
 }
 
 describe("src/cli/run.ts default v2 runtime", () => {
-  it("defaults to v2 and writes the bridge evidence packet when --spec is passed", async () => {
+  it("defaults to v2 and writes the run-directory evidence outputs when --spec is passed", async () => {
     const workspace = await mkdtemp(join(tmpdir(), "pluto-run-v2-default-"));
     const dataDir = join(workspace, ".pluto");
     const fakeStateDir = join(workspace, "paseo-state");
@@ -111,12 +111,30 @@ describe("src/cli/run.ts default v2 runtime", () => {
       .filter((line) => !line.startsWith("npm warn") && line.trim() !== "")
       .join("\n");
     expect(filteredStderr).toBe("");
-    const output = JSON.parse(stdout) as { status: string; evidencePacketPath: string; transcriptPaths: string[] };
+    const output = JSON.parse(stdout) as { status: string; runDir: string; evidencePacketPath: string; transcriptPaths: string[] };
     expect(output.status).toBe("succeeded");
-    expect(output.evidencePacketPath).toBe(join(dataDir, "runs", "scenario", "evidence-packet.json"));
+    expect(output.runDir).toBe(join(dataDir, "runs", "run-hello-team-paseo-mock"));
+    expect(output.evidencePacketPath).toBe(join(output.runDir, "evidence-packet.json"));
     expect(output.transcriptPaths.length).toBeGreaterThan(0);
 
     const packet = JSON.parse(await readFile(output.evidencePacketPath, "utf8")) as { status: string };
     expect(packet.status).toBe("succeeded");
+
+    await Promise.all([
+      access(join(output.runDir, "events.jsonl")),
+      access(join(output.runDir, "projections", "tasks.json")),
+      access(join(output.runDir, "projections", "mailbox.jsonl")),
+      access(join(output.runDir, "projections", "artifacts.json")),
+      access(join(output.runDir, "final-report.md")),
+      access(join(output.runDir, "usage-summary.json")),
+      access(output.transcriptPaths[0]!),
+    ]);
+
+    const usageSummary = JSON.parse(await readFile(join(output.runDir, "usage-summary.json"), "utf8")) as {
+      usageStatus: string;
+      reportedBy: string;
+    };
+    expect(usageSummary.usageStatus).toBe("reported");
+    expect(usageSummary.reportedBy).toBe("paseo.usageEstimate");
   }, 30_000);
 });

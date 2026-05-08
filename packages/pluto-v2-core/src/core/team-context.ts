@@ -260,6 +260,16 @@ export const FakeScriptStepSchema = z.discriminatedUnion('intent', [
     .strict(),
 ]);
 
+export const AuthoredOrchestrationSchema = z
+  .object({
+    mode: z.enum(['deterministic', 'agentic']).optional(),
+    maxTurns: z.number().int().positive().max(50).optional(),
+    maxParseFailuresPerTurn: z.number().int().positive().optional(),
+    maxKernelRejections: z.number().int().positive().optional(),
+    maxNoProgressTurns: z.number().int().positive().optional(),
+  })
+  .strict();
+
 export const AuthoredSpecSchema = z
   .object({
     runId: z.string(),
@@ -270,6 +280,9 @@ export const AuthoredSpecSchema = z
     initialTasks: z.array(AuthoredInitialTaskSchema).optional(),
     fakeScript: z.array(FakeScriptStepSchema).optional(),
     policy: z.record(z.array(AuthoredActorMatcherSchema)).optional(),
+    orchestration: AuthoredOrchestrationSchema.optional(),
+    userTask: z.string().optional(),
+    playbookRef: z.string().optional(),
   })
   .strict();
 

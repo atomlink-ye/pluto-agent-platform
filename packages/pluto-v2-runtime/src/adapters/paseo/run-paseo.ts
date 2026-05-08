@@ -16,6 +16,7 @@ import {
 import { actorKey } from '../../../../pluto-v2-core/src/core/team-context.js';
 
 import { assembleEvidencePacket, type EvidencePacket } from '../../evidence/evidence-packet.js';
+import type { UsageStatus } from '../../evidence/usage-summary-builder.js';
 import { kernelViewOf, RunNotCompletedError } from '../../runtime/runner.js';
 import type { KernelView } from '../../runtime/kernel-view.js';
 import type { RuntimeAdapter } from '../../runtime/runtime-adapter.js';
@@ -94,6 +95,9 @@ type UsageSummary = {
   totalInputTokens: number;
   totalOutputTokens: number;
   totalCostUsd: number;
+  usageStatus: UsageStatus;
+  reportedBy: 'paseo.usageEstimate';
+  estimated: boolean;
   byActor: ReadonlyMap<string, UsageByActor>;
   perTurn: ReadonlyArray<UsagePerTurn>;
 };
@@ -210,10 +214,19 @@ function createUsageAccumulator() {
     },
 
     finalize(): UsageSummary {
+      const usageStatus: UsageStatus = perTurn.some((entry) =>
+        entry.inputTokens > 0 || entry.outputTokens > 0 || entry.costUsd > 0,
+      )
+        ? 'reported'
+        : 'unavailable';
+
       return {
         totalInputTokens,
         totalOutputTokens,
         totalCostUsd,
+        usageStatus,
+        reportedBy: 'paseo.usageEstimate',
+        estimated: usageStatus === 'reported',
         byActor,
         perTurn,
       };
