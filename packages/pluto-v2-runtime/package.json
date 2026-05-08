@@ -11,7 +11,8 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "build": "tsc -p tsconfig.json",
     "test": "vitest run",
-    "smoke:mcp-injection": "tsx scripts/smoke-mcp-injection.ts"
+    "smoke:mcp-injection": "tsx scripts/smoke-mcp-injection.ts",
+    "smoke:wait-feasibility": "tsx scripts/smoke-wait-feasibility.ts"
   },
   "exports": {
     ".": {
