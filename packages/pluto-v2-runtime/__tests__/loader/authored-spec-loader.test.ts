@@ -202,7 +202,7 @@ describe('loadAuthoredSpec', () => {
       '  manager:',
       '    kind: manager',
       'orchestration:',
-      '  mode: agentic',
+      '  mode: agentic_text',
       '  maxTurns: 30',
       '  maxParseFailuresPerTurn: 4',
       '  maxKernelRejections: 5',
@@ -212,7 +212,7 @@ describe('loadAuthoredSpec', () => {
     const authored = loadAuthoredSpec(filePath);
 
     expect(authored.orchestration).toEqual({
-      mode: 'agentic',
+      mode: 'agentic_text',
       maxTurns: 30,
       maxParseFailuresPerTurn: 4,
       maxKernelRejections: 5,
@@ -221,6 +221,47 @@ describe('loadAuthoredSpec', () => {
     expect(authored.playbook).toMatchObject({
       ref: 'playbooks/team-lead.md',
     });
+  });
+
+  it('loads agentic_tool as a runtime-local mode while preserving playbook resolution', () => {
+    const filePath = writeAgenticSpec([
+      'declaredActors:',
+      '  - lead',
+      '  - manager',
+      'actors:',
+      '  lead:',
+      '    kind: role',
+      '    role: lead',
+      '  manager:',
+      '    kind: manager',
+      'orchestration:',
+      '  mode: agentic_tool',
+    ]);
+
+    const authored = loadAuthoredSpec(filePath);
+
+    expect(authored.orchestration?.mode).toBe('agentic_tool');
+    expect(authored.playbook).toMatchObject({ ref: 'playbooks/team-lead.md' });
+  });
+
+  it('normalizes the legacy agentic alias to agentic_text', () => {
+    const filePath = writeAgenticSpec([
+      'declaredActors:',
+      '  - lead',
+      '  - manager',
+      'actors:',
+      '  lead:',
+      '    kind: role',
+      '    role: lead',
+      '  manager:',
+      '    kind: manager',
+      'orchestration:',
+      '  mode: agentic',
+    ]);
+
+    const authored = loadAuthoredSpec(filePath);
+
+    expect(authored.orchestration?.mode).toBe('agentic_text');
   });
 });
 
@@ -244,7 +285,7 @@ function writeAgenticSpec(lines: string[]): string {
         ? []
         : [
             'orchestration:',
-            '  mode: agentic',
+            '  mode: agentic_text',
           ]),
       ...(hasUserTask ? [] : ['userTask: Ship the loader lane.']),
       ...(hasPlaybookRef ? [] : ['playbookRef: playbooks/team-lead.md']),

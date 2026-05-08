@@ -20,7 +20,7 @@ export interface PaseoAgenticSchedulerState {
   readonly maxNoProgressTurns: number;
 }
 
-export interface PaseoAgenticSchedulerSpec extends Pick<AuthoredSpec, 'actors' | 'orchestration'> {}
+export interface PaseoAgenticSchedulerSpec extends Pick<AuthoredSpec, 'actors'> {}
 
 export interface PaseoAgenticSchedulerDecision {
   readonly actor: ActorRef;

@@ -420,7 +420,7 @@ describe('agentic Paseo loop', () => {
 
   it('retries a parse repair within budget and succeeds without emitting a repair event', async () => {
     const { prompts, result } = await runAgentic({
-      spec: { orchestration: { mode: 'agentic', maxParseFailuresPerTurn: 1 } },
+      spec: { orchestration: { mode: 'agentic_text', maxParseFailuresPerTurn: 1 } },
       script: [
         { actor: LEAD, transcriptText: 'not json' },
         {

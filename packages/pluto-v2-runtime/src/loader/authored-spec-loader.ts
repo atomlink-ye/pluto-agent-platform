@@ -6,6 +6,21 @@ import yaml from 'js-yaml';
 
 import { resolvePlaybookSync } from './playbook-resolver.js';
 
+type CoreOrchestration = Exclude<AuthoredSpec['orchestration'], undefined>;
+
+export const RUNTIME_ORCHESTRATION_MODE_VALUES = [
+  'deterministic',
+  'agentic',
+  'agentic_text',
+  'agentic_tool',
+] as const;
+
+export type RuntimeOrchestrationMode = (typeof RUNTIME_ORCHESTRATION_MODE_VALUES)[number];
+
+export type RuntimeOrchestration = Omit<CoreOrchestration, 'mode'> & {
+  readonly mode?: RuntimeOrchestrationMode;
+};
+
 /**
  * Loader-populated playbook metadata for agentic authored specs.
  * `ref` preserves the authored relative reference; `body` and `sha256`
@@ -20,9 +35,69 @@ export interface LoadedPlaybook {
 /**
  * Loader output for authored specs. Deterministic specs surface `playbook: null`.
  */
-export type LoadedAuthoredSpec = AuthoredSpec & {
+export type LoadedAuthoredSpec = Omit<AuthoredSpec, 'orchestration'> & {
+  readonly orchestration?: RuntimeOrchestration;
   readonly playbook: LoadedPlaybook | null;
 };
+
+function toRuntimeOrchestrationMode(mode: unknown): RuntimeOrchestrationMode | undefined {
+  switch (mode) {
+    case 'agentic':
+      return 'agentic_text';
+    case 'deterministic':
+    case 'agentic_text':
+    case 'agentic_tool':
+      return mode;
+    default:
+      return undefined;
+  }
+}
+
+function normalizeModeForCore(mode: unknown): unknown {
+  const runtimeMode = toRuntimeOrchestrationMode(mode);
+  if (runtimeMode === 'agentic_text' || runtimeMode === 'agentic_tool') {
+    return 'agentic';
+  }
+
+  return mode;
+}
+
+function normalizeParsedSpecForCore(parsed: unknown): unknown {
+  if (parsed == null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    return parsed;
+  }
+
+  const record = parsed as Record<string, unknown>;
+  const orchestration = record.orchestration;
+  if (orchestration == null || typeof orchestration !== 'object' || Array.isArray(orchestration)) {
+    return parsed;
+  }
+
+  return {
+    ...record,
+    orchestration: {
+      ...(orchestration as Record<string, unknown>),
+      mode: normalizeModeForCore((orchestration as Record<string, unknown>).mode),
+    },
+  };
+}
+
+function runtimeModeFromParsedSpec(parsed: unknown): RuntimeOrchestrationMode | undefined {
+  if (parsed == null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    return undefined;
+  }
+
+  const orchestration = (parsed as Record<string, unknown>).orchestration;
+  if (orchestration == null || typeof orchestration !== 'object' || Array.isArray(orchestration)) {
+    return undefined;
+  }
+
+  return toRuntimeOrchestrationMode((orchestration as Record<string, unknown>).mode);
+}
+
+function isRuntimeAgenticMode(mode: RuntimeOrchestrationMode | undefined): boolean {
+  return mode === 'agentic_text' || mode === 'agentic_tool';
+}
 
 function parseSerializedSpec(filePath: string, content: string): unknown {
   if (extname(filePath) === '.json') {
@@ -44,8 +119,8 @@ function parseSerializedSpec(filePath: string, content: string): unknown {
   }
 }
 
-function loadResolvedPlaybook(authored: AuthoredSpec, filePath: string): LoadedPlaybook | null {
-  if (authored.orchestration?.mode !== 'agentic') {
+function loadResolvedPlaybook(authored: LoadedAuthoredSpec, filePath: string): LoadedPlaybook | null {
+  if (!isRuntimeAgenticMode(authored.orchestration?.mode)) {
     return null;
   }
 
@@ -66,10 +141,24 @@ function loadResolvedPlaybook(authored: AuthoredSpec, filePath: string): LoadedP
   };
 }
 
-function toLoadedAuthoredSpec(authored: AuthoredSpec, filePath: string): LoadedAuthoredSpec {
-  const loaded = { ...authored } as LoadedAuthoredSpec;
+function toLoadedAuthoredSpec(
+  authored: AuthoredSpec,
+  filePath: string,
+  runtimeMode: RuntimeOrchestrationMode | undefined,
+): LoadedAuthoredSpec {
+  const loaded = {
+    ...authored,
+    ...(authored.orchestration == null
+      ? {}
+      : {
+          orchestration: {
+            ...authored.orchestration,
+            ...(runtimeMode == null ? {} : { mode: runtimeMode }),
+          },
+        }),
+  } as LoadedAuthoredSpec;
   Object.defineProperty(loaded, 'playbook', {
-    value: loadResolvedPlaybook(authored, filePath),
+    value: loadResolvedPlaybook(loaded, filePath),
     enumerable: false,
     configurable: false,
     writable: false,
@@ -78,10 +167,12 @@ function toLoadedAuthoredSpec(authored: AuthoredSpec, filePath: string): LoadedA
 }
 
 export function parseAuthoredSpec(content: string, filePath = '<inline>'): LoadedAuthoredSpec {
-  const authored = AuthoredSpecSchema.parse(parseSerializedSpec(filePath, content));
+  const parsedSpec = parseSerializedSpec(filePath, content);
+  const runtimeMode = runtimeModeFromParsedSpec(parsedSpec);
+  const authored = AuthoredSpecSchema.parse(normalizeParsedSpecForCore(parsedSpec));
   assertManagerDeclaredForCompleteRun(authored);
-  assertAgenticLoaderRequirements(authored, filePath);
-  return toLoadedAuthoredSpec(authored, filePath);
+  assertAgenticLoaderRequirements(authored, filePath, runtimeMode);
+  return toLoadedAuthoredSpec(authored, filePath, runtimeMode);
 }
 
 function assertManagerDeclaredForCompleteRun(authored: AuthoredSpec): void {
@@ -96,40 +187,44 @@ function assertManagerDeclaredForCompleteRun(authored: AuthoredSpec): void {
   }
 }
 
-function assertAgenticLoaderRequirements(authored: AuthoredSpec, filePath: string): void {
-  if (authored.orchestration?.mode !== 'agentic') {
+function assertAgenticLoaderRequirements(
+  authored: AuthoredSpec,
+  filePath: string,
+  runtimeMode: RuntimeOrchestrationMode | undefined,
+): void {
+  if (!isRuntimeAgenticMode(runtimeMode)) {
     return;
   }
 
   if (!authored.declaredActors.includes('lead')) {
-    throw new Error('agentic declaredActors must include lead');
+    throw new Error('agentic_text/agentic_tool declaredActors must include lead');
   }
 
   const leadActor = authored.actors.lead;
   if (leadActor == null || leadActor.kind !== 'role' || leadActor.role !== 'lead') {
-    throw new Error('agentic actors.lead must be { kind: "role", role: "lead" }');
+    throw new Error('agentic_text/agentic_tool actors.lead must be { kind: "role", role: "lead" }');
   }
 
   if (!authored.declaredActors.includes('manager')) {
-    throw new Error('agentic declaredActors must include manager');
+    throw new Error('agentic_text/agentic_tool declaredActors must include manager');
   }
 
   const managerActor = authored.actors.manager;
   if (managerActor == null || managerActor.kind !== 'manager') {
-    throw new Error('agentic actors.manager must be { kind: "manager" }');
+    throw new Error('agentic_text/agentic_tool actors.manager must be { kind: "manager" }');
   }
 
   if (authored.userTask == null || authored.userTask.trim().length === 0) {
-    throw new Error('agentic userTask must be non-empty');
+    throw new Error('agentic_text/agentic_tool userTask must be non-empty');
   }
 
   if (authored.playbookRef == null || authored.playbookRef.trim().length === 0) {
-    throw new Error('agentic playbookRef must be a non-empty markdown path');
+    throw new Error('agentic_text/agentic_tool playbookRef must be a non-empty markdown path');
   }
 
   const playbookRef = authored.playbookRef.trim();
   if (!playbookRef.toLowerCase().endsWith('.md')) {
-    throw new Error('agentic playbookRef must reference a markdown file');
+    throw new Error('agentic_text/agentic_tool playbookRef must reference a markdown file');
   }
 
   resolvePlaybookSync({

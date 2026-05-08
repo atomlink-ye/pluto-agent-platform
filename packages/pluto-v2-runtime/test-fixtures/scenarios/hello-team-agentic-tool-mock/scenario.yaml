@@ -1,5 +1,5 @@
-runId: run-hello-team-agentic-mock
-scenarioRef: scenario/hello-team-agentic-mock
+runId: run-hello-team-agentic-tool-mock
+scenarioRef: scenario/hello-team-agentic-tool-mock
 runProfileRef: paseo-agentic-mock
 actors:
   manager:
@@ -23,7 +23,7 @@ declaredActors:
   - generator
   - evaluator
 orchestration:
-  mode: agentic_text
+  mode: agentic_tool
   maxTurns: 12
   maxParseFailuresPerTurn: 2
   maxKernelRejections: 2
