@@ -244,7 +244,7 @@ describe('loadAuthoredSpec', () => {
     expect(authored.playbook).toMatchObject({ ref: 'playbooks/team-lead.md' });
   });
 
-  it('normalizes the legacy agentic alias to agentic_tool', () => {
+  it('rejects the legacy agentic mode literal (T4-S4 strict bar: only deterministic | agentic_tool)', () => {
     const filePath = writeAgenticSpec([
       'declaredActors:',
       '  - lead',
@@ -259,9 +259,7 @@ describe('loadAuthoredSpec', () => {
       '  mode: agentic',
     ]);
 
-    const authored = loadAuthoredSpec(filePath);
-
-    expect(authored.orchestration?.mode).toBe('agentic_tool');
+    expect(() => loadAuthoredSpec(filePath)).toThrow();
   });
 });
 

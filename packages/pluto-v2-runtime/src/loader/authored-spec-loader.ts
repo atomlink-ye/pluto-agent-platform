@@ -40,8 +40,6 @@ export type LoadedAuthoredSpec = Omit<AuthoredSpec, 'orchestration'> & {
 
 function toRuntimeOrchestrationMode(mode: unknown): RuntimeOrchestrationMode | undefined {
   switch (mode) {
-    case 'agentic':
-      return 'agentic_tool';
     case 'deterministic':
     case 'agentic_tool':
       return mode;
@@ -165,11 +163,32 @@ function toLoadedAuthoredSpec(
 
 export function parseAuthoredSpec(content: string, filePath = '<inline>'): LoadedAuthoredSpec {
   const parsedSpec = parseSerializedSpec(filePath, content);
+  assertOrchestrationModeAllowed(parsedSpec, filePath);
   const runtimeMode = runtimeModeFromParsedSpec(parsedSpec);
   const authored = AuthoredSpecSchema.parse(normalizeParsedSpecForCore(parsedSpec));
   assertManagerDeclaredForCompleteRun(authored);
   assertAgenticLoaderRequirements(authored, filePath, runtimeMode);
   return toLoadedAuthoredSpec(authored, filePath, runtimeMode);
+}
+
+function assertOrchestrationModeAllowed(parsed: unknown, filePath: string): void {
+  if (parsed == null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    return;
+  }
+  const orchestration = (parsed as Record<string, unknown>).orchestration;
+  if (orchestration == null || typeof orchestration !== 'object' || Array.isArray(orchestration)) {
+    return;
+  }
+  const mode = (orchestration as Record<string, unknown>).mode;
+  if (mode === undefined) {
+    return;
+  }
+  if (mode !== 'deterministic' && mode !== 'agentic_tool') {
+    throw new Error(
+      `${filePath}: orchestration.mode '${String(mode)}' is not supported. ` +
+        `T4-S4 narrowed the runtime mode union to 'deterministic' | 'agentic_tool' (the legacy 'agentic' / 'agentic_text' lanes are removed).`,
+    );
+  }
 }
 
 function assertManagerDeclaredForCompleteRun(authored: AuthoredSpec): void {
