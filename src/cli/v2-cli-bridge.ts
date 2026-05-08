@@ -196,7 +196,7 @@ function formatBridgeError(error: unknown): string {
   if (classifyPaseoError(error) === 'spec_invalid') {
     const field = firstUnsupportedField(error);
     if (field) {
-      return `v2 AuthoredSpec does not support v1.6-only field ${field}; use --runtime=v1 for legacy specs.`;
+      return `v2 AuthoredSpec does not support v1.6-only field ${field}; recover legacy specs from the legacy-v1.6-harness-prototype branch.`;
     }
   }
 

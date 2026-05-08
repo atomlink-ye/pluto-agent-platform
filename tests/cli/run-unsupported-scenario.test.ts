@@ -103,5 +103,6 @@ describe("src/cli/run.ts unsupported v1 selectors on v2", () => {
     expect(result.exitCode).toBe(1);
     expect(result.stderr).toContain("helperCli");
     expect(result.stderr).toContain("v2 AuthoredSpec does not support v1.6-only field helperCli");
+    expect(result.stderr).toContain("legacy-v1.6-harness-prototype");
   });
 });
