@@ -1,0 +1,27 @@
+
+> @pluto/v2-runtime@0.1.0 test /Volumes/AgentsWorkspace/orgs/atomlink-ye/code/pluto-agent-platform/packages/pluto-v2-runtime
+> vitest run
+
+
+ RUN  v2.1.9 /Volumes/AgentsWorkspace/orgs/atomlink-ye/code/pluto-agent-platform/packages/pluto-v2-runtime
+
+ ✓ __tests__/adapters/paseo/paseo-cli-client.test.ts (7 tests) 10ms
+ ✓ __tests__/legacy/v1-translator.test.ts (29 tests) 7ms
+ ✓ __tests__/evidence/evidence-packet.test.ts (3 tests) 8ms
+ ✓ __tests__/adapters/paseo/run-paseo.test.ts (5 tests) 8ms
+ ✓ __tests__/adapters/fake/fake-adapter.test.ts (2 tests) 4ms
+ ✓ __tests__/adapters/paseo/paseo-adapter.test.ts (5 tests) 7ms
+ ✓ __tests__/adapters/paseo/prompt-view.test.ts (7 tests) 19ms
+ ✓ __tests__/runtime/runner.test.ts (2 tests) 4ms
+ ✓ __tests__/loader/authored-spec-loader.test.ts (12 tests) 15ms
+ ✓ __tests__/loader/playbook-resolver.test.ts (4 tests) 9ms
+ ✓ __tests__/parity/hello-team-parity.test.ts (1 test) 6ms
+ ✓ __tests__/adapters/fake/fake-script.test.ts (2 tests) 10ms
+ ✓ __tests__/adapters/fake/fake-run.test.ts (2 tests) 86ms
+ ✓ __tests__/adapters/paseo/paseo-directive.test.ts (4 tests) 5ms
+
+ Test Files  14 passed (14)
+      Tests  85 passed (85)
+   Start at  12:31:56
+   Duration  1.36s (transform 457ms, setup 0ms, collect 2.94s, tests 198ms, environment 1ms, prepare 1.61s)
+

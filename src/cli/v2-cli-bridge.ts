@@ -9,9 +9,10 @@ import {
   makePaseoCliClient,
   renderFinalReport,
   runPaseo,
+  type EvidencePacket,
 } from '@pluto/v2-runtime';
 import type { PaseoAgentSpec, PaseoCliClient } from '@pluto/v2-runtime';
-import { replayAll, type ActorRef, type AuthoredSpec, type ClockProvider, type IdProvider } from '@pluto/v2-core';
+import { replayAll, SCHEMA_VERSION, type ActorRef, type AuthoredSpec, type ClockProvider, type IdProvider } from '@pluto/v2-core';
 
 import { classifyPaseoError } from './v2-cli-bridge-error.js';
 
@@ -170,6 +171,37 @@ function resolveRunDir(input: Pick<V2BridgeInput, 'workspaceCwd' | 'evidenceOutp
   return join(resolve(input.workspaceCwd), '.pluto', 'runs', runId);
 }
 
+function fallbackAuthoredSpec(specPath: string, runId = fallbackRunId(specPath)): AuthoredSpec {
+  return {
+    runId,
+    scenarioRef: specPath,
+    runProfileRef: 'paseo-v2-cli',
+    actors: {},
+    declaredActors: [],
+  };
+}
+
+function buildFailedEvidencePacket(args: {
+  readonly authored: AuthoredSpec;
+  readonly summary: string | null;
+}): EvidencePacket {
+  const timestamp = new Date().toISOString();
+  return {
+    schemaVersion: SCHEMA_VERSION,
+    kind: 'evidence_packet',
+    runId: args.authored.runId,
+    status: 'failed',
+    summary: args.summary,
+    startedAt: null,
+    completedAt: null,
+    generatedAt: timestamp,
+    citations: [],
+    tasks: {},
+    mailboxMessages: [],
+    artifacts: [],
+  };
+}
+
 async function writeRunArtifacts(args: {
   readonly runDir: string;
   readonly authored: AuthoredSpec;
@@ -218,6 +250,65 @@ async function writeRunArtifacts(args: {
       tasks: views.task,
       mailbox: views.mailbox,
       artifacts: args.result.evidencePacket.artifacts,
+    }),
+    'utf8',
+  );
+  await writeFile(usageSummaryPath, JSON.stringify(usageSummary, null, 2), 'utf8');
+
+  return writeTranscripts(args.runDir, args.transcriptByActor);
+}
+
+async function writeFailedRunArtifacts(args: {
+  readonly runDir: string;
+  readonly authored: AuthoredSpec;
+  readonly summary: string | null;
+  readonly transcriptByActor: ReadonlyMap<string, string>;
+}): Promise<ReadonlyArray<string>> {
+  const evidencePacketPath = join(args.runDir, EVIDENCE_PACKET_FILE);
+  const finalReportPath = join(args.runDir, FINAL_REPORT_FILE);
+  const usageSummaryPath = join(args.runDir, USAGE_SUMMARY_FILE);
+  const eventsPath = join(args.runDir, EVENTS_FILE);
+  const projectionsDir = join(args.runDir, PROJECTIONS_DIR);
+  const tasksPath = join(projectionsDir, PROJECTIONS_TASKS_FILE);
+  const mailboxPath = join(projectionsDir, PROJECTIONS_MAILBOX_FILE);
+  const artifactsPath = join(projectionsDir, PROJECTIONS_ARTIFACTS_FILE);
+  const views = replayAll([]);
+  const evidencePacket = buildFailedEvidencePacket({
+    authored: args.authored,
+    summary: args.summary,
+  });
+  const usageSummary = buildUsageSummary({
+    authored: args.authored,
+    evidencePacket,
+    usage: {
+      totalInputTokens: 0,
+      totalOutputTokens: 0,
+      totalCostUsd: 0,
+      byActor: new Map(),
+      perTurn: [],
+      usageStatus: 'unavailable',
+      reportedBy: 'paseo.usageEstimate',
+      estimated: false,
+    },
+    evidencePacketPath,
+  });
+
+  await mkdir(projectionsDir, { recursive: true });
+  await writeFile(eventsPath, toJsonl([]), 'utf8');
+  await writeFile(tasksPath, JSON.stringify(views.task.tasks, null, 2), 'utf8');
+  await writeFile(mailboxPath, toJsonl(views.mailbox.messages), 'utf8');
+  await writeFile(artifactsPath, JSON.stringify(evidencePacket.artifacts, null, 2), 'utf8');
+  await writeFile(evidencePacketPath, JSON.stringify(evidencePacket, null, 2), 'utf8');
+  await writeFile(
+    finalReportPath,
+    renderFinalReport({
+      runId: args.authored.runId,
+      status: evidencePacket.status,
+      summary: evidencePacket.summary,
+      evidence: views.evidence,
+      tasks: views.task,
+      mailbox: views.mailbox,
+      artifacts: evidencePacket.artifacts,
     }),
     'utf8',
   );
@@ -301,6 +392,10 @@ async function writeTranscriptsBestEffort(
   }
 }
 
+function logRunArtifactWriteFailure(stderr: NodeJS.WritableStream, error: unknown): void {
+  stderr.write(`best_effort_run_dir_write_failed: ${errorSummary(error)}\n`);
+}
+
 export async function runViaV2Bridge(
   input: V2BridgeInput,
   deps: V2BridgeDeps,
@@ -308,11 +403,17 @@ export async function runViaV2Bridge(
   const promptByTitle = new Map<string, string>();
   const specByTitle = new Map<string, PaseoAgentSpec>();
   const transcriptByActor = new Map<string, string>();
-  let runDir = resolveRunDir(input, fallbackRunId(input.specPath));
+  let authored = fallbackAuthoredSpec(input.specPath);
+  let runDir = resolveRunDir(input, authored.runId);
   let evidencePacketPath = join(runDir, EVIDENCE_PACKET_FILE);
+  let transcriptPaths: ReadonlyArray<string> = [];
+  let status: V2BridgeResult['status'] = 'failed';
+  let summary: string | null = null;
+  let exitCode: V2BridgeResult['exitCode'] = 1;
+  let result: Awaited<ReturnType<typeof runPaseo>> | null = null;
 
   try {
-    const authored = deps.loadAuthoredSpec(input.specPath);
+    authored = deps.loadAuthoredSpec(input.specPath);
     runDir = resolveRunDir(input, authored.runId);
     evidencePacketPath = join(runDir, EVIDENCE_PACKET_FILE);
     const rawClient = deps.makePaseoCliClient({
@@ -326,7 +427,7 @@ export async function runViaV2Bridge(
       clockProvider: deps.defaultClockProvider,
     });
 
-    const result = await deps.runPaseo(authored, adapter, {
+    result = await deps.runPaseo(authored, adapter, {
       client,
       idProvider: deps.defaultIdProvider,
       clockProvider: deps.defaultClockProvider,
@@ -339,37 +440,44 @@ export async function runViaV2Bridge(
       waitTimeoutSec: 600,
     });
 
-    const transcriptPaths = await writeRunArtifacts({
-      runDir,
-      authored,
-      result,
-      transcriptByActor,
-      specByTitle,
-    });
-
-    const status = normalizeBridgeStatus(
+    status = normalizeBridgeStatus(
       result.evidencePacket.status === 'in_progress' ? 'failed' : result.evidencePacket.status,
     );
-
-    return {
-      status,
-      summary: normalizeSummary(result.evidencePacket.summary),
-      runDir,
-      evidencePacketPath,
-      transcriptPaths,
-      exitCode: toExitCode(status),
-    };
+    summary = normalizeSummary(result.evidencePacket.summary);
+    exitCode = toExitCode(status);
   } catch (error) {
-    const transcriptPaths = await writeTranscriptsBestEffort(runDir, transcriptByActor);
-    const summary = formatBridgeError(error);
+    summary = formatBridgeError(error);
     input.stderr.write(`${summary}\n`);
-    return {
-      status: 'failed',
-      summary,
-      runDir,
-      evidencePacketPath,
-      transcriptPaths,
-      exitCode: classifyPaseoError(error) === 'capability_unavailable' ? 2 : 1,
-    };
+    status = 'failed';
+    exitCode = classifyPaseoError(error) === 'capability_unavailable' ? 2 : 1;
+  } finally {
+    try {
+      transcriptPaths = result
+        ? await writeRunArtifacts({
+            runDir,
+            authored,
+            result,
+            transcriptByActor,
+            specByTitle,
+          })
+        : await writeFailedRunArtifacts({
+            runDir,
+            authored,
+            summary,
+            transcriptByActor,
+          });
+    } catch (artifactError) {
+      logRunArtifactWriteFailure(input.stderr, artifactError);
+      transcriptPaths = await writeTranscriptsBestEffort(runDir, transcriptByActor);
+    }
   }
+
+  return {
+    status,
+    summary,
+    runDir,
+    evidencePacketPath,
+    transcriptPaths,
+    exitCode,
+  };
 }

@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { access, chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -73,6 +73,44 @@ async function installV2PackageShims(): Promise<void> {
   }
 }
 
+async function assertNonEmptyFile(filePath: string): Promise<void> {
+  expect((await stat(filePath)).size).toBeGreaterThan(0);
+}
+
+function filterCliStderr(stderr: string): string {
+  return stderr
+    .split("\n")
+    .filter((line) => !line.startsWith("npm warn") && line.trim() !== "")
+    .join("\n");
+}
+
+async function runCli(args: string[], env: NodeJS.ProcessEnv): Promise<{ stdout: string; stderr: string; exitCode: number }> {
+  try {
+    const { stdout, stderr } = await exec(
+      "npx",
+      [
+        "tsx",
+        join(process.cwd(), "src/cli/run.ts"),
+        ...args,
+      ],
+      {
+        cwd: process.cwd(),
+        timeout: 30_000,
+        env,
+      },
+    );
+
+    return { stdout, stderr, exitCode: 0 };
+  } catch (error) {
+    const failed = error as Error & { stdout?: string; stderr?: string; code?: number };
+    return {
+      stdout: failed.stdout ?? "",
+      stderr: failed.stderr ?? "",
+      exitCode: failed.code ?? 1,
+    };
+  }
+}
+
 describe("src/cli/run.ts default v2 runtime", () => {
   it("defaults to v2 and writes the run-directory evidence outputs when --spec is passed", async () => {
     const workspace = await mkdtemp(join(tmpdir(), "pluto-run-v2-default-"));
@@ -82,11 +120,8 @@ describe("src/cli/run.ts default v2 runtime", () => {
 
     await installV2PackageShims();
     const fakePaseoBin = await createFakePaseoBin(workspace);
-    const { stdout, stderr } = await exec(
-      "npx",
+    const { stdout, stderr, exitCode } = await runCli(
       [
-        "tsx",
-        join(process.cwd(), "src/cli/run.ts"),
         `--spec=${SPEC_PATH}`,
         "--workspace",
         workspace,
@@ -94,22 +129,14 @@ describe("src/cli/run.ts default v2 runtime", () => {
         dataDir,
       ],
       {
-        cwd: process.cwd(),
-        timeout: 30_000,
-        env: {
-          ...process.env,
-          PASEO_BIN: fakePaseoBin,
-          PASEO_FAKE_STATE_DIR: fakeStateDir,
-        },
+        ...process.env,
+        PASEO_BIN: fakePaseoBin,
+        PASEO_FAKE_STATE_DIR: fakeStateDir,
       },
     );
 
-    // Filter out pnpm/npm env warnings ("npm warn Unknown env config ...") that
-    // can appear on some host pnpm versions and aren't part of the CLI surface.
-    const filteredStderr = stderr
-      .split("\n")
-      .filter((line) => !line.startsWith("npm warn") && line.trim() !== "")
-      .join("\n");
+    const filteredStderr = filterCliStderr(stderr);
+    expect(exitCode).toBe(0);
     expect(filteredStderr).toBe("");
     const output = JSON.parse(stdout) as { status: string; runDir: string; evidencePacketPath: string; transcriptPaths: string[] };
     expect(output.status).toBe("succeeded");
@@ -121,13 +148,13 @@ describe("src/cli/run.ts default v2 runtime", () => {
     expect(packet.status).toBe("succeeded");
 
     await Promise.all([
-      access(join(output.runDir, "events.jsonl")),
-      access(join(output.runDir, "projections", "tasks.json")),
-      access(join(output.runDir, "projections", "mailbox.jsonl")),
-      access(join(output.runDir, "projections", "artifacts.json")),
-      access(join(output.runDir, "final-report.md")),
-      access(join(output.runDir, "usage-summary.json")),
-      access(output.transcriptPaths[0]!),
+      assertNonEmptyFile(join(output.runDir, "events.jsonl")),
+      assertNonEmptyFile(join(output.runDir, "projections", "tasks.json")),
+      assertNonEmptyFile(join(output.runDir, "projections", "mailbox.jsonl")),
+      assertNonEmptyFile(join(output.runDir, "projections", "artifacts.json")),
+      assertNonEmptyFile(join(output.runDir, "final-report.md")),
+      assertNonEmptyFile(join(output.runDir, "usage-summary.json")),
+      assertNonEmptyFile(output.transcriptPaths[0]!),
     ]);
 
     const usageSummary = JSON.parse(await readFile(join(output.runDir, "usage-summary.json"), "utf8")) as {
@@ -136,5 +163,78 @@ describe("src/cli/run.ts default v2 runtime", () => {
     };
     expect(usageSummary.usageStatus).toBe("reported");
     expect(usageSummary.reportedBy).toBe("paseo.usageEstimate");
+  }, 30_000);
+
+  it("defaults runRootDir to <workspace>/.pluto/runs when --workspace is set without --data-dir", async () => {
+    const workspace = await mkdtemp(join(tmpdir(), "pluto-run-v2-workspace-"));
+    const fakeStateDir = join(workspace, "paseo-state");
+    tempDirs.push(workspace);
+
+    await installV2PackageShims();
+    const fakePaseoBin = await createFakePaseoBin(workspace);
+    const { stdout, stderr, exitCode } = await runCli(
+      [
+        `--spec=${SPEC_PATH}`,
+        "--workspace",
+        workspace,
+      ],
+      {
+        ...process.env,
+        PASEO_BIN: fakePaseoBin,
+        PASEO_FAKE_STATE_DIR: fakeStateDir,
+      },
+    );
+
+    expect(exitCode).toBe(0);
+    expect(filterCliStderr(stderr)).toBe("");
+
+    const output = JSON.parse(stdout) as { runDir: string };
+    expect(output.runDir).toBe(join(workspace, ".pluto", "runs", "run-hello-team-paseo-mock"));
+  }, 30_000);
+
+  it("writes the documented run-directory files even when the v2 run fails", async () => {
+    const workspace = await mkdtemp(join(tmpdir(), "pluto-run-v2-failed-"));
+    const badSpecPath = join(workspace, "bad-agentic.yaml");
+    tempDirs.push(workspace);
+
+    await installV2PackageShims();
+    await writeFile(badSpecPath, "runId: broken\n---\nrunId: duplicate\n", "utf8");
+
+    const { stdout, stderr, exitCode } = await runCli(
+      [
+        `--spec=${badSpecPath}`,
+        "--workspace",
+        workspace,
+      ],
+      process.env,
+    );
+
+    expect(exitCode).toBe(1);
+    expect(filterCliStderr(stderr)).toContain("Expected exactly one YAML document");
+
+    const output = JSON.parse(stdout) as {
+      status: string;
+      runDir: string;
+      evidencePacketPath: string;
+      transcriptPaths: string[];
+    };
+    expect(output.status).toBe("failed");
+    expect(output.runDir).toBe(join(workspace, ".pluto", "runs", "bad-agentic"));
+    expect(output.evidencePacketPath).toBe(join(output.runDir, "evidence-packet.json"));
+    expect(output.transcriptPaths).toEqual([]);
+
+    await Promise.all([
+      assertNonEmptyFile(join(output.runDir, "events.jsonl")),
+      assertNonEmptyFile(join(output.runDir, "projections", "tasks.json")),
+      assertNonEmptyFile(join(output.runDir, "projections", "mailbox.jsonl")),
+      assertNonEmptyFile(join(output.runDir, "projections", "artifacts.json")),
+      assertNonEmptyFile(join(output.runDir, "evidence-packet.json")),
+      assertNonEmptyFile(join(output.runDir, "final-report.md")),
+      assertNonEmptyFile(join(output.runDir, "usage-summary.json")),
+    ]);
+
+    const packet = JSON.parse(await readFile(output.evidencePacketPath, "utf8")) as { status: string; summary: string | null };
+    expect(packet.status).toBe("failed");
+    expect(packet.summary).toBe("Expected exactly one YAML document");
   }, 30_000);
 });

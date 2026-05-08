@@ -226,7 +226,11 @@ function resolveV2EvidenceOutputDir(flags: CliFlags): string {
 }
 
 function resolveV2RunRootDir(flags: CliFlags): string {
-  return join(resolveCliDataDir(flags), "runs");
+  if (flags.dataDir) {
+    return join(resolve(flags.dataDir), "runs");
+  }
+
+  return join(resolve(flags.workspace ?? flags.root), ".pluto", "runs");
 }
 
 async function runV2(flags: CliFlags): Promise<void> {

@@ -1,0 +1,4 @@
+
+> @pluto/v2-core@0.1.0 build /Volumes/AgentsWorkspace/orgs/atomlink-ye/code/pluto-agent-platform/packages/pluto-v2-core
+> tsc -p tsconfig.json
+

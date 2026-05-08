@@ -1,8 +1,14 @@
+import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
+
 import { describe, expect, it } from 'vitest';
 
-import { SCHEMA_VERSION, type ActorRef, type AuthoredSpec, type RunEvent } from '@pluto/v2-core';
+import { SCHEMA_VERSION, type ActorRef, type RunEvent } from '@pluto/v2-core';
 
 import { buildPromptView, type PromptViewInput } from '../../../src/adapters/paseo/prompt-view.js';
+import { loadAuthoredSpec, type LoadedAuthoredSpec } from '../../../src/loader/authored-spec-loader.js';
+import { resolvePlaybook } from '../../../src/loader/playbook-resolver.js';
 
 const RUN_ID = '11111111-1111-4111-8111-111111111111';
 const REQUEST_ID = '22222222-2222-4222-8222-222222222222';
@@ -11,7 +17,7 @@ const GENERATOR: ActorRef = { kind: 'role', role: 'generator' };
 const EVALUATOR: ActorRef = { kind: 'role', role: 'evaluator' };
 const MANAGER: ActorRef = { kind: 'manager' };
 
-const SPEC: AuthoredSpec = {
+const SPEC: LoadedAuthoredSpec = {
   runId: RUN_ID,
   scenarioRef: 'scenario/prompt-view',
   runProfileRef: 'paseo-agentic',
@@ -24,6 +30,7 @@ const SPEC: AuthoredSpec = {
   declaredActors: ['manager', 'lead', 'generator', 'evaluator'],
   userTask: 'Ship the first draft.',
   playbookRef: 'playbooks/agentic.md',
+  playbook: null,
 };
 
 const BUDGETS: PromptViewInput['budgets'] = {
@@ -268,14 +275,16 @@ describe('buildPromptView', () => {
     ]);
   });
 
-  it('surfaces budgets, delegation, rejection, and playbook metadata', () => {
-    const specWithSha = {
-      ...SPEC,
-      playbookSha256: 'abc123sha',
-    } as AuthoredSpec;
+  it('surfaces budgets, delegation, rejection, and playbook metadata', async () => {
+    const { loadedSpec, specPath } = writeLoadedAgenticSpec();
+    expect(loadedSpec.playbook).not.toBeNull();
+    const resolvedPlaybook = await resolvePlaybook({
+      specPath,
+      playbookRef: loadedSpec.playbookRef!,
+    });
 
     const view = buildPromptView(buildInput({
-      spec: specWithSha,
+      spec: loadedSpec,
       events: [runStarted(0)],
     }));
 
@@ -294,8 +303,8 @@ describe('buildPromptView', () => {
       error: 'kernel rejected duplicate idempotency key',
     });
     expect(view.playbook).toEqual({
-      ref: 'playbooks/agentic.md',
-      sha256: 'abc123sha',
+      ref: resolvedPlaybook.ref,
+      sha256: resolvedPlaybook.sha256,
     });
   });
 
@@ -343,3 +352,47 @@ describe('buildPromptView', () => {
     expect(first).toBe(second);
   });
 });
+
+function writeLoadedAgenticSpec(): { loadedSpec: LoadedAuthoredSpec; specPath: string } {
+  const tempDir = mkdtempSync(join(tmpdir(), 'pluto-v2-runtime-prompt-view-'));
+  const playbookDir = join(tempDir, 'playbooks');
+  const specPath = join(tempDir, 'agentic.yaml');
+
+  mkdirSync(playbookDir, { recursive: true });
+  writeFileSync(join(playbookDir, 'agentic.md'), '# Team Lead\n\nCoordinate the run.\n', 'utf8');
+  writeFileSync(
+    specPath,
+    [
+      `runId: ${RUN_ID}`,
+      'scenarioRef: scenario/prompt-view',
+      'runProfileRef: paseo-agentic',
+      'orchestration:',
+      '  mode: agentic',
+      'actors:',
+      '  manager:',
+      '    kind: manager',
+      '  lead:',
+      '    kind: role',
+      '    role: lead',
+      '  generator:',
+      '    kind: role',
+      '    role: generator',
+      '  evaluator:',
+      '    kind: role',
+      '    role: evaluator',
+      'declaredActors:',
+      '  - manager',
+      '  - lead',
+      '  - generator',
+      '  - evaluator',
+      'userTask: Ship the first draft.',
+      'playbookRef: playbooks/agentic.md',
+    ].join('\n'),
+    'utf8',
+  );
+
+  return {
+    loadedSpec: loadAuthoredSpec(specPath),
+    specPath,
+  };
+}

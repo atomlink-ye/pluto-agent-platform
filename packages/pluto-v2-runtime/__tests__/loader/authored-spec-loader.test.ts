@@ -95,6 +95,39 @@ describe('loadAuthoredSpec', () => {
     expect(() => loadAuthoredSpec(filePath)).toThrow(/agentic.*declaredActors.*manager/i);
   });
 
+  it('requires actors.lead to have kind role with role lead in agentic mode', () => {
+    const filePath = writeAgenticSpec([
+      'declaredActors:',
+      '  - lead',
+      '  - manager',
+      'actors:',
+      '  lead:',
+      '    kind: role',
+      '    role: generator',
+      '  manager:',
+      '    kind: manager',
+    ]);
+
+    expect(() => loadAuthoredSpec(filePath)).toThrow(/agentic.*actors\.lead/i);
+  });
+
+  it('requires actors.manager to have kind manager in agentic mode', () => {
+    const filePath = writeAgenticSpec([
+      'declaredActors:',
+      '  - lead',
+      '  - manager',
+      'actors:',
+      '  lead:',
+      '    kind: role',
+      '    role: lead',
+      '  manager:',
+      '    kind: role',
+      '    role: evaluator',
+    ]);
+
+    expect(() => loadAuthoredSpec(filePath)).toThrow(/agentic.*actors\.manager/i);
+  });
+
   it('requires a non-empty userTask in agentic mode', () => {
     const filePath = writeAgenticSpec([
       'declaredActors:',
@@ -156,6 +189,39 @@ describe('loadAuthoredSpec', () => {
 
     expect(() => loadAuthoredSpec(filePath)).not.toThrow();
   });
+
+  it('parses numeric orchestration fields from YAML as numbers', () => {
+    const filePath = writeAgenticSpec([
+      'declaredActors:',
+      '  - lead',
+      '  - manager',
+      'actors:',
+      '  lead:',
+      '    kind: role',
+      '    role: lead',
+      '  manager:',
+      '    kind: manager',
+      'orchestration:',
+      '  mode: agentic',
+      '  maxTurns: 30',
+      '  maxParseFailuresPerTurn: 4',
+      '  maxKernelRejections: 5',
+      '  maxNoProgressTurns: 6',
+    ]);
+
+    const authored = loadAuthoredSpec(filePath);
+
+    expect(authored.orchestration).toEqual({
+      mode: 'agentic',
+      maxTurns: 30,
+      maxParseFailuresPerTurn: 4,
+      maxKernelRejections: 5,
+      maxNoProgressTurns: 6,
+    });
+    expect(authored.playbook).toMatchObject({
+      ref: 'playbooks/team-lead.md',
+    });
+  });
 });
 
 function writeAgenticSpec(lines: string[]): string {
@@ -164,6 +230,7 @@ function writeAgenticSpec(lines: string[]): string {
   const filePath = join(tempDir, 'agentic.yaml');
   const hasUserTask = lines.some((line) => line.startsWith('userTask:'));
   const hasPlaybookRef = lines.some((line) => line.startsWith('playbookRef:'));
+  const hasOrchestration = lines.some((line) => line.startsWith('orchestration:'));
 
   mkdirSync(playbookDir, { recursive: true });
   writeFileSync(join(playbookDir, 'team-lead.md'), '# Team Lead\n\nFollow the task.\n', 'utf8');
@@ -173,8 +240,12 @@ function writeAgenticSpec(lines: string[]): string {
       'runId: run-1',
       'scenarioRef: scenario/hello-team',
       'runProfileRef: paseo-agentic',
-      'orchestration:',
-      '  mode: agentic',
+      ...(hasOrchestration
+        ? []
+        : [
+            'orchestration:',
+            '  mode: agentic',
+          ]),
       ...(hasUserTask ? [] : ['userTask: Ship the loader lane.']),
       ...(hasPlaybookRef ? [] : ['playbookRef: playbooks/team-lead.md']),
       ...lines,

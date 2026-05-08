@@ -1,5 +1,7 @@
-import { replayAll, type ActorRef, type AuthoredSpec, type RunEvent } from '@pluto/v2-core';
+import { replayAll, type ActorRef, type RunEvent } from '@pluto/v2-core';
 
+import { assembleEvidencePacket } from '../../evidence/evidence-packet.js';
+import type { LoadedAuthoredSpec } from '../../loader/authored-spec-loader.js';
 import type { PaseoDirective } from './paseo-directive.js';
 
 const MAILBOX_LIMIT = 50;
@@ -16,7 +18,7 @@ export interface PromptViewBudgets {
 }
 
 export interface PromptViewInput {
-  readonly spec: AuthoredSpec;
+  readonly spec: LoadedAuthoredSpec;
   readonly events: ReadonlyArray<RunEvent>;
   readonly forActor: ActorRef;
   readonly budgets: PromptViewBudgets;
@@ -60,10 +62,6 @@ export interface PromptView {
   readonly lastRejection: { directive: PaseoDirective; error: string } | null;
 }
 
-type PromptViewSpecMetadata = AuthoredSpec & {
-  readonly playbookSha256?: string;
-};
-
 function sameActor(left: ActorRef, right: ActorRef): boolean {
   if (left.kind !== right.kind) {
     return false;
@@ -80,35 +78,30 @@ function isLeadActor(actor: ActorRef): boolean {
   return actor.kind === 'role' && actor.role === 'lead';
 }
 
-function resolvePlaybook(spec: AuthoredSpec): PromptView['playbook'] {
-  const metadata = spec as PromptViewSpecMetadata;
-  if (typeof metadata.playbookRef !== 'string' || typeof metadata.playbookSha256 !== 'string') {
+function resolvePlaybook(spec: LoadedAuthoredSpec): PromptView['playbook'] {
+  if (spec.playbook == null) {
     return null;
   }
 
   return {
-    ref: metadata.playbookRef,
-    sha256: metadata.playbookSha256,
+    ref: spec.playbook.ref,
+    sha256: spec.playbook.sha256,
   };
 }
 
-function summarizeArtifacts(events: ReadonlyArray<RunEvent>): PromptView['artifacts'] {
-  const artifacts = new Map<string, PromptView['artifacts'][number]>();
-
-  for (const event of events) {
-    if (event.kind !== 'artifact_published') {
-      continue;
-    }
-
-    artifacts.set(event.payload.artifactId, {
-      id: event.payload.artifactId,
-      kind: event.payload.kind,
-      mediaType: event.payload.mediaType,
-      byteSize: event.payload.byteSize,
-    });
+function summarizeArtifacts(spec: LoadedAuthoredSpec, events: ReadonlyArray<RunEvent>): PromptView['artifacts'] {
+  if (events.length === 0) {
+    return [];
   }
 
-  return [...artifacts.values()].sort((left, right) => left.id.localeCompare(right.id));
+  return assembleEvidencePacket(replayAll(events), events, spec.runId).artifacts
+    .map((artifact) => ({
+      id: artifact.artifactId,
+      kind: artifact.kind,
+      mediaType: artifact.mediaType,
+      byteSize: artifact.byteSize,
+    }))
+    .sort((left, right) => left.id.localeCompare(right.id));
 }
 
 export function buildPromptView(input: PromptViewInput): PromptView {
@@ -160,7 +153,7 @@ export function buildPromptView(input: PromptViewInput): PromptView {
     budgets: input.budgets,
     tasks,
     mailbox: visibleMessages,
-    artifacts: summarizeArtifacts(input.events),
+    artifacts: summarizeArtifacts(input.spec, input.events),
     activeDelegation: input.activeDelegation,
     lastRejection: input.lastRejection,
   };

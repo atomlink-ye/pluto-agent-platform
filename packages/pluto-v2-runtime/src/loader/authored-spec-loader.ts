@@ -6,13 +6,31 @@ import yaml from 'js-yaml';
 
 import { resolvePlaybookSync } from './playbook-resolver.js';
 
+/**
+ * Loader-populated playbook metadata for agentic authored specs.
+ * `ref` preserves the authored relative reference; `body` and `sha256`
+ * come from resolving and reading the markdown file relative to the spec.
+ */
+export interface LoadedPlaybook {
+  readonly ref: string;
+  readonly body: string;
+  readonly sha256: string;
+}
+
+/**
+ * Loader output for authored specs. Deterministic specs surface `playbook: null`.
+ */
+export type LoadedAuthoredSpec = AuthoredSpec & {
+  readonly playbook: LoadedPlaybook | null;
+};
+
 function parseSerializedSpec(filePath: string, content: string): unknown {
   if (extname(filePath) === '.json') {
     return JSON.parse(content);
   }
 
   try {
-    return yaml.load(content, { schema: yaml.FAILSAFE_SCHEMA });
+    return yaml.load(content, { schema: yaml.DEFAULT_SCHEMA });
   } catch (error) {
     if (error instanceof Error && /expected a single document in the stream/i.test(error.message)) {
       throw new Error('Expected exactly one YAML document');
@@ -26,11 +44,44 @@ function parseSerializedSpec(filePath: string, content: string): unknown {
   }
 }
 
-export function parseAuthoredSpec(content: string, filePath = '<inline>'): AuthoredSpec {
+function loadResolvedPlaybook(authored: AuthoredSpec, filePath: string): LoadedPlaybook | null {
+  if (authored.orchestration?.mode !== 'agentic') {
+    return null;
+  }
+
+  const playbookRef = authored.playbookRef?.trim();
+  if (!playbookRef) {
+    return null;
+  }
+
+  const resolved = resolvePlaybookSync({
+    specPath: filePath === '<inline>' ? `${process.cwd()}/inline-spec.yaml` : filePath,
+    playbookRef,
+  });
+
+  return {
+    ref: resolved.ref,
+    body: resolved.body,
+    sha256: resolved.sha256,
+  };
+}
+
+function toLoadedAuthoredSpec(authored: AuthoredSpec, filePath: string): LoadedAuthoredSpec {
+  const loaded = { ...authored } as LoadedAuthoredSpec;
+  Object.defineProperty(loaded, 'playbook', {
+    value: loadResolvedPlaybook(authored, filePath),
+    enumerable: false,
+    configurable: false,
+    writable: false,
+  });
+  return loaded;
+}
+
+export function parseAuthoredSpec(content: string, filePath = '<inline>'): LoadedAuthoredSpec {
   const authored = AuthoredSpecSchema.parse(parseSerializedSpec(filePath, content));
   assertManagerDeclaredForCompleteRun(authored);
   assertAgenticLoaderRequirements(authored, filePath);
-  return authored;
+  return toLoadedAuthoredSpec(authored, filePath);
 }
 
 function assertManagerDeclaredForCompleteRun(authored: AuthoredSpec): void {
@@ -87,7 +138,7 @@ function assertAgenticLoaderRequirements(authored: AuthoredSpec, filePath: strin
   });
 }
 
-export function loadAuthoredSpec(filePath: string): AuthoredSpec {
+export function loadAuthoredSpec(filePath: string): LoadedAuthoredSpec {
   const content = readFileSync(filePath, 'utf8');
   return parseAuthoredSpec(content, filePath);
 }

@@ -1,0 +1,33 @@
+
+> @pluto/v2-core@0.1.0 test /Volumes/AgentsWorkspace/orgs/atomlink-ye/code/pluto-agent-platform/packages/pluto-v2-core
+> vitest run
+
+
+ RUN  v2.1.9 /Volumes/AgentsWorkspace/orgs/atomlink-ye/code/pluto-agent-platform/packages/pluto-v2-core
+
+ ✓ __tests__/core/protocol-validator.test.ts (12 tests) 3ms
+ ✓ __tests__/core/run-state-reducer.test.ts (8 tests) 6ms
+ ✓ __tests__/core/run-kernel.test.ts (15 tests) 8ms
+ ✓ __tests__/core/authority.test.ts (38 tests) 6ms
+ ✓ __tests__/projections/evidence-projection.test.ts (9 tests) 7ms
+ ✓ __tests__/core/team-context.test.ts (6 tests) 6ms
+ ✓ __tests__/projections/task-projection.test.ts (6 tests) 2ms
+ ✓ __tests__/projections/mailbox-projection.test.ts (6 tests) 6ms
+ ✓ __tests__/core/spec-compiler.test.ts (15 tests) 7ms
+ ✓ __tests__/core/run-event-log.test.ts (6 tests) 7ms
+ ✓ __tests__/projections/replay-all.test.ts (3 tests) 10ms
+ ✓ __tests__/run-event.test.ts (6 tests) 4ms
+ ✓ __tests__/run-event-schema-rejection.test.ts (6 tests) 4ms
+ ✓ __tests__/core/transition-graph.test.ts (37 tests) 13ms
+ ✓ __tests__/projection-contracts.test.ts (3 tests) 4ms
+ ✓ __tests__/projections/replay-from-store.test.ts (3 tests) 23ms
+ ✓ __tests__/protocol-request.test.ts (7 tests) 3ms
+ ✓ __tests__/replay-fixture.test.ts (1 test) 3ms
+ ✓ __tests__/versioning.test.ts (3 tests) 7ms
+ ✓ __tests__/run-event-rejected.test.ts (6 tests) 3ms
+
+ Test Files  20 passed (20)
+      Tests  196 passed (196)
+   Start at  12:31:56
+   Duration  1.50s (transform 330ms, setup 0ms, collect 2.35s, tests 131ms, environment 2ms, prepare 2.11s)
+
