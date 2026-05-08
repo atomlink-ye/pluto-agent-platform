@@ -539,7 +539,9 @@ describe('agentic_tool Paseo loop', () => {
 
     try {
       expect(execution.result.events.at(-1)?.kind).toBe('run_completed');
+      expect(execution.result.events.at(-1)?.actor).toEqual({ kind: 'manager' });
       expect(execution.result.events.at(-1)?.payload).toMatchObject({ status: 'succeeded', summary: 'done' });
+      expect(execution.result.evidencePacket.initiatingActor).toEqual(LEAD);
     } finally {
       await execution.cleanup();
     }
@@ -671,7 +673,9 @@ describe('agentic_tool Paseo loop', () => {
 
     try {
       expect(execution.prompts.map((entry) => entry.actorKey)).toEqual(['role:lead', 'role:lead']);
+      expect(execution.result.events.at(-1)?.actor).toEqual({ kind: 'manager' });
       expect(execution.result.events.at(-1)?.payload).toMatchObject({ status: 'failed', summary: 'maxNoProgressTurns exhausted' });
+      expect(execution.result.evidencePacket.initiatingActor).toEqual({ kind: 'manager' });
     } finally {
       await execution.cleanup();
     }

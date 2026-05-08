@@ -90,7 +90,7 @@ function buildPaseoAgentSpec(
 ): PaseoAgentSpec {
   const provider = process.env.PASEO_PROVIDER ?? 'opencode';
   const model = process.env.PASEO_MODEL ?? 'openai/gpt-5.4-mini';
-  const mode = process.env.PASEO_MODE ?? 'build';
+  const mode = process.env.PASEO_MODE ?? 'orchestrator';
   const thinking = process.env.PASEO_THINKING;
 
   return {
@@ -118,16 +118,51 @@ function wrapPaseoClient(
   client: PaseoCliClient,
   promptByTitle: ReadonlyMap<string, string>,
   transcriptByActor: Map<string, string>,
+  specByTitle: Map<string, PaseoAgentSpec>,
+  stderr: NodeJS.WritableStream,
 ): PaseoCliClient {
   const actorByAgentId = new Map<string, string>();
 
+  const shouldFallbackToBuildMode = (spec: PaseoAgentSpec, error: unknown): boolean => {
+    if (spec.mode !== 'orchestrator') {
+      return false;
+    }
+
+    const message = errorSummary(error).toLowerCase();
+    return message.includes('orchestrator') && message.includes('mode');
+  };
+
   return {
     async spawnAgent(spec) {
-      const session = await client.spawnAgent({
-        ...spec,
-        initialPrompt: [promptByTitle.get(spec.title), spec.initialPrompt].filter(Boolean).join('\n\n'),
-      });
-      actorByAgentId.set(session.agentId, spec.title.startsWith('pluto-') ? spec.title.slice('pluto-'.length) : spec.title);
+      const initialPrompt = [promptByTitle.get(spec.title), spec.initialPrompt].filter(Boolean).join('\n\n');
+      let launchedSpec = spec;
+      let session;
+
+      try {
+        session = await client.spawnAgent({
+          ...spec,
+          initialPrompt,
+        });
+      } catch (error) {
+        if (!shouldFallbackToBuildMode(spec, error)) {
+          throw error;
+        }
+
+        stderr.write(
+          `paseo_mode_fallback: orchestrator rejected for ${spec.title}; retrying with build (${errorSummary(error)})\n`,
+        );
+        launchedSpec = {
+          ...spec,
+          mode: 'build',
+        };
+        session = await client.spawnAgent({
+          ...launchedSpec,
+          initialPrompt,
+        });
+      }
+
+      specByTitle.set(launchedSpec.title, launchedSpec);
+      actorByAgentId.set(session.agentId, launchedSpec.title.startsWith('pluto-') ? launchedSpec.title.slice('pluto-'.length) : launchedSpec.title);
       return session;
     },
     sendPrompt(agentId, prompt) {
@@ -231,6 +266,7 @@ function buildFailedEvidencePacket(args: {
     runId: args.authored.runId,
     status: 'failed',
     summary: args.summary,
+    initiatingActor: null,
     startedAt: null,
     completedAt: null,
     generatedAt: timestamp,
@@ -286,6 +322,7 @@ async function writeRunArtifacts(args: {
       runId: args.authored.runId,
       status: args.result.evidencePacket.status,
       summary: args.result.evidencePacket.summary,
+      initiatingActor: args.result.evidencePacket.initiatingActor,
       evidence: views.evidence,
       tasks: views.task,
       mailbox: views.mailbox,
@@ -346,6 +383,7 @@ async function writeFailedRunArtifacts(args: {
       runId: args.authored.runId,
       status: evidencePacket.status,
       summary: evidencePacket.summary,
+      initiatingActor: evidencePacket.initiatingActor,
       evidence: views.evidence,
       tasks: views.task,
       mailbox: views.mailbox,
@@ -462,7 +500,7 @@ export async function runViaV2Bridge(
       ...(input.paseoHost ? { host: input.paseoHost } : {}),
       ...(input.paseoBin ? { bin: input.paseoBin } : {}),
     });
-    const client = wrapPaseoClient(rawClient, promptByTitle, transcriptByActor);
+    const client = wrapPaseoClient(rawClient, promptByTitle, transcriptByActor, specByTitle, input.stderr);
     const adapter = deps.makePaseoAdapter({
       idProvider: deps.defaultIdProvider,
       clockProvider: deps.defaultClockProvider,

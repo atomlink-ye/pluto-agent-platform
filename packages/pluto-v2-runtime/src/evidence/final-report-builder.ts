@@ -1,4 +1,4 @@
-import type { ReplayViews } from '@pluto/v2-core';
+import type { ActorRef, ReplayViews } from '@pluto/v2-core';
 
 type ReportArtifact = {
   readonly artifactId: string;
@@ -24,10 +24,29 @@ function actorKey(
   }
 }
 
+function initiatingActorLabel(actor: ActorRef | null): string {
+  if (actor == null) {
+    return 'unknown';
+  }
+
+  switch (actor.kind) {
+    case 'manager':
+      return 'manager';
+    case 'system':
+      return 'system';
+    case 'role':
+      return `${actor.role} (role)`;
+  }
+
+  const exhaustiveActor: never = actor;
+  return String(exhaustiveActor);
+}
+
 export function renderFinalReport(input: {
   readonly runId: string;
   readonly status: string;
   readonly summary: string | null;
+  readonly initiatingActor: ActorRef | null;
   readonly evidence: ReplayViews['evidence'];
   readonly tasks: ReplayViews['task'];
   readonly mailbox: ReplayViews['mailbox'];
@@ -39,6 +58,7 @@ export function renderFinalReport(input: {
     `- Run ID: ${input.runId}`,
     `- Status: ${input.status}`,
     `- Summary: ${input.summary ?? 'none'}`,
+    `- Initiated by: ${initiatingActorLabel(input.initiatingActor)}`,
     '',
     '## Evidence Citations',
   ];

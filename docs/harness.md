@@ -71,6 +71,8 @@ See `docs/notes/t5-d2b-wait-feasibility.md` and `docs/plans/active/v2-actor-loop
 
 ## Live Smoke Knobs
 
+CLI-launched Paseo actors now default to `orchestrator` mode. Set `PASEO_MODE=build` to force the older mode, and the CLI will log a warning and retry with `build` if a sandbox rejects `orchestrator` at spawn time.
+
 | Knob | Env Var | Purpose |
 | --- | --- | --- |
 | Provider | `PASEO_PROVIDER` | paseo provider alias |

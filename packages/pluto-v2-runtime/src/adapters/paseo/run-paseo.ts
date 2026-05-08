@@ -123,6 +123,7 @@ type UsageSummary = {
 };
 
 type AgenticToolUsageSummary = UsageSummary & {
+  initiatingActor: ActorRef | null;
   runtimeTraces: ReadonlyArray<RuntimeTraceEvent>;
 };
 
@@ -561,6 +562,7 @@ async function runAgenticToolLoop(
   const pendingMutationByActorKey = new Map<string, Deferred<ObservedMutatingToolCall>>();
   const pendingArmByActorKey = new Map<string, Deferred<void>>();
   const usage = createUsageAccumulator();
+  let initiatingActor: ActorRef | null = null;
   const leaseStore = makeTurnLeaseStore(leadActor);
   const bearerToken = randomUUID();
   const workspaceCwd = options.workspaceCwd ?? process.cwd();
@@ -748,6 +750,7 @@ async function runAgenticToolLoop(
             ? { status: 'failed' as const, summary: 'maxKernelRejections exhausted' }
             : null;
       if (budgetFailure != null) {
+        initiatingActor = { kind: 'manager' };
         kernel.submit(buildCompleteRunRequest(kernel.state.runId, budgetFailure, options));
         break;
       }
@@ -1011,6 +1014,7 @@ async function runAgenticToolLoop(
       }
 
       if (observed.toolName === 'pluto_complete_run' && observed.event.kind === 'run_completed') {
+        initiatingActor = observed.actor;
         break;
       }
 
@@ -1046,6 +1050,7 @@ async function runAgenticToolLoop(
 
   return {
     ...usage.finalize(),
+    initiatingActor,
     runtimeTraces: runtimeTraceBuffer,
   } satisfies AgenticToolUsageSummary;
 }
@@ -1104,7 +1109,9 @@ export async function runPaseo<S>(
     });
     const events = stripAcceptedRequestKey(kernel.eventLog.read(0, kernel.eventLog.head + 1));
     const views = replayAll(events);
-    const evidencePacket = assembleEvidencePacket(views, events, kernel.state.runId);
+    const evidencePacket = assembleEvidencePacket(views, events, kernel.state.runId, {
+      initiatingActor: usage.initiatingActor,
+    });
 
     return {
       events,
@@ -1186,7 +1193,9 @@ export async function runPaseo<S>(
 
   const events = stripAcceptedRequestKey(kernel.eventLog.read(0, kernel.eventLog.head + 1));
   const views = replayAll(events);
-  const evidencePacket = assembleEvidencePacket(views, events, kernel.state.runId);
+  const evidencePacket = assembleEvidencePacket(views, events, kernel.state.runId, {
+    initiatingActor: { kind: 'manager' },
+  });
 
   return {
     events,

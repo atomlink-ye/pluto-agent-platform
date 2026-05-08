@@ -1,12 +1,14 @@
 import { z } from 'zod';
 
 import {
+  ActorRefSchema,
   ArtifactPublishedPayloadSchema,
   MailboxProjectionMessageSchema,
   RunCompletedStatusSchema,
   RunEventKindSchema,
   SCHEMA_VERSION,
   TaskProjectionViewStateSchema,
+  type ActorRef,
   type ReplayViews,
   type RunEvent,
 } from '@pluto/v2-core';
@@ -28,6 +30,7 @@ export const EvidencePacketShape = z.object({
   runId: z.string(),
   status: z.union([RunCompletedStatusSchema, z.literal('in_progress')]),
   summary: z.string().nullable(),
+  initiatingActor: ActorRefSchema.nullable().optional(),
   startedAt: z.string().datetime().nullable(),
   completedAt: z.string().datetime().nullable(),
   generatedAt: z.string().datetime(),
@@ -37,12 +40,17 @@ export const EvidencePacketShape = z.object({
   artifacts: z.array(ArtifactPublishedPayloadSchema),
 });
 
-export type EvidencePacket = z.infer<typeof EvidencePacketShape>;
+export type EvidencePacket = Omit<z.infer<typeof EvidencePacketShape>, 'initiatingActor'> & {
+  initiatingActor: ActorRef | null;
+};
 
 export const assembleEvidencePacket = (
   views: ReplayViews,
   events: readonly RunEvent[],
   runId: string,
+  options?: {
+    readonly initiatingActor?: ActorRef | null;
+  },
 ): EvidencePacket => {
   const eventById = new Map(events.map((event) => [event.eventId, event] as const));
   const run = views.evidence.run;
@@ -52,12 +60,13 @@ export const assembleEvidencePacket = (
     throw new Error('Cannot assemble evidence packet without any event timestamp');
   }
 
-  return EvidencePacketShape.parse({
+  const parsed = EvidencePacketShape.parse({
     schemaVersion: SCHEMA_VERSION,
     kind: 'evidence_packet',
     runId,
     status: run?.status ?? 'in_progress',
     summary: run?.summary ?? null,
+    initiatingActor: options?.initiatingActor ?? null,
     startedAt: run?.startedAt ?? null,
     completedAt: run?.completedAt ?? null,
     generatedAt,
@@ -94,4 +103,9 @@ export const assembleEvidencePacket = (
         byteSize: event.payload.byteSize,
       })),
   });
+
+  return {
+    ...parsed,
+    initiatingActor: parsed.initiatingActor ?? null,
+  };
 };

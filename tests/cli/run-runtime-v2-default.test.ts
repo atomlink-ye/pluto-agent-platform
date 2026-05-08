@@ -18,7 +18,7 @@ afterEach(async () => {
   await Promise.all(tempDirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
 });
 
-async function createFakePaseoBin(rootDir: string): Promise<string> {
+async function createFakePaseoBin(rootDir: string, options?: { rejectOrchestratorOnce?: boolean }): Promise<string> {
   const binPath = join(rootDir, "paseo.cjs");
   const script = [
     "#!/usr/bin/env node",
@@ -30,12 +30,17 @@ async function createFakePaseoBin(rootDir: string): Promise<string> {
     'mkdirSync(stateDir, { recursive: true });',
     'const command = args[0];',
     'const agentPath = (agentId) => join(stateDir, `${agentId}.json`);',
+    'const spawnModesPath = join(stateDir, "__spawn-modes.json");',
+    'const orchestratorRejectedPath = join(stateDir, "__orchestrator-rejected");',
     'const readAgent = (agentId) => existsSync(agentPath(agentId)) ? JSON.parse(readFileSync(agentPath(agentId), "utf8")) : { transcript: "" };',
     'const writeAgent = (agentId, state) => { mkdirSync(dirname(agentPath(agentId)), { recursive: true }); writeFileSync(agentPath(agentId), JSON.stringify(state), "utf8"); };',
+    'const readSpawnModes = () => existsSync(spawnModesPath) ? JSON.parse(readFileSync(spawnModesPath, "utf8")) : [];',
+    'const recordSpawnMode = (title, mode) => { const next = readSpawnModes(); next.push({ title, mode }); writeFileSync(spawnModesPath, JSON.stringify(next), "utf8"); };',
     'const extractPrompt = (raw) => { const match = raw.match(/```json\\s*([\\s\\S]*?)```/); return match ? match[1].trim() : raw.trim(); };',
     'const turnIndexFor = (directive) => { try { const parsed = JSON.parse(directive); if (parsed.kind === "create_task") return 0; if (parsed.kind === "publish_artifact") return 2; if (parsed.kind === "append_mailbox_message") return 3; if (parsed.kind === "complete_run") return 5; if (parsed.kind === "change_task_state" && parsed.payload && parsed.payload.to === "running") return 1; if (parsed.kind === "change_task_state" && parsed.payload && parsed.payload.to === "completed") return 4; } catch {} return 99; };',
     'const appendTranscript = (agentId, promptText) => { const directive = extractPrompt(promptText); const prefix = `[assistant turn ${turnIndexFor(directive)}]\\n`; const prior = readAgent(agentId).transcript; const next = prior ? `${prior}\\n${prefix}${directive}` : `${prefix}${directive}`; writeAgent(agentId, { transcript: next }); };',
-    'if (command === "run") { const titleIndex = args.indexOf("--title"); const title = titleIndex >= 0 ? args[titleIndex + 1] : "unknown"; const agentId = `fake-${title}`; appendTranscript(agentId, args.at(-1) ?? ""); process.stdout.write(JSON.stringify({ agentId })); process.exit(0); }',
+    `const rejectOrchestratorOnce = ${JSON.stringify(Boolean(options?.rejectOrchestratorOnce))};`,
+    'if (command === "run") { const titleIndex = args.indexOf("--title"); const modeIndex = args.indexOf("--mode"); const title = titleIndex >= 0 ? args[titleIndex + 1] : "unknown"; const mode = modeIndex >= 0 ? args[modeIndex + 1] : null; recordSpawnMode(title, mode); if (rejectOrchestratorOnce && mode === "orchestrator" && !existsSync(orchestratorRejectedPath)) { writeFileSync(orchestratorRejectedPath, "1", "utf8"); process.stderr.write("unsupported mode orchestrator\\n"); process.exit(2); } const agentId = `fake-${title}`; appendTranscript(agentId, args.at(-1) ?? ""); process.stdout.write(JSON.stringify({ agentId })); process.exit(0); }',
     'if (command === "send") { const agentId = args[1]; const promptFile = args[args.indexOf("--prompt-file") + 1]; appendTranscript(agentId, readFileSync(promptFile, "utf8")); process.exit(0); }',
     'if (command === "wait") { process.stdout.write(JSON.stringify({ exitCode: 0 })); process.exit(0); }',
     'if (command === "logs") { const agentId = args[1]; process.stdout.write(readAgent(agentId).transcript ?? ""); process.exit(0); }',
@@ -98,6 +103,7 @@ async function installV2PackageShims(): Promise<void> {
     join(process.cwd(), "src", "node_modules", "@pluto"),
     join(process.cwd(), "packages", "pluto-v2-runtime", "node_modules", "@pluto"),
   ];
+  const zodShimDir = join(process.cwd(), "packages", "pluto-v2-core", "node_modules", "zod");
   const packages = [
     {
       name: "v2-core",
@@ -117,10 +123,24 @@ async function installV2PackageShims(): Promise<void> {
       await writeFile(join(dir, "index.js"), `export * from ${JSON.stringify(pkg.target)};\n`, "utf8");
     }
   }
+
+  const zodTarget = pathToFileURL(join(process.cwd(), "packages", "pluto-v2-runtime", "node_modules", "zod", "index.js")).href;
+  await mkdir(zodShimDir, { recursive: true });
+  await writeFile(
+    join(zodShimDir, "package.json"),
+    JSON.stringify({ name: "zod", type: "module", exports: "./index.js" }, null, 2),
+    "utf8",
+  );
+  await writeFile(join(zodShimDir, "index.js"), `export * from ${JSON.stringify(zodTarget)};\n`, "utf8");
 }
 
 async function assertNonEmptyFile(filePath: string): Promise<void> {
   expect((await stat(filePath)).size).toBeGreaterThan(0);
+}
+
+async function readSpawnModes(stateDir: string): Promise<string[]> {
+  const entries = JSON.parse(await readFile(join(stateDir, "__spawn-modes.json"), "utf8")) as Array<{ mode: string }>;
+  return entries.map((entry) => entry.mode);
 }
 
 function filterCliStderr(stderr: string): string {
@@ -192,6 +212,7 @@ describe("src/cli/run.ts default v2 runtime", () => {
 
     const packet = JSON.parse(await readFile(output.evidencePacketPath, "utf8")) as { status: string };
     expect(packet.status).toBe("succeeded");
+    expect((await readSpawnModes(fakeStateDir)).every((mode) => mode === "orchestrator")).toBe(true);
 
     await Promise.all([
       assertNonEmptyFile(join(output.runDir, "events.jsonl")),
@@ -238,6 +259,58 @@ describe("src/cli/run.ts default v2 runtime", () => {
     expect(output.runDir).toBe(join(workspace, ".pluto", "runs", "run-hello-team-paseo-mock"));
   }, 30_000);
 
+  it("honors PASEO_MODE=build overrides", async () => {
+    const workspace = await mkdtemp(join(tmpdir(), "pluto-run-v2-build-mode-"));
+    const fakeStateDir = join(workspace, "paseo-state");
+    tempDirs.push(workspace);
+
+    await installV2PackageShims();
+    const fakePaseoBin = await createFakePaseoBin(workspace);
+    const { stderr, exitCode } = await runCli(
+      [
+        `--spec=${SPEC_PATH}`,
+        "--workspace",
+        workspace,
+      ],
+      {
+        ...process.env,
+        PASEO_BIN: fakePaseoBin,
+        PASEO_FAKE_STATE_DIR: fakeStateDir,
+        PASEO_MODE: "build",
+      },
+    );
+
+    expect(exitCode).toBe(0);
+    expect(filterCliStderr(stderr)).toBe("");
+    expect((await readSpawnModes(fakeStateDir)).every((mode) => mode === "build")).toBe(true);
+  }, 30_000);
+
+  it("falls back to build with a warning when orchestrator mode is rejected", async () => {
+    const workspace = await mkdtemp(join(tmpdir(), "pluto-run-v2-mode-fallback-"));
+    const fakeStateDir = join(workspace, "paseo-state");
+    tempDirs.push(workspace);
+
+    await installV2PackageShims();
+    const fakePaseoBin = await createFakePaseoBin(workspace, { rejectOrchestratorOnce: true });
+    const { stderr, exitCode } = await runCli(
+      [
+        `--spec=${SPEC_PATH}`,
+        "--workspace",
+        workspace,
+      ],
+      {
+        ...process.env,
+        PASEO_BIN: fakePaseoBin,
+        PASEO_FAKE_STATE_DIR: fakeStateDir,
+      },
+    );
+
+    const filteredStderr = filterCliStderr(stderr);
+    expect(exitCode).toBe(0);
+    expect(filteredStderr).toContain("paseo_mode_fallback: orchestrator rejected");
+    expect((await readSpawnModes(fakeStateDir)).slice(0, 2)).toEqual(["orchestrator", "build"]);
+  }, 30_000);
+
   it("routes agentic specs through the real CLI path", async () => {
     const workspace = await mkdtemp(join(tmpdir(), "pluto-run-v2-agentic-"));
     const dataDir = join(workspace, ".pluto");
@@ -264,10 +337,18 @@ describe("src/cli/run.ts default v2 runtime", () => {
     expect(exitCode).toBe(0);
     expect(filterCliStderr(stderr)).toBe("");
 
-    const output = JSON.parse(stdout) as { status: string; runDir: string; transcriptPaths: string[] };
+    const output = JSON.parse(stdout) as { status: string; runDir: string; evidencePacketPath: string; transcriptPaths: string[] };
     expect(output.status).toBe("succeeded");
     expect(output.runDir).toBe(join(dataDir, "runs", "run-hello-team-agentic-tool-mock"));
     expect(output.transcriptPaths.length).toBeGreaterThan(0);
+
+    const packet = JSON.parse(await readFile(output.evidencePacketPath, "utf8")) as {
+      initiatingActor: { kind: string; role?: string } | null;
+    };
+    expect(packet.initiatingActor).toEqual({ kind: "role", role: "lead" });
+
+    const finalReport = await readFile(join(output.runDir, "final-report.md"), "utf8");
+    expect(finalReport).toContain("- Initiated by: lead (role)");
 
     const events = (await readFile(join(output.runDir, "events.jsonl"), "utf8"))
       .trim()

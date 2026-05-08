@@ -40,8 +40,10 @@ describe('runFake', () => {
       idProvider: counterIdProvider(1),
       clockProvider: fixedClockProvider(FIXED_TIME),
     });
+    const expectedPacket = JSON.parse(readFileSync(EXPECTED_PACKET_PATH, 'utf8')) as Record<string, unknown>;
 
     expect(`${result.events.map((event) => JSON.stringify(event)).join('\n')}\n`).toBe(readFileSync(EXPECTED_EVENTS_PATH, 'utf8'));
-    expect(JSON.stringify(result.evidencePacket, null, 2)).toBe(readFileSync(EXPECTED_PACKET_PATH, 'utf8').trim());
+    expect(result.evidencePacket).toMatchObject(expectedPacket);
+    expect(result.evidencePacket.initiatingActor ?? null).toBeNull();
   });
 });
