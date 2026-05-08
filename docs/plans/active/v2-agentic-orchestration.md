@@ -390,9 +390,31 @@ This iteration models Pluto's team lead on the role the local
 manager (Claude Code) actually played while running T1 → T2 →
 T3: read state, choose one directive, delegate to a specialist,
 receive a structured result, decide next, document evidence,
-respect budgets. The 13 user stories below capture that shape.
-Mark each post-merge to validate the iteration delivered what
-the analogy promises.
+respect budgets.
+
+### Framing (binding, corrected 2026-05-08)
+
+Team lead is **NOT a decision-only simplified role.** Team lead
+**IS a complete LLM agent** — a paseo-spawned OpenCode session
+with its own LLM backend AND OpenCode's read / grep / bash /
+glob tool use AND the ability to spawn sub-agents (via
+`create_task ownerActor=X`). Each turn the lead's emitted
+**output** must be ONE kernel directive (closed protocol), but
+its **reasoning** can include arbitrary tool use first
+(reading the repo, reading artifact bodies, reading sub-actor
+transcripts on disk, etc.).
+
+The lead's prompt MUST set this expectation explicitly.
+Concrete framing line landed in T3-R3
+agentic-prompt-builder:
+
+> You have to understand the current status. Rather than just
+> trust the message.
+
+Sub-actors are also LLM agents (paseo-spawned), with the same
+tool-use power within their delegated turn.
+
+The 13 user stories below are read against this framing.
 
 Legend: ✅ delivered by this iteration · 🟡 partial / out of
 scope but documented · ⏭ explicitly deferred to a later slice.
@@ -408,9 +430,10 @@ scope but documented · ⏭ explicitly deferred to a later slice.
   lastRejection.
 - T2 ✅ `agentic-prompt-builder` injects this view into lead's
   prompt every turn.
-- 🟡 Lead does NOT see arbitrary file contents (no tool use, no
-  shell). For coding-team workflows, sub-actors do tool work in
-  their own paseo session; lead sees only the kernel events.
+- T3-R3 ✅ Lead has tool use via OpenCode (read / grep / bash /
+  glob) and can read filesystem context — repo, run dir,
+  transcripts — before emitting a directive. Framing line in
+  prompt explicitly tells it to verify rather than trust.
 
 ### S2 — Emit ONE directive per turn from the closed verb set
 
@@ -469,10 +492,10 @@ scope but documented · ⏭ explicitly deferred to a later slice.
   ensures parse-repair recovers.
 - T2 ✅ next prompt-view includes new task state + mailbox
   reply + any artifacts.
-- 🟡 Lead does NOT see sub-actor's transcript / reasoning —
-  only kernel events. Sufficient for state-driven decisions;
-  insufficient if lead needs to evaluate sub-actor's
-  reasoning quality. (See S13.)
+- T3-R3 ✅ Lead can `read` the sub-actor transcript file
+  (`.pluto/runs/<runId>/paseo-transcripts/<actorKey>.txt`) when
+  it wants the full reasoning trail. T3 fixture ships transcripts
+  on disk for both lead and sub-actors.
 
 ### S6 — Recover from a sub-actor's invalid output
 
@@ -586,19 +609,24 @@ scope but documented · ⏭ explicitly deferred to a later slice.
 
 ## Gap not closed by this iteration (heads-up for the next round)
 
-These are the four gaps the operator should be aware of when
-deciding the next iteration:
+Re-evaluated 2026-05-08 after framing correction (lead = full
+LLM agent with tool use). Four gaps remain:
 
-1. **No tool-use surface for the lead itself** (Story 1, 5).
-   Lead can only see kernel events and choose closed directives;
-   it cannot read files, run grep, or invoke commands directly.
-   For coding-team workflows the sub-actor (paseo agent) does
-   tool work and reports back — that's fine — but a lead that
-   needs to consult external context would require an
-   `inspect_*` family of read-only verbs.
-2. **No "ask operator" verb** (Story 6). Lead can either keep
-   trying or fail the run. There's no mailbox channel to the
-   human operator asking for clarification mid-run.
+1. **Artifact body has no `path` field** (Story 5, 8). Lead
+   emits `publish_artifact` with `kind / mediaType / byteSize`
+   metadata only — no pointer to where the actual content lives
+   on disk. Sub-actor producing the artifact must write content
+   somewhere, but the kernel event doesn't carry the path, so
+   lead can't reliably read it back later. Add an optional
+   `path` (relative to run dir) on the artifact payload OR a
+   convention `(.pluto/runs/<runId>/artifacts/<artifactId>)`.
+2. **`create_task` carries only `title`, no detailed brief**
+   (Story 3). Lead delegates with a one-line title; sub-actor
+   sees that title but no rich instructions. Workaround: lead
+   `append_mailbox_message toActor=X body="<rich brief>"` BEFORE
+   the spawn — sub-actor sees both. The flow exists but isn't
+   enforced. A future `create_task.payload.brief: string` would
+   make the contract explicit.
 3. **No typed envelope citations** (Story 8, 13). The agentic
    loop runs but evidence today only has `run_started` /
    `run_completed` citations. GPT Pro's N3 envelope translator
@@ -609,8 +637,14 @@ deciding the next iteration:
    `usageStatus: 'unavailable'` honestly; per-provider usage
    extraction + hard $ gating is GPT Pro N5.
 
-Items 3 and 4 are the most impactful for "production-ready team
-lead". Items 1 and 2 are quality-of-life additions.
+5. **No "ask operator" verb** (Story 6). Lead can either keep
+   trying or fail the run. There's no mailbox channel to the
+   human operator asking for clarification mid-run.
+
+Items 3 and 4 are the most impactful for production-ready team
+lead. Item 1 unblocks artifact-body inspection by lead. Item 2
+makes the delegation brief contract explicit. Item 5 is
+quality-of-life.
 
 ## Out of scope (deferred)
 
