@@ -5,7 +5,9 @@
 - Execution environment: local worktree at `/Volumes/AgentsWorkspace/orgs/atomlink-ye/code/pluto-agent-platform`
 - Branch: `pluto/v2/t1-spec-prompt-view-runtdir`
 - Target remote: `origin/pluto/v2/t1-spec-prompt-view-runtdir`
-- Commit / push state: pending final commit + push at report creation time
+- Pushed commit: `ac0aa552e46a2350f8199609f9bf8d79c13cf90c`
+- Push verification: local `HEAD` matches `origin/pluto/v2/t1-spec-prompt-view-runtdir`
+- Local note: unrelated untracked workspace files remain outside the scoped T1 slice
 
 ## Scope per deliverable
 
