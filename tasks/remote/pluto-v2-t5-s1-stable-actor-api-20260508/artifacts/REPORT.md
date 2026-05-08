@@ -26,4 +26,5 @@
 
 - Commit created locally at `830e834` with message `feat(v2): T5-S1 stable actor API (CLI + HTTP + env handoff)`.
 - `commit_and_push` failed at the remote push step with GitHub auth error: `fatal: could not read Username for 'https://github.com': No such device or address`.
+- `force_add_report` then created local report commit `2829a67` with message `docs(tasks): add T5-S1 report`, and its push failed with the same auth error.
 - Operator push is still required locally.
