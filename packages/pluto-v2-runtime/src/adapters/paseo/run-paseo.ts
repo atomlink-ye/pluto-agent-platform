@@ -67,6 +67,7 @@ export interface PaseoTurnResponse {
 export interface PaseoRuntimeAdapter<S> extends RuntimeAdapter<S> {
   pendingPaseoTurn(state: S, view: KernelView): PaseoTurnRequest | null;
   withPaseoResponse(state: S, response: PaseoTurnResponse): S;
+  withKernelEvent?(state: S, event: RunEvent, view: KernelView): S;
 }
 
 type ProjectionViews = ReplayViews;
@@ -105,11 +106,18 @@ type UsageSummary = {
 type TranscriptAwareState = {
   turnIndex: number;
   transcriptByActor?: ReadonlyMap<string, string> | Readonly<Record<string, string>>;
+  transcriptCursorByActor?: ReadonlyMap<string, number> | Readonly<Record<string, number>>;
 };
 
 function isTranscriptRecord(
   value: TranscriptAwareState['transcriptByActor'],
 ): value is Readonly<Record<string, string>> {
+  return value != null && typeof value === 'object' && !(value instanceof Map);
+}
+
+function isTranscriptCursorRecord(
+  value: TranscriptAwareState['transcriptCursorByActor'],
+): value is Readonly<Record<string, number>> {
   return value != null && typeof value === 'object' && !(value instanceof Map);
 }
 
@@ -128,8 +136,20 @@ function stripAcceptedRequestKey(events: readonly RunEvent[]): RunEvent[] {
 }
 
 function transcriptLengthBefore<S>(state: S, actor: ActorRef): number {
+  const transcriptCursorByActor = (state as TranscriptAwareState).transcriptCursorByActor;
   const transcriptByActor = (state as TranscriptAwareState).transcriptByActor;
   const key = actorKey(actor);
+
+  if (transcriptCursorByActor instanceof Map) {
+    return transcriptCursorByActor.get(key) ?? 0;
+  }
+
+  if (isTranscriptCursorRecord(transcriptCursorByActor)) {
+    const cursor = transcriptCursorByActor[key];
+    if (typeof cursor === 'number') {
+      return cursor;
+    }
+  }
 
   if (transcriptByActor instanceof Map) {
     return transcriptByActor.get(key)?.length ?? 0;
@@ -336,17 +356,17 @@ export async function runPaseo<S>(
       stepCount += 1;
 
       const step = adapter.step(state, kernelViewOf(kernel));
-      if (step.kind === 'done') {
-        kernel.submit(buildCompleteRunRequest(kernel.state.runId, step.completion, options), {
-          correlationId: options.correlationId ?? null,
-        });
-        state = step.nextState;
-        break;
-      }
+        if (step.kind === 'done') {
+          kernel.submit(buildCompleteRunRequest(kernel.state.runId, step.completion, options), {
+            correlationId: options.correlationId ?? null,
+          });
+          state = step.nextState;
+          break;
+        }
 
-      kernel.submit(step.request, { correlationId: options.correlationId ?? null });
-      state = step.nextState;
-    }
+        const submission = kernel.submit(step.request, { correlationId: options.correlationId ?? null });
+        state = adapter.withKernelEvent?.(step.nextState, submission.event, kernelViewOf(kernel)) ?? step.nextState;
+      }
   } finally {
     await cleanupAgents(options.client, agentByActorKey.values());
   }

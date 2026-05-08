@@ -1,0 +1,28 @@
+runId: run-hello-team-agentic-mock
+scenarioRef: scenario/hello-team-agentic-mock
+runProfileRef: paseo-agentic-mock
+actors:
+  manager:
+    kind: manager
+  lead:
+    kind: role
+    role: lead
+  generator:
+    kind: role
+    role: generator
+  evaluator:
+    kind: role
+    role: evaluator
+declaredActors:
+  - manager
+  - lead
+  - generator
+  - evaluator
+orchestration:
+  mode: agentic
+  maxTurns: 12
+  maxParseFailuresPerTurn: 2
+  maxKernelRejections: 2
+  maxNoProgressTurns: 3
+userTask: Produce a draft artifact and close the run.
+playbookRef: playbook.md

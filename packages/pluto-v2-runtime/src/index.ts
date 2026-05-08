@@ -7,7 +7,13 @@ export * from './evidence/usage-summary-builder.js';
 export * from './legacy/v1-translator.js';
 export * from './loader/authored-spec-loader.js';
 export * from './loader/scenario-loader.js';
-export { makePaseoAdapter, PaseoAdapterStateError, type PaseoAdapterState } from './adapters/paseo/paseo-adapter.js';
+export {
+  makePaseoAdapter,
+  PaseoAdapterStateError,
+  type PaseoAdapterState,
+  type PaseoAgenticLoopState,
+  type PaseoDeterministicAdapterState,
+} from './adapters/paseo/paseo-adapter.js';
 export { makePaseoCliClient, __internal, type PaseoAgentSession, type PaseoAgentSpec, type PaseoCliClient, type PaseoLogsResult, type PaseoUsageEstimate } from './adapters/paseo/paseo-cli-client.js';
 export { PaseoDirectiveSchema, extractDirective, type PaseoDirective } from './adapters/paseo/paseo-directive.js';
 export { runPaseo } from './adapters/paseo/run-paseo.js';

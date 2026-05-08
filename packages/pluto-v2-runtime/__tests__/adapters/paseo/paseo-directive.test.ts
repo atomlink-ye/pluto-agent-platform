@@ -59,6 +59,23 @@ describe('extractDirective', () => {
     });
   });
 
+  it('rejects transcripts with multiple fenced json blocks', () => {
+    expect(
+      extractDirective([
+        '```json',
+        '{"kind":"complete_run","payload":{"status":"succeeded","summary":"first"}}',
+        '```',
+        'Some explanation',
+        '```json',
+        '{"kind":"complete_run","payload":{"status":"failed","summary":"second"}}',
+        '```',
+      ].join('\n')),
+    ).toEqual({
+      ok: false,
+      reason: 'multiple fenced json blocks found',
+    });
+  });
+
   it('returns a validation failure for malformed directive payloads', () => {
     const result = extractDirective([
       '```json',

@@ -2,16 +2,30 @@ import {
   SCHEMA_VERSION,
   ProtocolRequestSchema,
   type ActorRef,
+  type AuthoredSpec,
   type ClockProvider,
   type IdProvider,
   type ProtocolRequest,
+  type RunEvent,
   type TeamContext,
 } from '@pluto/v2-core';
 
 import type { PaseoUsageEstimate } from './paseo-cli-client.js';
+import { buildAgenticPrompt } from './agentic-prompt-builder.js';
+import {
+  createInitialAgenticLoopState,
+  type PaseoAgenticLoopState as AgenticLoopState,
+} from './agentic-loop-state.js';
+import {
+  budgetFailureForAgentic,
+  leadActorFromSpec,
+  pickNextAgenticActor,
+} from './agentic-scheduler.js';
+import { buildPromptView } from './prompt-view.js';
 import type { KernelView } from '../../runtime/kernel-view.js';
+import type { LoadedAuthoredSpec } from '../../loader/authored-spec-loader.js';
 import type { RuntimeAdapter, RuntimeAdapterStep } from '../../runtime/runtime-adapter.js';
-import { extractDirective } from './paseo-directive.js';
+import { extractDirective, type PaseoDirective } from './paseo-directive.js';
 
 export interface PaseoTurnRequest {
   readonly actor: ActorRef;
@@ -27,18 +41,25 @@ export interface PaseoTurnResponse {
 export interface PaseoRuntimeAdapter<S> extends RuntimeAdapter<S> {
   pendingPaseoTurn(state: S, view: KernelView): PaseoTurnRequest | null;
   withPaseoResponse(state: S, response: PaseoTurnResponse): S;
+  withKernelEvent?(state: S, event: RunEvent, view: KernelView): S;
 }
 
-export interface PaseoAdapterState {
+export interface PaseoDeterministicAdapterState {
+  readonly mode?: 'deterministic';
   readonly turnIndex: number;
   readonly maxTurns: number;
   readonly currentActor: ActorRef | null;
   readonly transcriptByActor: Readonly<Record<string, string>>;
+  readonly transcriptCursorByActor?: Readonly<Record<string, number>>;
   readonly awaitingResponseFor: ActorRef | null;
   readonly bufferedResponse: PaseoTurnResponse | null;
   readonly parseFailureCount: number;
   readonly maxParseFailuresPerTurn: number;
 }
+
+export type PaseoAgenticLoopState = AgenticLoopState;
+
+export type PaseoAdapterState = PaseoDeterministicAdapterState | PaseoAgenticLoopState;
 
 export class PaseoAdapterStateError extends Error {
   constructor(message: string) {
@@ -50,6 +71,10 @@ export class PaseoAdapterStateError extends Error {
 type PhaseDefinition = {
   actor: ActorRef;
   prompt: (view: KernelView) => string;
+};
+
+type AgenticAdapterSpec = AuthoredSpec & {
+  readonly playbook?: LoadedAuthoredSpec['playbook'];
 };
 
 const DEFAULT_MAX_TURNS = 20;
@@ -89,6 +114,18 @@ function appendTranscript(
   return {
     ...transcriptByActor,
     [key]: previous.length > 0 ? `${previous}\n${entry}` : entry,
+  };
+}
+
+function advanceTranscriptCursor(
+  transcriptCursorByActor: Readonly<Record<string, number>> | undefined,
+  actor: ActorRef,
+  delta: number,
+): Readonly<Record<string, number>> {
+  const key = actorKeyOf(actor);
+  return {
+    ...(transcriptCursorByActor ?? {}),
+    [key]: (transcriptCursorByActor?.[key] ?? 0) + delta,
   };
 }
 
@@ -194,9 +231,9 @@ function makeProtocolRequest(
 }
 
 function nextPhaseState(
-  state: PaseoAdapterState,
+  state: PaseoDeterministicAdapterState,
   transcriptByActor: Readonly<Record<string, string>>,
-): PaseoAdapterState {
+): PaseoDeterministicAdapterState {
   const nextTurnIndex = state.turnIndex + 1;
   const nextPhase = phaseAt(nextTurnIndex);
   return {
@@ -204,6 +241,7 @@ function nextPhaseState(
     maxTurns: state.maxTurns,
     currentActor: nextPhase?.actor ?? null,
     transcriptByActor,
+    transcriptCursorByActor: state.transcriptCursorByActor,
     awaitingResponseFor: nextPhase?.actor ?? null,
     bufferedResponse: null,
     parseFailureCount: 0,
@@ -211,20 +249,70 @@ function nextPhaseState(
   };
 }
 
+function isAgenticState(state: PaseoAdapterState): state is PaseoAgenticLoopState {
+  return state.mode === 'agentic';
+}
+
+function normalizeAgenticSpec(spec: AgenticAdapterSpec): LoadedAuthoredSpec {
+  return {
+    ...(spec as LoadedAuthoredSpec),
+    playbook: spec.playbook ?? null,
+  };
+}
+
+function nextAgenticTurnState(
+  state: PaseoAgenticLoopState,
+  actor: ActorRef,
+  activeDelegation: ActorRef | null,
+  delegationPointer: ActorRef | null,
+  delegationTaskId: string | null,
+  progressed: boolean,
+): PaseoAgenticLoopState {
+  return {
+    ...state,
+    currentActor: actor,
+    awaitingResponseFor: actor,
+    bufferedResponse: null,
+    parseFailureCount: 0,
+    activeDelegation,
+    delegationPointer,
+    delegationTaskId,
+    lastRejection: null,
+    pendingDirective: null,
+    noProgressTurns: progressed ? 0 : state.noProgressTurns + 1,
+  };
+}
+
 export function makePaseoAdapter(options: {
   idProvider: IdProvider;
   clockProvider: ClockProvider;
+  spec?: AgenticAdapterSpec;
   maxTurns?: number;
   maxParseFailuresPerTurn?: number;
+  maxKernelRejections?: number;
+  maxNoProgressTurns?: number;
 }): PaseoRuntimeAdapter<PaseoAdapterState> {
+  const agenticSpec = options.spec?.orchestration?.mode === 'agentic' ? options.spec : null;
+
   return {
     init(teamContext: TeamContext, _view: KernelView): PaseoAdapterState {
+      if (agenticSpec != null) {
+        return createInitialAgenticLoopState({
+          spec: agenticSpec,
+          maxTurns: options.maxTurns,
+          maxParseFailuresPerTurn: options.maxParseFailuresPerTurn,
+          maxKernelRejections: options.maxKernelRejections,
+          maxNoProgressTurns: options.maxNoProgressTurns,
+        });
+      }
+
       const firstPhase = phaseAt(0);
       return {
         turnIndex: 0,
         maxTurns: options.maxTurns ?? DEFAULT_MAX_TURNS,
         currentActor: firstPhase?.actor ?? null,
         transcriptByActor: {},
+        transcriptCursorByActor: {},
         awaitingResponseFor: firstPhase?.actor ?? null,
         bufferedResponse: null,
         parseFailureCount: 0,
@@ -233,6 +321,42 @@ export function makePaseoAdapter(options: {
     },
 
     pendingPaseoTurn(state: PaseoAdapterState, view: KernelView): PaseoTurnRequest | null {
+      if (isAgenticState(state)) {
+        if (state.bufferedResponse !== null || budgetFailureForAgentic(state) !== null) {
+          return null;
+        }
+
+        const pendingActor = state.awaitingResponseFor;
+        if (pendingActor == null || agenticSpec == null) {
+          return null;
+        }
+
+        return {
+          actor: pendingActor,
+          prompt: buildAgenticPrompt({
+            actor: pendingActor,
+            promptView: buildPromptView({
+              spec: normalizeAgenticSpec(agenticSpec),
+              events: view.events,
+              forActor: pendingActor,
+              budgets: {
+                turnIndex: state.turnIndex,
+                maxTurns: state.maxTurns,
+                parseFailuresThisTurn: state.parseFailureCount,
+                maxParseFailuresPerTurn: state.maxParseFailuresPerTurn,
+                kernelRejections: state.kernelRejections,
+                maxKernelRejections: state.maxKernelRejections,
+                noProgressTurns: state.noProgressTurns,
+                maxNoProgressTurns: state.maxNoProgressTurns,
+              },
+              activeDelegation: state.activeDelegation,
+              lastRejection: state.lastRejection,
+            }),
+            playbook: agenticSpec.playbook ?? null,
+          }),
+        };
+      }
+
       if (state.bufferedResponse !== null || state.turnIndex >= state.maxTurns) {
         return null;
       }
@@ -265,6 +389,11 @@ export function makePaseoAdapter(options: {
         currentActor: response.actor,
         awaitingResponseFor: null,
         bufferedResponse: response,
+        transcriptCursorByActor: advanceTranscriptCursor(
+          state.transcriptCursorByActor,
+          response.actor,
+          response.transcriptText.length,
+        ),
         transcriptByActor: appendTranscript(
           state.transcriptByActor,
           response.actor,
@@ -273,7 +402,145 @@ export function makePaseoAdapter(options: {
       };
     },
 
+    withKernelEvent(state: PaseoAdapterState, event: RunEvent, _view: KernelView): PaseoAdapterState {
+      if (!isAgenticState(state) || agenticSpec == null || state.pendingDirective == null) {
+        return state;
+      }
+
+      const leadActor = leadActorFromSpec(agenticSpec);
+      if (event.outcome === 'rejected') {
+        return {
+          ...state,
+          currentActor: leadActor,
+          awaitingResponseFor: leadActor,
+          bufferedResponse: null,
+          parseFailureCount: 0,
+          lastRejection: {
+            directive: state.pendingDirective,
+            error: event.payload.detail,
+          },
+          pendingDirective: null,
+          kernelRejections: state.kernelRejections + 1,
+          noProgressTurns: state.noProgressTurns + 1,
+        };
+      }
+
+      const next = pickNextAgenticActor({
+        state: {
+          ...state,
+          currentActor: state.currentActor ?? leadActor,
+        },
+        acceptedEvent: event,
+        directive: state.pendingDirective,
+        leadActor,
+      });
+
+      return nextAgenticTurnState(
+        state,
+        next.actor,
+        next.activeDelegation,
+        next.delegationPointer,
+        next.delegationTaskId,
+        next.progressed,
+      );
+    },
+
     step(state: PaseoAdapterState, view: KernelView): RuntimeAdapterStep<PaseoAdapterState> {
+      if (isAgenticState(state)) {
+        if (state.bufferedResponse !== null) {
+          const parseResult = extractDirective(state.bufferedResponse.transcriptText);
+          if (!parseResult.ok) {
+            const nextFailureCount = state.parseFailureCount + 1;
+            const nextState: PaseoAgenticLoopState = {
+              ...state,
+              awaitingResponseFor: state.currentActor,
+              bufferedResponse: null,
+              parseFailureCount: nextFailureCount,
+              transcriptByActor: state.currentActor
+                ? appendTranscript(
+                    state.transcriptByActor,
+                    state.currentActor,
+                    `[system] Parse failure: ${parseResult.reason}`,
+                  )
+                : state.transcriptByActor,
+            };
+
+            if (nextFailureCount > state.maxParseFailuresPerTurn) {
+              return {
+                kind: 'done',
+                completion: {
+                  status: 'failed',
+                  summary: `parse failure budget exhausted for actor ${actorKeyString(state.currentActor)} at turn ${state.turnIndex}`,
+                },
+                nextState,
+              };
+            }
+
+            return {
+              kind: 'request',
+              request: makeProtocolRequest(
+                MANAGER_ACTOR,
+                {
+                  kind: 'append_mailbox_message',
+                  payload: {
+                    fromActor: MANAGER_ACTOR,
+                    toActor: state.currentActor ?? MANAGER_ACTOR,
+                    kind: 'final',
+                    body: `Directive parse failure: ${parseResult.reason}. Return exactly one fenced json block containing one directive object.`,
+                  },
+                },
+                view,
+                options,
+              ),
+              nextState,
+            };
+          }
+
+          const nextState: PaseoAgenticLoopState = {
+            ...state,
+            turnIndex: state.turnIndex + 1,
+            awaitingResponseFor: null,
+            bufferedResponse: null,
+            parseFailureCount: 0,
+            pendingDirective: parseResult.directive,
+          };
+
+          if (parseResult.directive.kind === 'complete_run') {
+            return {
+              kind: 'done',
+              completion: parseResult.directive.payload,
+              nextState: {
+                ...nextState,
+                currentActor: null,
+                awaitingResponseFor: null,
+                pendingDirective: null,
+              },
+            };
+          }
+
+          return {
+            kind: 'request',
+            request: makeProtocolRequest(state.currentActor ?? MANAGER_ACTOR, parseResult.directive, view, options),
+            nextState,
+          };
+        }
+
+        const budgetFailure = budgetFailureForAgentic(state);
+        if (budgetFailure != null) {
+          return {
+            kind: 'done',
+            completion: budgetFailure,
+            nextState: state,
+          };
+        }
+
+        if (this.pendingPaseoTurn(state, view) !== null) {
+          throw new PaseoAdapterStateError('step reached while a paseo turn is still pending');
+        }
+
+        throw new PaseoAdapterStateError('step reached with no buffered response or completion available');
+      }
+
       if (state.bufferedResponse !== null) {
         const parseResult = extractDirective(state.bufferedResponse.transcriptText);
         if (!parseResult.ok) {

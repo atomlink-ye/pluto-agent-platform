@@ -34,7 +34,7 @@ export type PaseoDirective = z.infer<typeof PaseoDirectiveSchema>;
 
 type ExtractDirectiveResult = { ok: true; directive: PaseoDirective } | { ok: false; reason: string };
 
-const FENCED_JSON_BLOCK_PATTERN = /```json\s*([\s\S]*?)```/i;
+const FENCED_JSON_BLOCK_PATTERN = /```json\s*([\s\S]*?)```/gi;
 
 function parseDirectiveCandidate(candidate: string): ExtractDirectiveResult {
   let parsed: unknown;
@@ -114,9 +114,13 @@ function extractBalancedJsonObject(text: string): string | null {
 }
 
 export function extractDirective(text: string): ExtractDirectiveResult {
-  const fencedMatch = FENCED_JSON_BLOCK_PATTERN.exec(text);
-  if (fencedMatch?.[1] != null) {
-    return parseDirectiveCandidate(fencedMatch[1].trim());
+  const fencedMatches = [...text.matchAll(FENCED_JSON_BLOCK_PATTERN)];
+  if (fencedMatches.length > 1) {
+    return { ok: false, reason: 'multiple fenced json blocks found' };
+  }
+
+  if (fencedMatches[0]?.[1] != null) {
+    return parseDirectiveCandidate(fencedMatches[0][1].trim());
   }
 
   const balancedObject = extractBalancedJsonObject(text);
