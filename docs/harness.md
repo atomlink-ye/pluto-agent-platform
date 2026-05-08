@@ -27,16 +27,16 @@ This is the only supported mainline invocation.
 
 ## `agentic_tool` Flow
 
-`agentic_tool` runs keep the kernel in-process and expose a localhost MCP server for the lifetime of a single run.
+`agentic_tool` runs keep the kernel in-process and hand each actor the stable Pluto actor API via env + CLI.
 
-1. `runPaseo()` loads the authored spec and starts one Pluto MCP server bound to `127.0.0.1:<random>/mcp`.
+1. `runPaseo()` loads the authored spec and starts one Pluto control server for the lifetime of the run.
 2. The server exposes the fixed 8-tool surface.
-3. Each spawned actor gets an injected `opencode.json` in its per-actor cwd under `.pluto/runs/<runId>/agents/<actorKey>/`.
-4. The lead or sub-actor may use read tools freely during a turn.
+3. Each spawned actor gets `PLUTO_RUN_API_URL`, `PLUTO_RUN_TOKEN`, and `PLUTO_RUN_ACTOR` injected via Paseo `--env`.
+4. Actors should call Pluto through `pluto-tool`; the lead or sub-actor may still use read tools freely during a turn.
 5. The first accepted mutating Pluto tool call consumes the turn.
-6. Turn lease enforcement happens in the MCP server before the kernel submit.
+6. Turn lease enforcement happens in the runtime before the kernel submit.
 7. Accepted kernel events remain the only replay truth.
-8. On completion, the server shuts down and the injected per-actor cwd is cleaned up.
+8. On completion, the control server shuts down and the actor session ends.
 
 Tool surface:
 

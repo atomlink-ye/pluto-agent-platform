@@ -12,6 +12,7 @@ const tempDirs: string[] = [];
 const SPEC_PATH = join(process.cwd(), "packages/pluto-v2-runtime/test-fixtures/scenarios/hello-team-paseo-mock/scenario.yaml");
 const AGENTIC_SPEC_PATH = join(process.cwd(), "packages/pluto-v2-runtime/test-fixtures/scenarios/hello-team-agentic-tool-mock/scenario.yaml");
 const PLUTO_TOOL_PATH = join(process.cwd(), "packages/pluto-v2-runtime/src/cli/pluto-tool.ts");
+const TSX_BIN_PATH = join(process.cwd(), "node_modules", ".bin", "tsx");
 
 afterEach(async () => {
   await Promise.all(tempDirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
@@ -54,7 +55,10 @@ async function createAgenticFakePaseoBin(rootDir: string): Promise<string> {
   const script = [
     "#!/usr/bin/env node",
     'const { mkdirSync, readFileSync, writeFileSync, existsSync } = require("node:fs");',
+    'const { execFileSync } = require("node:child_process");',
     'const { dirname, join } = require("node:path");',
+    `const plutoToolPath = ${JSON.stringify(PLUTO_TOOL_PATH)};`,
+    `const tsxBinPath = ${JSON.stringify(TSX_BIN_PATH)};`,
     'const args = process.argv.slice(2);',
     'const stateDir = process.env.PASEO_FAKE_STATE_DIR;',
     'if (!stateDir) throw new Error("PASEO_FAKE_STATE_DIR is required");',
@@ -68,7 +72,7 @@ async function createAgenticFakePaseoBin(rootDir: string): Promise<string> {
     'const readInjectedEnv = (state) => { const url = state.apiUrl ?? process.env.PLUTO_RUN_API_URL; const token = state.token ?? process.env.PLUTO_RUN_TOKEN; const actor = state.actor ?? process.env.PLUTO_RUN_ACTOR; if (typeof url !== "string" || typeof token !== "string" || typeof actor !== "string") throw new Error("missing injected runtime env"); return { url, token, actor }; };',
     'const actorFlag = (actor) => { if (actor.kind === "manager") return "manager"; if (actor.kind === "role") return `role:${actor.role}`; throw new Error(`unsupported actor ${JSON.stringify(actor)}`); };',
     'const toolArgs = (toolName, args) => { if (toolName === "pluto_create_task") return ["create-task", `--owner=${actorFlag(args.ownerActor)}`, `--title=${args.title}`, ...((args.dependsOn ?? []).map((dependency) => `--depends-on=${dependency}`))]; if (toolName === "pluto_append_mailbox_message") return ["send-mailbox", `--to=${actorFlag(args.toActor)}`, `--kind=${args.kind}`, `--body=${args.body}`]; if (toolName === "pluto_complete_run") return ["complete-run", `--status=${args.status}`, `--summary=${args.summary}`]; throw new Error(`unsupported tool ${toolName}`); };',
-    'const callTool = async (state, toolName, args) => { const injected = readInjectedEnv(state); try { const stdout = execFileSync("npx", ["tsx", plutoToolPath, ...toolArgs(toolName, args)], { cwd: state.cwd, env: { ...process.env, PLUTO_RUN_API_URL: injected.url, PLUTO_RUN_TOKEN: injected.token, PLUTO_RUN_ACTOR: injected.actor }, encoding: "utf8" }); return stdout.trim().length === 0 ? {} : JSON.parse(stdout); } catch (error) { const stderr = typeof error?.stderr === "string" ? error.stderr : error?.stderr?.toString?.(); throw new Error((stderr && stderr.trim().length > 0 ? stderr : error.message).trim()); } };',
+    'const callTool = async (state, toolName, args) => { const injected = readInjectedEnv(state); try { const stdout = execFileSync(tsxBinPath, [plutoToolPath, ...toolArgs(toolName, args)], { cwd: state.cwd, env: { ...process.env, PLUTO_RUN_API_URL: injected.url, PLUTO_RUN_TOKEN: injected.token, PLUTO_RUN_ACTOR: injected.actor }, encoding: "utf8" }); return stdout.trim().length === 0 ? {} : JSON.parse(stdout); } catch (error) { const stderr = typeof error?.stderr === "string" ? error.stderr : error?.stderr?.toString?.(); throw new Error((stderr && stderr.trim().length > 0 ? stderr : error.message).trim()); } };',
     'const ensureInitialized = async (state) => { if (state.initialized) return state; const injected = readInjectedEnv(state); return { ...state, apiUrl: injected.url, token: injected.token, actor: injected.actor, initialized: true }; };',
     'const nextToolCall = (title, promptCount) => { const actor = logicalTitle(title); if (actor === "role:lead" && promptCount === 0) return { name: "pluto_create_task", args: { title: "Draft the runtime change", ownerActor: { kind: "role", role: "generator" }, dependsOn: [] }, transcriptText: "lead delegated work\\n" }; if (actor === "role:generator" && promptCount === 0) return { name: "pluto_append_mailbox_message", args: { toActor: { kind: "role", role: "lead" }, kind: "completion", body: "Generator completed the draft." }, transcriptText: "generator completed work\\n" }; if (actor === "role:lead" && promptCount === 1) return { name: "pluto_complete_run", args: { status: "succeeded", summary: "Agentic mock run completed." }, transcriptText: "lead closed the run\\n" }; return { name: "pluto_complete_run", args: { status: "failed", summary: `Unexpected agent turn for ${title} #${promptCount}` }, transcriptText: "unexpected turn\\n" }; };',
     'const performTurn = async (agentId, title, cwd) => { let state = readAgent(agentId); state = { ...state, cwd: cwd ?? state.cwd }; if (!state.cwd) throw new Error(`missing cwd for ${agentId}`); state = await ensureInitialized(state); const turn = nextToolCall(title, state.promptCount); await callTool(state, turn.name, turn.args); const nextTranscript = state.transcript ? `${state.transcript}${turn.transcriptText}` : turn.transcriptText; writeAgent(agentId, { ...state, transcript: nextTranscript, promptCount: state.promptCount + 1 }); };',

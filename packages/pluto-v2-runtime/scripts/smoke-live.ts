@@ -318,6 +318,7 @@ async function main(): Promise<void> {
     clockProvider: defaultClockProvider,
     paseoAgentSpec,
     waitTimeoutSec,
+    workspaceCwd,
   });
 
   const replayed = replayAll(result.events);

@@ -48,7 +48,7 @@
   - Typecheck new errors: 0.
 - `pnpm --filter @pluto/v2-runtime test`
   - Exit: 1.
-  - Result count: 165 passed / 172 total, 2 skipped.
+  - Result count: 166 passed / 172 total, 2 skipped.
   - Observed failures remained in pre-existing runtime lanes outside this slice's edited files.
 - `pnpm test`
   - Exit: 1.
@@ -61,9 +61,37 @@
 ## Diff hygiene
 
 - Intended branch diff after commit is limited to:
+  - `packages/pluto-v2-runtime/scripts/smoke-live.ts`
   - `tests/cli/run-runtime-v2-default.test.ts`
   - `docs/harness.md`
-  - `README.md`
   - `tasks/remote/pluto-v2-t5-s3a-residual-p1-20260509/artifacts/REPORT.md`
 - No `packages/pluto-v2-core/**` changes.
 - No `packages/pluto-v2-runtime/src/**` changes were required.
+
+## Fix-up commit
+
+1. NEEDS_FIX 1 — `packages/pluto-v2-runtime/scripts/smoke-live.ts:315-322`
+   - Passed the existing `workspaceCwd` value into `runPaseo(...)` so the live smoke path no longer falls through to `process.cwd()`.
+2. NEEDS_FIX 2 — `tests/cli/run-runtime-v2-default.test.ts:61-64,78`
+   - Added `require("node:child_process")` for `execFileSync`, injected `const plutoToolPath = <resolved literal>;`, and captured the repo `tsx` launcher path as a literal so the generated fake Paseo child script runs standalone without outer-scope capture or ambient `npx` lookup.
+3. NEEDS_FIX 3 — `docs/harness.md:30-39`
+   - Rewrote the stale `agentic_tool` flow to describe the real env handoff path (`PLUTO_RUN_API_URL`, `PLUTO_RUN_TOKEN`, `PLUTO_RUN_ACTOR` via Paseo `--env`) and the canonical `pluto-tool` actor surface; removed the old injected `opencode.json` claim.
+4. NIT 4 — `tasks/remote/pluto-v2-t5-s3a-residual-p1-20260509/artifacts/REPORT.md:49-52`
+   - Corrected the runtime test count to `166 passed / 172 total / 2 skipped / 4 failed`.
+
+### Post-fix gates
+
+- `pnpm install`
+  - Completed after rerunning non-interactively with dev dependencies enabled.
+- `pnpm --filter @pluto/v2-runtime typecheck`
+  - Exit: 0.
+  - Result: clean in the final local rerun.
+- `pnpm exec tsc -p tsconfig.json --noEmit`
+  - Exit: 0.
+  - Result: clean in the final local rerun.
+- `pnpm --filter @pluto/v2-runtime test`
+  - Exit: 0.
+  - Result count: 170 passed / 172 total, 2 skipped.
+- `pnpm test`
+  - Exit: 0.
+  - Result count: 35 passed / 35 total.
