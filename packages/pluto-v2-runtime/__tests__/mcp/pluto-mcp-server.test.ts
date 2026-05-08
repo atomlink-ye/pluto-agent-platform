@@ -369,8 +369,12 @@ describe('startPlutoMcpServer', () => {
       port: 0,
     });
 
-    const port = firstServer.port;
-    await firstServer.shutdown();
+    let port: number;
+    try {
+      port = firstServer.port;
+    } finally {
+      await firstServer.shutdown();
+    }
 
     const second = createHandlerDeps();
     const secondServer = await startPlutoMcpServer({
