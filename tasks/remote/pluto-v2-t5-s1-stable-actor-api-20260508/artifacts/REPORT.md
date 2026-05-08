@@ -34,4 +34,22 @@
 - Root cause: `run-paseo.ts` stopped enforcing `PLUTO_RUN_API_URL`, `PLUTO_RUN_TOKEN`, and `PLUTO_RUN_ACTOR` onto the final spawned agent spec, so callers that ignored the optional handoff argument never received the local API env; this left delegated actor turns inert until the env merge was restored. Separately, `pluto-tool.ts` still had two unchecked argv-index reads plus a dead `read-state` switch branch that surfaced as TSC errors.
 - Root CLI follow-up: `tests/cli/run-runtime-v2-default.test.ts` still mocked the pre-S1 `opencode.json` injection path, so the agentic fake paseo runner was updated to persist and replay the stable env handoff contract instead.
 - Diff stat: `4 files changed, 30 insertions(+), 10 deletions(-)`.
-- Final SHA: recorded at the branch HEAD for this single fix-up commit after commit/push.
+- Final SHA: **`7e9700a`** (`fix(v2): T5-S1 restore agentic_tool loop scheduling + close TS holes`).
+- Final gate counts (re-verified locally on `7e9700a`):
+  - `pnpm --filter @pluto/v2-core typecheck` ✅
+  - `pnpm --filter @pluto/v2-runtime typecheck` ✅
+  - `pnpm exec tsc -p tsconfig.json --noEmit` ✅
+  - `pnpm --filter @pluto/v2-core test` ✅ (196 tests)
+  - `pnpm --filter @pluto/v2-runtime test` ✅ **143 passed | 1 skipped (144)**
+  - `pnpm test` ✅ **35 passed (35)**
+  - `pnpm --filter @pluto/v2-runtime build` ✅
+
+## Pre-merge Review Acknowledgments (2026-05-08)
+
+Local OC Companion pre-merge review (`task-6d560e-246469`) returned OBJECTIONS with three docs-level follow-ups; resolved as follows:
+
+1. **`tests/cli/run-runtime-v2-default.test.ts` was modified but not on the original allowlist.** This change is in scope of S1's intent (env-handoff path replaces opencode.json mock); allowlist amended retroactively. The test update is a necessary side-effect of the env-handoff contract change.
+
+2. **Final gate counts + SHA recorded above** (this addendum).
+
+3. **Handler reuse via dependency injection** (`startPlutoLocalApi` takes prebuilt `config.handlers`; `makePlutoToolHandlers(...)` is constructed in `run-paseo.ts:463-535`). DI satisfies the "reuse not duplicate" intent better than literal in-API construction would (cleaner separation, easier testing). No code change required; spec wording was over-prescriptive.
