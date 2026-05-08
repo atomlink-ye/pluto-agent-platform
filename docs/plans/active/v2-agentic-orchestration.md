@@ -384,6 +384,234 @@ exact replay oracle.
   rule) / diff gate `git diff --stat main..HEAD --
   tests/fixtures/live-smoke/86557df1-` empty.
 
+## Team-lead capability checklist (verification post-T3)
+
+This iteration models Pluto's team lead on the role the local
+manager (Claude Code) actually played while running T1 → T2 →
+T3: read state, choose one directive, delegate to a specialist,
+receive a structured result, decide next, document evidence,
+respect budgets. The 13 user stories below capture that shape.
+Mark each post-merge to validate the iteration delivered what
+the analogy promises.
+
+Legend: ✅ delivered by this iteration · 🟡 partial / out of
+scope but documented · ⏭ explicitly deferred to a later slice.
+
+### S1 — Read run state every turn
+
+> As the team lead, I see the current task board, my mailbox,
+> the artifacts produced so far, my budgets, and any open
+> delegation, so I can decide what to do next.
+
+- T1 ✅ `buildPromptView` produces stable JSON with tasks /
+  mailbox / artifacts / budgets / activeDelegation /
+  lastRejection.
+- T2 ✅ `agentic-prompt-builder` injects this view into lead's
+  prompt every turn.
+- 🟡 Lead does NOT see arbitrary file contents (no tool use, no
+  shell). For coding-team workflows, sub-actors do tool work in
+  their own paseo session; lead sees only the kernel events.
+
+### S2 — Emit ONE directive per turn from the closed verb set
+
+> As the team lead, I emit exactly one directive each turn from
+> the closed protocol (`create_task` / `append_mailbox_message`
+> / `publish_artifact` / `complete_run` / `change_task_state`),
+> so the kernel validates and audits my actions.
+
+- T1 ✅ closed `PaseoDirectiveSchema` (5 intents).
+- T2 ✅ `extractDirective` parses one fenced JSON per turn.
+- T3-R2 ✅ `extractDirective` scopes to LATEST assistant
+  response (B2 fix); multi-fence rejection works correctly with
+  parse-repair tail.
+- T3-R2 ✅ schema description in lead prompt enumerates enum
+  values for `kind` / `to` / `status` / mailbox `kind` (B1 fix).
+- ⏭ Richer team-protocol verbs (`spawn_request` /
+  `worker_complete` / `evaluator_verdict`) deferred per memory
+  rule `feedback_two_layer_protocol_envelope`.
+
+### S3 — Delegate to a sub-actor by `create_task` or mailbox
+
+> As the team lead, I delegate by creating a task with that
+> actor as owner OR sending a mailbox message to them, so the
+> runtime gives them the next turn.
+
+- T2 ✅ scheduler opens delegation pointer on lead's
+  `create_task ownerActor != lead` OR `append_mailbox_message
+  toActor != lead`.
+- T2 ✅ sub-actor retains turn until terminal task transition
+  OR mailbox `kind: completion|final` to lead.
+- 🟡 No parallel multi-delegation (one open delegation at a
+  time). Lead delegates sequentially.
+- 🟡 Sub-actor cannot delegate onward (T2 lead-only rule).
+
+### S4 — Consult the playbook as reference, not state machine
+
+> As the team lead, I read the playbook markdown for guidance,
+> but I'm free to skip / reorder / synthesize.
+
+- T1 ✅ `playbookRef` + `playbook-resolver` + sha256 anchor.
+- T2 ✅ prompt-builder injects full playbook body for lead;
+  role-slice (`## generator` etc.) for sub-actors.
+- T3 ✅ playbook body + sha256 captured in live fixture for
+  replay/audit.
+- 🟡 No structured stage-graph; if a workflow needs branching,
+  lead reasons from prose. Acceptable for MVP.
+
+### S5 — Receive sub-actor reply and decide next step
+
+> As the team lead, when a sub-actor finishes (terminal task
+> transition or mailbox completion), I get the turn back with
+> updated state in my next prompt-view, so I can review and
+> choose the next directive.
+
+- T2 ✅ scheduler closes delegation correctly; T3-R2 fix B2
+  ensures parse-repair recovers.
+- T2 ✅ next prompt-view includes new task state + mailbox
+  reply + any artifacts.
+- 🟡 Lead does NOT see sub-actor's transcript / reasoning —
+  only kernel events. Sufficient for state-driven decisions;
+  insufficient if lead needs to evaluate sub-actor's
+  reasoning quality. (See S13.)
+
+### S6 — Recover from a sub-actor's invalid output
+
+> As the team lead, when a sub-actor's directive fails Zod or
+> kernel validation, the runtime returns control to me with a
+> structured `lastRejection`, so I can choose a recovery
+> directive (re-delegate, change owner, abort).
+
+- T2 ✅ `kernelRejections` budget; on cap, abort with
+  `complete_run failed`.
+- T2 ✅ `lastRejection` surfaced in lead's next prompt-view.
+- T3-R2 ✅ parse-repair flow actually recovers (B2 fix).
+- 🟡 No "ask the operator a clarifying question" verb. Lead's
+  only out is keep trying or fail the run.
+
+### S7 — Terminate the run
+
+> As the team lead, I emit `complete_run` with status + summary
+> when the user task is satisfied (or when the run cannot
+> proceed), so the kernel writes the run_completed event and
+> the evidence packet is sealed.
+
+- T1 ✅ closed `RunCompletedPayloadSchema`.
+- T2 ✅ only lead can emit `complete_run`; sub-actor's
+  `complete_run` is rejected back to lead with `lastRejection`.
+- T2 ✅ driver synthesizes the manager-actor event from lead's
+  directive (existing path preserved).
+
+### S8 — Produce audit-grade evidence
+
+> As the operator reviewing a run, I can replay the event log,
+> inspect the projections, read the final report, see per-actor
+> transcripts, see the resolved playbook + sha256, and see usage
+> data flagged honestly.
+
+- T1 ✅ `pluto:run --spec` writes full `.pluto/runs/<runId>/`
+  (events.jsonl + projections + evidence-packet + final-report
+  + usage-summary + transcripts) on success AND failure paths.
+- T3 ✅ playbook body + sha256 captured in fixture.
+- T1 ✅ `usageStatus: 'reported' | 'unavailable'` flag — no `$0`
+  lies.
+- ⏭ Typed envelope citations (`RoleCitation` /
+  `WorkerComplete` / `EvaluatorVerdict` /
+  `FinalReconciliation`) deferred per GPT Pro N3.
+
+### S9 — Operate within bounded budgets
+
+> As the team lead, I operate under explicit budgets (max
+> turns, max parse failures, max kernel rejections, max
+> no-progress turns), and the runtime aborts with `complete_run
+> failed` if budgets exhaust.
+
+- T1 ✅ `AuthoredSpec.orchestration.{maxTurns,
+  maxParseFailuresPerTurn, maxKernelRejections,
+  maxNoProgressTurns}`.
+- T2 ✅ driver enforces all four; emits failed `complete_run`
+  on cap.
+- ⏭ Cost budget gating not enforced. T1 added `usageStatus`
+  flag; hard cost gate deferred to GPT Pro N5.
+
+### S10 — Replay-deterministic kernel under non-deterministic LLM
+
+> As the operator, given a recorded event log, the kernel can
+> replay it byte-deterministically into the same projections —
+> even though the live LLM outputs are non-deterministic.
+
+- S1–S3 ✅ closed kernel + reducer + replay (pre-iteration).
+- T2 ✅ no kernel surface change; replay remains pure.
+- T1 ✅ S4 parity fixture untouched; new agentic live fixture
+  is invariant-validated only.
+
+### S11 — Authority enforced
+
+> As the runtime, I reject any directive emitted by an actor
+> that doesn't have authority for that intent.
+
+- S2 ✅ closed authority matrix in v2-core.
+- T3-R2 ✅ B1 fix: prompt's schema description per-actor
+  hints ("not allowed for this actor") so LLM knows its surface.
+- T2 ✅ lead-only `complete_run` enforced by adapter.
+- 🟡 No dynamic authority widening (e.g. evaluator promoted to
+  emit `complete_run`). Out of scope.
+
+### S12 — Lead-driven, not workflow-driven
+
+> As the operator, the next actor each turn is decided by
+> explicit lead directives, NOT by a hardcoded phase plan.
+
+- T2 ✅ `phasePlan()` reachable only on `orchestration.mode !==
+  'agentic'` (deterministic regression lane); agentic mode uses
+  the scheduler.
+- T2 ✅ N2 grep gate forbids `must match exactly` /
+  `payload must match exactly` / verbatim-payload prompts in
+  agentic code. Memory rule
+  `feedback_no_verbatim_payload_prompts` enforces.
+- 🟡 Deterministic mode still exists (opt-in regression lane).
+  Removable in a future cleanup if undesired.
+
+### S13 — Lead's reasoning is captured per turn
+
+> As the operator reviewing a run, I can see the lead's
+> reasoning before each directive, so I can audit whether the
+> lead chose well.
+
+- T1 ✅ paseo transcripts capture full assistant turns
+  including any `[Thought]` blocks rendered by the provider.
+- 🟡 Reasoning is in transcript only, NOT in evidence-packet
+  citations. For first-class audit trace, citations should
+  reference reasoning context. Deferred per GPT Pro D
+  (audit-grade evidence).
+
+## Gap not closed by this iteration (heads-up for the next round)
+
+These are the four gaps the operator should be aware of when
+deciding the next iteration:
+
+1. **No tool-use surface for the lead itself** (Story 1, 5).
+   Lead can only see kernel events and choose closed directives;
+   it cannot read files, run grep, or invoke commands directly.
+   For coding-team workflows the sub-actor (paseo agent) does
+   tool work and reports back — that's fine — but a lead that
+   needs to consult external context would require an
+   `inspect_*` family of read-only verbs.
+2. **No "ask operator" verb** (Story 6). Lead can either keep
+   trying or fail the run. There's no mailbox channel to the
+   human operator asking for clarification mid-run.
+3. **No typed envelope citations** (Story 8, 13). The agentic
+   loop runs but evidence today only has `run_started` /
+   `run_completed` citations. GPT Pro's N3 envelope translator
+   layer (`worker_complete` / `evaluator_verdict` /
+   `final_reconciliation`) is the path to audit-grade trace
+   without breaking the kernel closed schema.
+4. **No real cost gating** (Story 9). T1 flags
+   `usageStatus: 'unavailable'` honestly; per-provider usage
+   extraction + hard $ gating is GPT Pro N5.
+
+Items 3 and 4 are the most impactful for "production-ready team
+lead". Items 1 and 2 are quality-of-life additions.
+
 ## Out of scope (deferred)
 
 - **`TeamProtocolEnvelope` translator** (worker_complete /
