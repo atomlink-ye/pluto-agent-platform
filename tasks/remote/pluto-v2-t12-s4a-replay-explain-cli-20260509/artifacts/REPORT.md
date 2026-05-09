@@ -91,4 +91,4 @@ status: PASS
 
 ## Fixup Commit SHAs
 - implementation-fixup-commit-sha: 1b3e125444bbcb31df0a49cc7ca677a22551fcc3
-- report-addendum-commit-sha: PENDING
+- report-addendum-commit-sha: 0b97e592ce9f30a749de60cad8e4681febeab37a
