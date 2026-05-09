@@ -978,6 +978,7 @@ async function runAgenticToolLoop(
     },
   });
   const localApi = await startPlutoLocalApi({
+    runDir: runRootDir,
     tokenByActor,
     handlers,
     leaseStore,

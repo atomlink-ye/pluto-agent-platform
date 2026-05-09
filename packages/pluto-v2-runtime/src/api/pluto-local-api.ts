@@ -43,6 +43,7 @@ type LocalApiRoute = {
 export interface PlutoLocalApiConfig {
   bindHost?: '127.0.0.1';
   port?: number;
+  runDir?: string;
   tokenByActor: ReadonlyMap<string, string>;
   registeredActorKeys?: ReadonlySet<string>;
   handlers: PlutoToolHandlers;
@@ -817,6 +818,7 @@ export async function startPlutoLocalApi(
         session: {
           currentActor: sessionActor,
           isLead: isLeadActor(sessionActor),
+          runDir: config.runDir,
         },
       });
       if (response.writableEnded || response.destroyed) {

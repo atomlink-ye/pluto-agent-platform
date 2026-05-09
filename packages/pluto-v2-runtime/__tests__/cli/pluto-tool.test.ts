@@ -89,6 +89,7 @@ async function withApi(run: (context: {
   token: string;
   tokenForActor: (actorKey: string) => string;
 }) => Promise<void>) {
+  const runDir = await mkdtemp(join(tmpdir(), 'pluto-tool-cli-'));
   const handlers = makePlutoToolHandlers({
     kernel: createKernel(),
     runId: 'run-1',
@@ -112,6 +113,7 @@ async function withApi(run: (context: {
   });
   const token = tokenForActor('role:lead');
   const api = await startPlutoLocalApi({
+    runDir,
     tokenByActor: TOKEN_BY_ACTOR,
     registeredActorKeys: new Set(['manager', 'role:lead', 'role:planner', 'role:generator', 'role:evaluator', 'system']),
     handlers,
@@ -122,6 +124,7 @@ async function withApi(run: (context: {
     await run({ url: api.url, token, tokenForActor });
   } finally {
     await api.shutdown();
+    await rm(runDir, { recursive: true, force: true });
   }
 }
 
@@ -390,14 +393,24 @@ describe('pluto-tool argv parsing', () => {
           },
         });
 
-      await expect(parseCliArgs(['final-reconciliation', '--completed-tasks=task-1,task-2', '--cited-messages=message-1,message-2', '--summary=done']))
+      await expect(parseCliArgs([
+        'final-reconciliation',
+        '--completed-tasks=task-1,task-2',
+        '--cited-messages=1,2',
+        '--cited-artifact-ref=artifact-1',
+        '--cited-artifact-ref=artifact-2',
+        '--unresolved-issue=follow-up',
+        '--summary=done',
+      ]))
         .resolves.toMatchObject({
           kind: 'command',
           name: 'final-reconciliation',
           path: '/v2/composite/final-reconciliation',
           body: {
             completedTasks: ['task-1', 'task-2'],
-            citedMessages: ['message-1', 'message-2'],
+            citedMessages: ['1', '2'],
+            citedArtifactRefs: ['artifact-1', 'artifact-2'],
+            unresolvedIssues: ['follow-up'],
             summary: 'done',
           },
         });

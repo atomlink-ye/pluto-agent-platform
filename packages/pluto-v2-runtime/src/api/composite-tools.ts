@@ -1,3 +1,6 @@
+import { mkdir, writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
+
 import type { ActorRef, MailboxMessageKind, TaskState } from '@pluto/v2-core';
 import { z } from 'zod';
 
@@ -24,12 +27,50 @@ const EvaluatorVerdictArgsSchema = z.object({
 const FinalReconciliationArgsSchema = z.object({
   completedTasks: z.array(z.string().min(1)).min(1),
   citedMessages: z.array(z.string().min(1)).min(1),
+  citedArtifactRefs: z.array(z.string().min(1)).default([]),
+  unresolvedIssues: z.array(z.string().min(1)).default([]),
   summary: z.string().min(1),
 }).strict();
+
+type PromptViewSnapshot = {
+  readonly tasks?: Array<{ id?: unknown; state?: unknown }>;
+  readonly mailbox?: Array<{ sequence?: unknown }>;
+  readonly artifacts?: Array<{ id?: unknown }>;
+};
 
 type PromptTaskView = {
   readonly id: string;
   readonly state: TaskState;
+};
+
+type FinalReconciliationFailureKind = 'missing_task' | 'non_terminal_task' | 'missing_message' | 'missing_artifact';
+
+type FinalReconciliationFailure = {
+  readonly kind: FinalReconciliationFailureKind;
+  readonly ref: string;
+};
+
+type FinalReconciliationAudit = {
+  readonly status: 'pass' | 'failed_audit';
+  readonly failures: readonly FinalReconciliationFailure[];
+};
+
+type FinalReconciliationEnvelope = {
+  readonly completedTasks: readonly string[];
+  readonly citedMessages: readonly string[];
+  readonly citedArtifactRefs: readonly string[];
+  readonly unresolvedIssues: readonly string[];
+  readonly summary: string;
+  readonly audit: FinalReconciliationAudit;
+};
+
+type FinalReconciliationEvidence = {
+  readonly summary: string;
+  readonly completedTaskIds: readonly string[];
+  readonly citedMessageIds: readonly string[];
+  readonly citedArtifactRefs: readonly string[];
+  readonly unresolvedIssues: readonly string[];
+  readonly audit: FinalReconciliationAudit;
 };
 
 type PrimitiveStep = {
@@ -96,12 +137,7 @@ async function readPromptTask(args: {
   session: PlutoToolSession;
   taskId: string;
 }): Promise<PromptTaskView | null> {
-  const result = await args.handlers.pluto_read_state(args.session, {});
-  if (!result.ok) {
-    throw new Error('Unable to read PromptView for composite tool translation.');
-  }
-
-  const promptView = jsonFromToolResult(result) as { tasks?: Array<{ id?: unknown; state?: unknown }> };
+  const promptView = await readPromptView(args.handlers, args.session);
   const task = promptView.tasks?.find((candidate) => candidate.id === args.taskId);
   if (task == null || typeof task.state !== 'string') {
     return null;
@@ -111,6 +147,15 @@ async function readPromptTask(args: {
     id: args.taskId,
     state: task.state as TaskState,
   };
+}
+
+async function readPromptView(handlers: PlutoToolHandlers, session: PlutoToolSession): Promise<PromptViewSnapshot> {
+  const result = await handlers.pluto_read_state(session, {});
+  if (!result.ok) {
+    throw new Error('Unable to read PromptView for composite tool translation.');
+  }
+
+  return jsonFromToolResult(result) as PromptViewSnapshot;
 }
 
 function workerCompletionBody(args: z.infer<typeof WorkerCompleteArgsSchema>): string {
@@ -129,12 +174,99 @@ function evaluatorVerdictBody(args: z.infer<typeof EvaluatorVerdictArgsSchema>):
   });
 }
 
-function finalReconciliationSummary(args: z.infer<typeof FinalReconciliationArgsSchema>): string {
-  return JSON.stringify({
+function validateFinalReconciliation(
+  args: z.infer<typeof FinalReconciliationArgsSchema>,
+  promptView: PromptViewSnapshot,
+): FinalReconciliationAudit {
+  const failures: FinalReconciliationFailure[] = [];
+  const taskById = new Map(
+    (promptView.tasks ?? [])
+      .filter((task): task is { id: string; state: TaskState } => typeof task.id === 'string' && typeof task.state === 'string')
+      .map((task) => [task.id, task.state as TaskState]),
+  );
+  const visibleMessageIds = new Set(
+    (promptView.mailbox ?? [])
+      .flatMap((message) => (typeof message.sequence === 'number' ? [String(message.sequence)] : [])),
+  );
+  const artifactIds = new Set(
+    (promptView.artifacts ?? [])
+      .flatMap((artifact) => (typeof artifact.id === 'string' ? [artifact.id] : [])),
+  );
+
+  for (const taskId of new Set(args.completedTasks)) {
+    const taskState = taskById.get(taskId);
+    if (taskState == null) {
+      failures.push({ kind: 'missing_task', ref: taskId });
+      continue;
+    }
+
+    if (!TERMINAL_TASK_STATES.has(taskState)) {
+      failures.push({ kind: 'non_terminal_task', ref: taskId });
+    }
+  }
+
+  for (const messageId of new Set(args.citedMessages)) {
+    if (!visibleMessageIds.has(messageId)) {
+      failures.push({ kind: 'missing_message', ref: messageId });
+    }
+  }
+
+  for (const artifactRef of new Set(args.citedArtifactRefs)) {
+    if (!artifactIds.has(artifactRef)) {
+      failures.push({ kind: 'missing_artifact', ref: artifactRef });
+    }
+  }
+
+  return {
+    status: failures.length === 0 ? 'pass' : 'failed_audit',
+    failures,
+  };
+}
+
+function buildFinalReconciliationEnvelope(
+  args: z.infer<typeof FinalReconciliationArgsSchema>,
+  audit: FinalReconciliationAudit,
+): FinalReconciliationEnvelope {
+  return {
     completedTasks: args.completedTasks,
     citedMessages: args.citedMessages,
+    citedArtifactRefs: args.citedArtifactRefs,
+    unresolvedIssues: args.unresolvedIssues,
     summary: args.summary,
-  });
+    audit,
+  };
+}
+
+function buildFinalReconciliationEvidence(envelope: FinalReconciliationEnvelope): FinalReconciliationEvidence {
+  return {
+    summary: envelope.summary,
+    completedTaskIds: envelope.completedTasks,
+    citedMessageIds: envelope.citedMessages,
+    citedArtifactRefs: envelope.citedArtifactRefs,
+    unresolvedIssues: envelope.unresolvedIssues,
+    audit: envelope.audit,
+  };
+}
+
+function finalReconciliationSummary(envelope: FinalReconciliationEnvelope): string {
+  const serializedEnvelope = JSON.stringify(envelope);
+  return envelope.audit.status === 'pass'
+    ? serializedEnvelope
+    : `FAILED_AUDIT: ${serializedEnvelope}`;
+}
+
+async function writeFinalReconciliationEvidence(session: PlutoToolSession, evidence: FinalReconciliationEvidence): Promise<void> {
+  if (session.runDir == null) {
+    throw new Error('Final reconciliation requires a session runDir to write evidence.');
+  }
+
+  const evidenceDir = join(session.runDir, 'evidence');
+  await mkdir(evidenceDir, { recursive: true });
+  await writeFile(
+    join(evidenceDir, 'final-reconciliation.json'),
+    `${JSON.stringify(evidence, null, 2)}\n`,
+    'utf8',
+  );
 }
 
 function mailboxKindForVerdict(verdict: z.infer<typeof EvaluatorVerdictArgsSchema>['verdict']): MailboxMessageKind {
@@ -260,9 +392,14 @@ async function runFinalReconciliation(handlers: PlutoToolHandlers, session: Plut
     return errorResult('PLUTO_TOOL_BAD_ARGS', summarizeSchemaError(parsed.error), parsed.error.issues);
   }
 
+  const promptView = await readPromptView(handlers, session);
+  const audit = validateFinalReconciliation(parsed.data, promptView);
+  const envelope = buildFinalReconciliationEnvelope(parsed.data, audit);
+  const evidence = buildFinalReconciliationEvidence(envelope);
+
   const completion = await handlers.pluto_complete_run(session, {
-    status: 'succeeded',
-    summary: finalReconciliationSummary(parsed.data),
+    status: audit.status === 'pass' ? 'succeeded' : 'failed',
+    summary: finalReconciliationSummary(envelope),
   });
   if (!completion.ok) {
     return completion;
@@ -279,9 +416,13 @@ async function runFinalReconciliation(handlers: PlutoToolHandlers, session: Plut
     return rejectionResult('final-reconciliation', 'pluto_complete_run', completionResponse, steps);
   }
 
+  await writeFinalReconciliationEvidence(session, evidence);
+
   return okJson({
     accepted: true,
     composite: 'final-reconciliation',
+    runStatus: audit.status === 'pass' ? 'succeeded' : 'failed',
+    auditSummary: evidence,
     steps,
   });
 }

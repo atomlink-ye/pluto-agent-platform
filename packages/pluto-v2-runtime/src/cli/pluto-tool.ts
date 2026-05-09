@@ -143,7 +143,7 @@ const HELP_BY_COMMAND: Record<CommandName, string> = {
   'complete-run': 'Usage: pluto-tool --actor <key> complete-run --status=<succeeded|failed|cancelled> --summary=<text> [--format=json|text]',
   'worker-complete': 'Usage: pluto-tool --actor <key> worker-complete --task-id=<id> --summary=<text> [--artifact=<id>...] [--no-wait] [--wait-timeout-ms=<n>] [--format=json|text]',
   'evaluator-verdict': 'Usage: pluto-tool --actor <key> evaluator-verdict --task-id=<id> --verdict=<pass|needs-revision|fail> --summary=<text> [--no-wait] [--wait-timeout-ms=<n>] [--format=json|text]',
-  'final-reconciliation': 'Usage: pluto-tool --actor <key> final-reconciliation --completed-tasks=<id>[,<id>...] --cited-messages=<id>[,<id>...] --summary=<text> [--format=json|text]',
+  'final-reconciliation': 'Usage: pluto-tool --actor <key> final-reconciliation --completed-tasks=<id>[,<id>...] --cited-messages=<sequence>[,<sequence>...] [--cited-artifact-ref=<id>...] [--unresolved-issue=<text>...] --summary=<text> [--format=json|text]',
   'wait': 'Usage: pluto-tool --actor <key> wait [--timeout-sec=<0-1200>] [--format=json|text]',
   'read-state': 'Usage: pluto-tool [--actor <key>] read-state [--format=json|text]',
   'read-artifact': 'Usage: pluto-tool [--actor <key>] read-artifact --artifact-id=<id> [--format=json|text]',
@@ -681,6 +681,8 @@ export async function parseCliArgs(argv: readonly string[]): Promise<ParsedCli> 
     case 'final-reconciliation': {
       const completedTasks = parseCommaSeparatedIds(requireOne(flags, 'completed-tasks', commandToken), '--completed-tasks');
       const citedMessages = parseCommaSeparatedIds(requireOne(flags, 'cited-messages', commandToken), '--cited-messages');
+      const citedArtifactRefs = takeMany(flags, 'cited-artifact-ref');
+      const unresolvedIssues = takeMany(flags, 'unresolved-issue');
       const summary = requireOne(flags, 'summary', commandToken);
       assertKnownFlags(flags, commandToken);
       return {
@@ -694,6 +696,8 @@ export async function parseCliArgs(argv: readonly string[]): Promise<ParsedCli> 
         body: {
           completedTasks,
           citedMessages,
+          citedArtifactRefs,
+          unresolvedIssues,
           summary,
         },
       };

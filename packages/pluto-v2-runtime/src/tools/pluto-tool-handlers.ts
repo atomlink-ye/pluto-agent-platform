@@ -44,6 +44,7 @@ export interface PlutoToolHandlerDeps {
 export interface PlutoToolSession {
   currentActor: ActorRef;
   isLead: boolean;
+  runDir?: string;
 }
 
 export type PlutoToolResult =

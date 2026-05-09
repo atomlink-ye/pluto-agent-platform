@@ -1,3 +1,7 @@
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
 import { describe, expect, it, vi } from 'vitest';
 
 import {
@@ -99,8 +103,10 @@ async function withApi(run: (context: {
   rootUrl: string;
   kernel: ReturnType<typeof createKernel>;
   leaseStore: ReturnType<typeof makeTurnLeaseStore>;
+  runDir: string;
 }) => Promise<void>) {
   const kernel = createKernel();
+  const runDir = await mkdtemp(join(tmpdir(), 'pluto-composite-tools-'));
   const handlers = makePlutoToolHandlers({
     kernel,
     runId: 'run-1',
@@ -124,20 +130,41 @@ async function withApi(run: (context: {
       read: vi.fn(async () => 'transcript text'),
     },
     promptViewer: {
-      forActor: vi.fn((actor: ActorRef) => ({
-        run: { runId: 'run-1' },
-        forActor: actor,
-        tasks: (Object.entries(kernel.state.tasks) as Array<[string, (typeof kernel.state.tasks)[string]]>).map(([id, task]) => ({
-          id,
-          title: `Task ${id}`,
-          ownerActor: task.ownerActor,
-          state: task.state,
-        })),
-      })),
+      forActor: vi.fn((actor: ActorRef) => {
+        const events = kernel.eventLog.read();
+        return {
+          run: { runId: 'run-1' },
+          forActor: actor,
+          tasks: (Object.entries(kernel.state.tasks) as Array<[string, (typeof kernel.state.tasks)[string]]>).map(([id, task]) => ({
+            id,
+            title: `Task ${id}`,
+            ownerActor: task.ownerActor,
+            state: task.state,
+          })),
+          mailbox: events.flatMap((event) => event.kind === 'mailbox_message_appended'
+            ? [{
+                sequence: event.sequence,
+                from: event.payload.fromActor,
+                to: event.payload.toActor,
+                kind: event.payload.kind,
+                body: event.payload.body,
+              }]
+            : []),
+          artifacts: events.flatMap((event) => event.kind === 'artifact_published'
+            ? [{
+                id: event.payload.artifactId,
+                kind: event.payload.kind,
+                mediaType: event.payload.mediaType,
+                byteSize: event.payload.byteSize,
+              }]
+            : []),
+        };
+      }),
     },
   });
   const leaseStore = makeTurnLeaseStore(LEAD);
   const api = await startPlutoLocalApi({
+    runDir,
     tokenByActor: TOKEN_BY_ACTOR,
     registeredActorKeys: new Set(['manager', 'role:lead', 'role:generator', 'role:evaluator', 'system']),
     handlers,
@@ -145,10 +172,117 @@ async function withApi(run: (context: {
   });
 
   try {
-    await run({ rootUrl: api.url.slice(0, -'/v1'.length), kernel, leaseStore });
+    await run({ rootUrl: api.url.slice(0, -'/v1'.length), kernel, leaseStore, runDir });
   } finally {
     await api.shutdown();
+    await rm(runDir, { recursive: true, force: true });
   }
+}
+
+function createTask(kernel: ReturnType<typeof createKernel>, ownerActor: ActorRef = GENERATOR): string {
+  const created = kernel.submit({
+    requestId: '00000000-0000-4000-8000-000000000001',
+    runId: 'run-1',
+    actor: LEAD,
+    idempotencyKey: null,
+    clientTimestamp: FIXED_ISO,
+    schemaVersion: SCHEMA_VERSION,
+    intent: 'create_task',
+    payload: {
+      title: 'Draft',
+      ownerActor,
+      dependsOn: [],
+    },
+  }).event;
+
+  if (created.kind !== 'task_created') {
+    throw new Error('Expected task_created event');
+  }
+
+  return created.payload.taskId;
+}
+
+function completeTask(kernel: ReturnType<typeof createKernel>, taskId: string): void {
+  const changed = kernel.submit({
+    requestId: '00000000-0000-4000-8000-000000000002',
+    runId: 'run-1',
+    actor: GENERATOR,
+    idempotencyKey: null,
+    clientTimestamp: FIXED_ISO,
+    schemaVersion: SCHEMA_VERSION,
+    intent: 'change_task_state',
+    payload: {
+      taskId,
+      to: 'completed',
+    },
+  }).event;
+
+  if (changed.kind !== 'task_state_changed') {
+    throw new Error('Expected task_state_changed event');
+  }
+}
+
+function appendMailboxMessage(kernel: ReturnType<typeof createKernel>): string {
+  const appended = kernel.submit({
+    requestId: '00000000-0000-4000-8000-000000000003',
+    runId: 'run-1',
+    actor: GENERATOR,
+    idempotencyKey: null,
+    clientTimestamp: FIXED_ISO,
+    schemaVersion: SCHEMA_VERSION,
+    intent: 'append_mailbox_message',
+    payload: {
+      fromActor: GENERATOR,
+      toActor: LEAD,
+      kind: 'completion',
+      body: 'done',
+    },
+  }).event;
+
+  if (appended.kind !== 'mailbox_message_appended') {
+    throw new Error('Expected mailbox_message_appended event');
+  }
+
+  return String(appended.sequence);
+}
+
+function publishArtifact(kernel: ReturnType<typeof createKernel>): string {
+  const published = kernel.submit({
+    requestId: '00000000-0000-4000-8000-000000000004',
+    runId: 'run-1',
+    actor: GENERATOR,
+    idempotencyKey: null,
+    clientTimestamp: FIXED_ISO,
+    schemaVersion: SCHEMA_VERSION,
+    intent: 'publish_artifact',
+    payload: {
+      kind: 'final',
+      mediaType: 'text/plain',
+      byteSize: 4,
+    },
+  }).event;
+
+  if (published.kind !== 'artifact_published') {
+    throw new Error('Expected artifact_published event');
+  }
+
+  return published.payload.artifactId;
+}
+
+function seedFinalReconciliationState(
+  kernel: ReturnType<typeof createKernel>,
+  options: { taskState?: 'queued' | 'completed' } = {},
+): { taskId: string; messageId: string; artifactId: string } {
+  const taskId = createTask(kernel);
+  if (options.taskState === 'completed') {
+    completeTask(kernel, taskId);
+  }
+
+  return {
+    taskId,
+    messageId: appendMailboxMessage(kernel),
+    artifactId: publishArtifact(kernel),
+  };
 }
 
 describe('composite tools', () => {
@@ -395,16 +529,19 @@ describe('composite tools', () => {
     });
   });
 
-  it('final-reconciliation wraps complete-run with structured summary args', async () => {
-    await withApi(async ({ rootUrl, kernel, leaseStore }) => {
+  it('final-reconciliation succeeds when cited tasks, mailbox messages, and artifacts resolve', async () => {
+    await withApi(async ({ rootUrl, kernel, leaseStore, runDir }) => {
+      const refs = seedFinalReconciliationState(kernel, { taskState: 'completed' });
+
       leaseStore.setCurrent(LEAD);
       const response = await requestApi({
         rootUrl,
         actor: 'role:lead',
         path: '/v2/composite/final-reconciliation',
         body: {
-          completedTasks: ['task-1', 'task-2'],
-          citedMessages: ['message-1', 'message-2'],
+          completedTasks: [refs.taskId],
+          citedMessages: [refs.messageId],
+          citedArtifactRefs: [refs.artifactId],
           summary: 'all done',
         },
       });
@@ -413,7 +550,19 @@ describe('composite tools', () => {
       expect(response.body).toMatchObject({
         accepted: true,
         composite: 'final-reconciliation',
+        runStatus: 'succeeded',
         turnDisposition: 'terminal',
+        auditSummary: {
+          summary: 'all done',
+          completedTaskIds: [refs.taskId],
+          citedMessageIds: [refs.messageId],
+          citedArtifactRefs: [refs.artifactId],
+          unresolvedIssues: [],
+          audit: {
+            status: 'pass',
+            failures: [],
+          },
+        },
       });
       const runCompleted = kernel.eventLog.read().at(-1);
       expect(runCompleted).toMatchObject({
@@ -423,9 +572,226 @@ describe('composite tools', () => {
         },
       });
       expect(JSON.parse(runCompleted?.kind === 'run_completed' ? runCompleted.payload.summary ?? '{}' : '{}')).toEqual({
-        completedTasks: ['task-1', 'task-2'],
-        citedMessages: ['message-1', 'message-2'],
+        completedTasks: [refs.taskId],
+        citedMessages: [refs.messageId],
+        citedArtifactRefs: [refs.artifactId],
+        unresolvedIssues: [],
         summary: 'all done',
+        audit: {
+          status: 'pass',
+          failures: [],
+        },
+      });
+
+      const evidence = JSON.parse(await readFile(join(runDir, 'evidence', 'final-reconciliation.json'), 'utf8'));
+      expect(evidence).toEqual({
+        summary: 'all done',
+        completedTaskIds: [refs.taskId],
+        citedMessageIds: [refs.messageId],
+        citedArtifactRefs: [refs.artifactId],
+        unresolvedIssues: [],
+        audit: {
+          status: 'pass',
+          failures: [],
+        },
+      });
+    });
+  });
+
+  it('final-reconciliation records unresolved issues without failing audit', async () => {
+    await withApi(async ({ rootUrl, kernel, leaseStore, runDir }) => {
+      const refs = seedFinalReconciliationState(kernel, { taskState: 'completed' });
+
+      leaseStore.setCurrent(LEAD);
+      const response = await requestApi({
+        rootUrl,
+        actor: 'role:lead',
+        path: '/v2/composite/final-reconciliation',
+        body: {
+          completedTasks: [refs.taskId],
+          citedMessages: [refs.messageId],
+          unresolvedIssues: ['follow up on deployment notes'],
+          summary: 'all done',
+        },
+      });
+
+      expect(response.status).toBe(200);
+      expect(response.body).toMatchObject({
+        accepted: true,
+        composite: 'final-reconciliation',
+        runStatus: 'succeeded',
+        auditSummary: {
+          citedArtifactRefs: [],
+          unresolvedIssues: ['follow up on deployment notes'],
+          audit: {
+            status: 'pass',
+            failures: [],
+          },
+        },
+      });
+
+      const evidence = JSON.parse(await readFile(join(runDir, 'evidence', 'final-reconciliation.json'), 'utf8'));
+      expect(evidence).toMatchObject({
+        unresolvedIssues: ['follow up on deployment notes'],
+        audit: {
+          status: 'pass',
+          failures: [],
+        },
+      });
+    });
+  });
+
+  it('final-reconciliation fails audit when a cited task is missing', async () => {
+    await withApi(async ({ rootUrl, kernel, leaseStore, runDir }) => {
+      const refs = seedFinalReconciliationState(kernel, { taskState: 'completed' });
+
+      leaseStore.setCurrent(LEAD);
+      const response = await requestApi({
+        rootUrl,
+        actor: 'role:lead',
+        path: '/v2/composite/final-reconciliation',
+        body: {
+          completedTasks: ['missing-task'],
+          citedMessages: [refs.messageId],
+          citedArtifactRefs: [refs.artifactId],
+          summary: 'all done',
+        },
+      });
+
+      expect(response.status).toBe(200);
+      expect(response.body).toMatchObject({
+        accepted: true,
+        composite: 'final-reconciliation',
+        runStatus: 'failed',
+        auditSummary: {
+          audit: {
+            status: 'failed_audit',
+            failures: [{ kind: 'missing_task', ref: 'missing-task' }],
+          },
+        },
+      });
+
+      const runCompleted = kernel.eventLog.read().at(-1);
+      expect(runCompleted).toMatchObject({
+        kind: 'run_completed',
+        payload: {
+          status: 'failed',
+          summary: expect.stringMatching(/^FAILED_AUDIT: /),
+        },
+      });
+
+      const evidence = JSON.parse(await readFile(join(runDir, 'evidence', 'final-reconciliation.json'), 'utf8'));
+      expect(evidence.audit).toEqual({
+        status: 'failed_audit',
+        failures: [{ kind: 'missing_task', ref: 'missing-task' }],
+      });
+    });
+  });
+
+  it('final-reconciliation fails audit when a cited task is not terminal', async () => {
+    await withApi(async ({ rootUrl, kernel, leaseStore, runDir }) => {
+      const refs = seedFinalReconciliationState(kernel);
+
+      leaseStore.setCurrent(LEAD);
+      const response = await requestApi({
+        rootUrl,
+        actor: 'role:lead',
+        path: '/v2/composite/final-reconciliation',
+        body: {
+          completedTasks: [refs.taskId],
+          citedMessages: [refs.messageId],
+          citedArtifactRefs: [refs.artifactId],
+          summary: 'all done',
+        },
+      });
+
+      expect(response.status).toBe(200);
+      expect(response.body).toMatchObject({
+        runStatus: 'failed',
+        auditSummary: {
+          audit: {
+            status: 'failed_audit',
+            failures: [{ kind: 'non_terminal_task', ref: refs.taskId }],
+          },
+        },
+      });
+
+      const evidence = JSON.parse(await readFile(join(runDir, 'evidence', 'final-reconciliation.json'), 'utf8'));
+      expect(evidence.audit).toEqual({
+        status: 'failed_audit',
+        failures: [{ kind: 'non_terminal_task', ref: refs.taskId }],
+      });
+    });
+  });
+
+  it('final-reconciliation fails audit when a cited mailbox message is missing', async () => {
+    await withApi(async ({ rootUrl, kernel, leaseStore, runDir }) => {
+      const refs = seedFinalReconciliationState(kernel, { taskState: 'completed' });
+
+      leaseStore.setCurrent(LEAD);
+      const response = await requestApi({
+        rootUrl,
+        actor: 'role:lead',
+        path: '/v2/composite/final-reconciliation',
+        body: {
+          completedTasks: [refs.taskId],
+          citedMessages: ['9999'],
+          citedArtifactRefs: [refs.artifactId],
+          summary: 'all done',
+        },
+      });
+
+      expect(response.status).toBe(200);
+      expect(response.body).toMatchObject({
+        runStatus: 'failed',
+        auditSummary: {
+          audit: {
+            status: 'failed_audit',
+            failures: [{ kind: 'missing_message', ref: '9999' }],
+          },
+        },
+      });
+
+      const evidence = JSON.parse(await readFile(join(runDir, 'evidence', 'final-reconciliation.json'), 'utf8'));
+      expect(evidence.audit).toEqual({
+        status: 'failed_audit',
+        failures: [{ kind: 'missing_message', ref: '9999' }],
+      });
+    });
+  });
+
+  it('final-reconciliation fails audit when a cited artifact is missing', async () => {
+    await withApi(async ({ rootUrl, kernel, leaseStore, runDir }) => {
+      const refs = seedFinalReconciliationState(kernel, { taskState: 'completed' });
+
+      leaseStore.setCurrent(LEAD);
+      const response = await requestApi({
+        rootUrl,
+        actor: 'role:lead',
+        path: '/v2/composite/final-reconciliation',
+        body: {
+          completedTasks: [refs.taskId],
+          citedMessages: [refs.messageId],
+          citedArtifactRefs: ['missing-artifact'],
+          summary: 'all done',
+        },
+      });
+
+      expect(response.status).toBe(200);
+      expect(response.body).toMatchObject({
+        runStatus: 'failed',
+        auditSummary: {
+          audit: {
+            status: 'failed_audit',
+            failures: [{ kind: 'missing_artifact', ref: 'missing-artifact' }],
+          },
+        },
+      });
+
+      const evidence = JSON.parse(await readFile(join(runDir, 'evidence', 'final-reconciliation.json'), 'utf8'));
+      expect(evidence.audit).toEqual({
+        status: 'failed_audit',
+        failures: [{ kind: 'missing_artifact', ref: 'missing-artifact' }],
       });
     });
   });
