@@ -1,0 +1,132 @@
+{
+  "runId": "post-t5-poet-critic-haiku",
+  "scenarioRef": "scenario/post-t5-poet-critic-haiku",
+  "runProfileRef": "paseo-live-validation",
+  "status": "failed",
+  "finalSummary": "maxNoProgressTurns exhausted",
+  "totalTurns": 5,
+  "totalInputTokens": 0,
+  "totalOutputTokens": 0,
+  "totalTokens": 0,
+  "totalCostUsd": 0,
+  "usageStatus": "unavailable",
+  "reportedBy": "paseo.usageEstimate",
+  "estimated": false,
+  "byActor": {
+    "role:lead": {
+      "turns": 5,
+      "inputTokens": 0,
+      "outputTokens": 0,
+      "totalTokens": 0,
+      "costUsd": 0,
+      "provider": "opencode",
+      "model": "openai/gpt-5.4-mini",
+      "mode": "build",
+      "thinking": null
+    }
+  },
+  "perTurn": [
+    {
+      "turnIndex": 0,
+      "actor": {
+        "kind": "role",
+        "role": "lead"
+      },
+      "actorKey": "role:lead",
+      "provider": "opencode",
+      "model": "openai/gpt-5.4-mini",
+      "mode": "build",
+      "thinking": null,
+      "inputTokens": 0,
+      "outputTokens": 0,
+      "totalTokens": 0,
+      "costUsd": 0,
+      "waitExitCode": 0
+    },
+    {
+      "turnIndex": 1,
+      "actor": {
+        "kind": "role",
+        "role": "lead"
+      },
+      "actorKey": "role:lead",
+      "provider": "opencode",
+      "model": "openai/gpt-5.4-mini",
+      "mode": "build",
+      "thinking": null,
+      "inputTokens": 0,
+      "outputTokens": 0,
+      "totalTokens": 0,
+      "costUsd": 0,
+      "waitExitCode": 0
+    },
+    {
+      "turnIndex": 2,
+      "actor": {
+        "kind": "role",
+        "role": "lead"
+      },
+      "actorKey": "role:lead",
+      "provider": "opencode",
+      "model": "openai/gpt-5.4-mini",
+      "mode": "build",
+      "thinking": null,
+      "inputTokens": 0,
+      "outputTokens": 0,
+      "totalTokens": 0,
+      "costUsd": 0,
+      "waitExitCode": 0
+    },
+    {
+      "turnIndex": 3,
+      "actor": {
+        "kind": "role",
+        "role": "lead"
+      },
+      "actorKey": "role:lead",
+      "provider": "opencode",
+      "model": "openai/gpt-5.4-mini",
+      "mode": "build",
+      "thinking": null,
+      "inputTokens": 0,
+      "outputTokens": 0,
+      "totalTokens": 0,
+      "costUsd": 0,
+      "waitExitCode": 0
+    },
+    {
+      "turnIndex": 4,
+      "actor": {
+        "kind": "role",
+        "role": "lead"
+      },
+      "actorKey": "role:lead",
+      "provider": "opencode",
+      "model": "openai/gpt-5.4-mini",
+      "mode": "build",
+      "thinking": null,
+      "inputTokens": 0,
+      "outputTokens": 0,
+      "totalTokens": 0,
+      "costUsd": 0,
+      "waitExitCode": 0
+    }
+  ],
+  "byModel": {
+    "opencode:openai/gpt-5.4-mini": {
+      "provider": "opencode",
+      "model": "openai/gpt-5.4-mini",
+      "mode": "build",
+      "thinking": null,
+      "turns": 5,
+      "inputTokens": 0,
+      "outputTokens": 0,
+      "totalTokens": 0,
+      "costUsd": 0,
+      "actors": [
+        "role:lead"
+      ]
+    }
+  },
+  "evidencePacketPath": "tests/fixtures/live-smoke/post-t5-poet-critic-haiku/evidence-packet.json"
+}

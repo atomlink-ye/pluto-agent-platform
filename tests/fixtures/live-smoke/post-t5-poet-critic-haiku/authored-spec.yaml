@@ -1,0 +1,32 @@
+runId: post-t5-poet-critic-haiku
+scenarioRef: scenario/post-t5-poet-critic-haiku
+runProfileRef: paseo-live-validation
+actors:
+  manager:
+    kind: manager
+  lead:
+    kind: role
+    role: lead
+  generator:
+    kind: role
+    role: generator
+  evaluator:
+    kind: role
+    role: evaluator
+declaredActors:
+  - manager
+  - lead
+  - generator
+  - evaluator
+orchestration:
+  mode: agentic_tool
+  maxTurns: 14
+  maxParseFailuresPerTurn: 2
+  maxKernelRejections: 2
+  maxNoProgressTurns: 4
+userTask: |
+  Compose a haiku about resilient software systems. Have a critic review it.
+  Have the poet revise it based on the critique. Close the run with the final
+  haiku. Lead orchestrates the entire flow; sub-actors only do their assigned
+  craft (writing or critiquing).
+playbookRef: playbook.md

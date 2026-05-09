@@ -11,7 +11,7 @@ import { checkSmokeAcceptanceForRunDir } from '../../scripts/smoke-acceptance.js
 
 const REPO_ROOT = fileURLToPath(new URL('../../../../', import.meta.url));
 const TSX_BIN = join(REPO_ROOT, 'node_modules', '.bin', 'tsx');
-const POST_T5_FIXTURE_DIR = '/workspace/tests/fixtures/live-smoke/post-t5-poet-critic-haiku';
+const POST_T5_FIXTURE_DIR = join(REPO_ROOT, 'tests', 'fixtures', 'live-smoke', 'post-t5-poet-critic-haiku');
 
 const SYSTEM: ActorRef = { kind: 'system' };
 const MANAGER: ActorRef = { kind: 'manager' };

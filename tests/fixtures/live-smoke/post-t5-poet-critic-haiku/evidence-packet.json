@@ -1,0 +1,30 @@
+{
+  "schemaVersion": "1.0",
+  "kind": "evidence_packet",
+  "runId": "post-t5-poet-critic-haiku",
+  "status": "failed",
+  "summary": "maxNoProgressTurns exhausted",
+  "initiatingActor": {
+    "kind": "manager"
+  },
+  "startedAt": "2026-05-08T20:04:02.262Z",
+  "completedAt": "2026-05-08T20:19:18.201Z",
+  "generatedAt": "2026-05-08T20:19:18.201Z",
+  "citations": [
+    {
+      "eventId": "4cea2e80-a3d0-49f0-91ed-7e31102b560f",
+      "kind": "run_started",
+      "text": "Run started.",
+      "observedAt": "2026-05-08T20:04:02.263Z"
+    },
+    {
+      "eventId": "15039ed7-beb3-4261-9e44-b416fa0cdcfc",
+      "kind": "run_completed",
+      "text": "Run completed.",
+      "observedAt": "2026-05-08T20:19:18.201Z"
+    }
+  ],
+  "tasks": {},
+  "mailboxMessages": [],
+  "artifacts": []
+}
