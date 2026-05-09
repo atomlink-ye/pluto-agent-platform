@@ -97,14 +97,18 @@ Three layers run gates; each layer's responsibility is distinct:
   if needed.
 - Verdict: NO_OBJECTIONS / OBJECTIONS_MECHANICAL / OBJECTIONS_SUBSTANTIVE.
 
-### Layer 3 — Manager (me, in this orchestrator session)
-- **Reads OC's verdict only**. Does NOT re-run gates from this
-  session — `pnpm` invocation here OOMs the manager process and
-  burns context.
+### Layer 3 — Manager (orchestrator that drives the iteration)
+- **Reads the reviewer's verdict only**. Does NOT re-run full
+  gates — invoking `pnpm install` / `pnpm test` from a manager
+  process tends to OOM and produces multi-thousand-line output
+  that is wasteful at this layer.
 - Spot-checks: confirm `git diff --name-only main..HEAD` matches
-  reviewer's expected file list; verify a flagged single test
-  if reviewer says "this fails."
-- ff-merge or dispatch fixup based on OC verdict.
+  the reviewer's expected file list; re-run a single flagged
+  test if the reviewer pointed at one.
+- ff-merge into `main` if NO_OBJECTIONS; apply mechanical
+  fixups inline (≤5 lines / ≤2 files) and ff-merge; dispatch a
+  fresh implementer for substantive fixups, then go back to
+  Layer 2.
 
 ## Known gate noise (DO NOT block on)
 
@@ -145,22 +149,40 @@ should not bounce a fixup back over them:
 - **Full root suite**: `pnpm test` (vitest at repo root, ~37 tests)
 - **Single file**:
   `pnpm --filter @pluto/v2-runtime exec vitest run __tests__/<path>`
-- **Live smoke** (heavy, real LLM, default `gpt-5.4-mini`):
+- **Live smoke** (heavy, real LLM): default model is
+  `openai/gpt-5.4-mini` (`gpt-4o-mini` is NOT available; free
+  Minimax also acceptable). Run via
   `pnpm --filter @pluto/v2-runtime exec smoke:live` — once per
   slice, only after typecheck + tests pass.
 
-## Memory rules referenced
+## Iteration conventions
 
-- `feedback_no_questions_continue` — never pause to confirm
-- `feedback_iterate_until_clean_loop` — full POST-N validation
-- `feedback_post_iteration_e2e_validation` — custom workflow + transcript review
-- `feedback_delegate_acceptance_fixes` — substantive fixes → fresh OC
-- `feedback_remote_first_for_parallelism` — sandbox is default
-- `feedback_implementation_via_opencode` — never general-purpose subagents
-- `feedback_smoke_live_model` — gpt-5.4-mini default
-- `feedback_oc_review_before_manager_check` — OC review FIRST, manager doesn't pre-run gates
-- `feedback_oc_subagent_delegation_is_normal` — orchestrator delegating to @oracle is fine; observe via `session status`, never `attach`/cancel
-- `feedback_daytona_companion_for_transfer` — daytona-manager.mjs push/pull, not raw `daytona exec`
+- **Sandbox-first**: T5+ slices land via a remote Daytona
+  sandbox running an OpenCode agent against a paseo daemon, not
+  via local `pnpm` from the manager session. The sandbox is the
+  default home for slice implementation; local OC is fallback
+  only.
+- **Sandbox push always fails on auth.** The sandbox commits on
+  the slice branch but cannot push to GitHub. Patch transfer
+  back uses the daytona-companion git mode:
+  ```bash
+  node ~/.claude/skills/daytona-companion/scripts/daytona-manager.mjs \
+    pull --directory <repo-root> --mode git \
+    --branch daytona/<slice-name> \
+    --remote-path /workspace/.worktrees/<slice>/integration
+  ```
+  Then cherry-pick the agent's commit onto a clean branch from
+  `main`, drop the auto-sync wrapper commit, and push to origin.
+- **Bundle deploy** uses bundle-mode push of the same tool, NOT
+  raw `daytona exec` (its arg parser silently strips literal
+  string arguments).
+- **No verbatim-payload prompts**. The grep gate
+  `gate_no_verbatim_payload_prompts` exists because v1.6 prompts
+  pre-filled the LLM's expected JSON — that pattern is forbidden
+  in agentic mode.
+- **Implementation goes through OpenCode Companion sessions**
+  (sandbox or local). Never delegate slice implementation work
+  to a generic agent — OC is the supported path.
 
 ## Plan doc
 
