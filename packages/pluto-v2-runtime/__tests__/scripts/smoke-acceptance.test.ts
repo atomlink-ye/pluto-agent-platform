@@ -59,7 +59,12 @@ function taskCreated(sequence: number, ownerActor: ActorRef = GENERATOR, taskId 
   } as unknown as RunEvent;
 }
 
-function mailboxAppended(sequence: number, fromActor: ActorRef = GENERATOR, toActor: ActorRef = LEAD): RunEvent {
+function mailboxAppended(
+  sequence: number,
+  fromActor: ActorRef = GENERATOR,
+  toActor: ActorRef = LEAD,
+  kind: 'completion' | 'final' | 'plan' | 'progress' = 'completion',
+): RunEvent {
   return {
     ...baseEvent(sequence, fromActor),
     kind: 'mailbox_message_appended',
@@ -68,7 +73,7 @@ function mailboxAppended(sequence: number, fromActor: ActorRef = GENERATOR, toAc
       messageId: `message-${sequence}`,
       fromActor,
       toActor,
-      kind: 'completion',
+      kind,
       body: 'Draft is ready.',
     },
   } as unknown as RunEvent;
@@ -203,7 +208,50 @@ describe('smoke acceptance', () => {
     const result = checkSmokeAcceptanceForRunDir({ runDir, expectFailure: false });
 
     expect(result.ok).toBe(false);
-    expect(result.failures).toContain('missing accepted task_created or accepted non-system, non-manager mutation event');
+    expect(result.failures).toContain('missing accepted task_created or accepted sub-actor (non-lead) mutation event');
+  });
+
+  it('fails when only lead authored mutations (no sub-actor mutation)', async () => {
+    // Lead-authored complete_run alone is NOT evidence of team collaboration.
+    const runDir = await createRunDir({
+      events: [
+        runStarted(0),
+        // Lead sends a mailbox to itself? — synthetic case: lead authors a
+        // mutation but no sub-actor ever acts. We use a non-task mutation
+        // (mailbox to non-lead) authored by lead and assert the gate STILL
+        // fails because no SUB-actor mutation exists.
+        mailboxAppended(1, LEAD, GENERATOR, 'plan'),
+        runCompleted(2, 'succeeded'),
+      ],
+      transcripts: {
+        'role:lead': 'lead transcript\n',
+        'role:generator': 'generator transcript\n',
+      },
+    });
+
+    const result = checkSmokeAcceptanceForRunDir({ runDir, expectFailure: false });
+
+    expect(result.ok).toBe(false);
+    expect(result.failures).toContain('missing accepted task_created or accepted sub-actor (non-lead) mutation event');
+  });
+
+  it('fails when sub-actor mailbox is non-completion kind (e.g. plan/progress)', async () => {
+    // A sub-actor sending a `plan` mailbox is not evidence delegated work
+    // finished. Acceptance should require kind: completion or final.
+    const runDir = await createRunDir({
+      events: [
+        runStarted(0),
+        taskCreated(1),
+        mailboxAppended(2, GENERATOR, LEAD, 'plan'),
+        taskStateChanged(3, 'completed'),
+        runCompleted(4, 'succeeded'),
+      ],
+    });
+
+    const result = checkSmokeAcceptanceForRunDir({ runDir, expectFailure: false });
+
+    expect(result.ok).toBe(false);
+    expect(result.failures).toContain('missing accepted mailbox_message_appended (kind: completion|final) from a sub-actor back to lead');
   });
 
   it('fails when no sub-actor reports back to lead', async () => {
@@ -219,7 +267,7 @@ describe('smoke acceptance', () => {
     const result = checkSmokeAcceptanceForRunDir({ runDir, expectFailure: false });
 
     expect(result.ok).toBe(false);
-    expect(result.failures).toContain('missing accepted mailbox_message_appended from a sub-actor back to lead');
+    expect(result.failures).toContain('missing accepted mailbox_message_appended (kind: completion|final) from a sub-actor back to lead');
   });
 
   it('passes expected-failure mode when the run failed but the other criteria never happened', async () => {

@@ -85,25 +85,34 @@ export function checkSmokeAcceptance(input: SmokeAcceptanceArtifacts & { expectF
   }
 
   const hasAcceptedTaskCreated = input.events.some((event) => event.kind === 'task_created' && event.outcome === 'accepted');
-  const hasAcceptedNonSystemNonManagerMutation = input.events.some((event) =>
+  // Fallback (for workflows without tasks) requires the mutation to come from a
+  // SUB-ACTOR — i.e. a non-lead role actor — not lead itself, since lead's own
+  // mutation is part of the orchestration shell, not evidence that the team
+  // collaborated.
+  const hasAcceptedSubActorMutation = input.events.some((event) =>
     event.outcome === 'accepted'
     && ACCEPTED_MUTATION_EVENT_KINDS.has(event.kind)
-    && isRoleActor(event.actor),
+    && isRoleActor(event.actor)
+    && event.actor.role !== 'lead',
   );
-  if (!hasAcceptedTaskCreated && !hasAcceptedNonSystemNonManagerMutation) {
-    failures.push('missing accepted task_created or accepted non-system, non-manager mutation event');
+  if (!hasAcceptedTaskCreated && !hasAcceptedSubActorMutation) {
+    failures.push('missing accepted task_created or accepted sub-actor (non-lead) mutation event');
   }
 
+  // Criterion 2: the sub-actor must explicitly REPORT BACK with a completion
+  // (or final) mailbox kind to lead. A `plan` or `progress` mailbox message is
+  // not evidence that delegated work finished.
   const hasAcceptedSubActorMailbox = input.events.some((event) =>
     event.kind === 'mailbox_message_appended'
     && event.outcome === 'accepted'
     && isRoleActor(event.actor)
     && event.actor.role !== 'lead'
     && event.payload.toActor.kind === 'role'
-    && event.payload.toActor.role === 'lead',
+    && event.payload.toActor.role === 'lead'
+    && (event.payload.kind === 'completion' || event.payload.kind === 'final'),
   );
   if (!hasAcceptedSubActorMailbox) {
-    failures.push('missing accepted mailbox_message_appended from a sub-actor back to lead');
+    failures.push('missing accepted mailbox_message_appended (kind: completion|final) from a sub-actor back to lead');
   }
 
   const nonEmptyTranscriptActors = Object.entries(input.transcripts)
