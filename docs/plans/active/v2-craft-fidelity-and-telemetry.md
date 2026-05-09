@@ -1,5 +1,15 @@
 # Pluto v2 — Craft fidelity + telemetry tightening (T7)
 
+> [!NOTE]
+> **Per-slice reports** (in execution order):
+> - [T7-S1 — lead craft-fidelity role anchor](../../../tasks/remote/pluto-v2-t7-s1-craft-fidelity-20260509/artifacts/REPORT.md)
+> - [T7-S2 — null usage totals when telemetry unavailable](../../../tasks/remote/pluto-v2-t7-s2-telemetry-totals-20260509/artifacts/REPORT.md)
+> - [T7-S3 — wait disconnect triage](../../../tasks/remote/pluto-v2-t7-s3-wait-disconnect-20260509/artifacts/REPORT.md) *(in flight)*
+>
+> **Predecessor plan:** [T6 actor bridge fix](v2-actor-bridge-fix.md)
+>
+> **POST-T6 fixture (input):** `tests/fixtures/live-smoke/post-t5-poet-critic-haiku/` — captured during POST-T5; the same path was overwritten by POST-T6's successful run before re-capture.
+
 > **Status:** drafted 2026-05-09 from POST-T6 validation finding (PARTIAL).
 > **Authority:** this file is canonical for T7.
 > **Predecessor:** T6 actor-bridge-fix. POST-T6 ran the poet/critic

@@ -1,5 +1,17 @@
 # Pluto v2 — Actor Loop Hardening (T5)
 
+> [!NOTE]
+> **Per-slice reports** (in execution order):
+> - [T5-S1 — stable actor API + `pluto-tool` CLI + env handoff](../../../tasks/remote/pluto-v2-t5-s1-stable-actor-api-20260508/artifacts/REPORT.md)
+> - [T5-S2a — bootstrap once + minimal wakeup deltas](../../../tasks/remote/pluto-v2-t5-s2a-prompt-thinning-20260508/artifacts/REPORT.md)
+> - [T5-D2b — wait feasibility spike (verdict GO)](../../../tasks/remote/pluto-v2-t5-d2b-wait-feasibility-20260508/artifacts/REPORT.md)
+> - [T5-S2b — wait registry + dual-mode delivery](../../../tasks/remote/pluto-v2-t5-s2b-wait-registry-20260509/artifacts/REPORT.md)
+> - [T5-S3a — residual P1 cleanup](../../../tasks/remote/pluto-v2-t5-s3a-residual-p1-20260509/artifacts/REPORT.md)
+> - [T5-S3b — driver-synthesized task close-out](../../../tasks/remote/pluto-v2-t5-s3b-task-closeout-20260509/artifacts/REPORT.md)
+> - [T5-S4 — `mode: orchestrator` + `initiatingActor` audit](../../../tasks/remote/pluto-v2-t5-s4-p2-polish-20260509/artifacts/REPORT.md)
+>
+> **Successor plan:** [T6 actor bridge fix](v2-actor-bridge-fix.md) (POST-T5 validation surfaced decorative env handoff + missing `pluto-tool` PATH)
+
 > **Status:** ready, 2026-05-08. Awaiting first dispatch.
 > **Authority:** this file is the canonical plan for T5. Conflicts with
 > bundle docs / future acceptance files → plan wins.

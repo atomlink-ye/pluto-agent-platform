@@ -1,5 +1,17 @@
 # Pluto v2 — Actor Bridge Fix (T6)
 
+> [!NOTE]
+> **Per-slice reports** (in execution order):
+> - [T6-S1 — actor bootstrap bridge wrapper + prompt path threading](../../../tasks/remote/pluto-v2-t6-s1-actor-bridge-20260509/artifacts/REPORT.md) (subsumed T6-S2)
+> - [T6-S3 — bridge self-check + fail-fast on `bridge_unavailable`](../../../tasks/remote/pluto-v2-t6-s3-bootstrap-self-check-20260509/artifacts/REPORT.md)
+> - [T6-S4 — lead role anchor in bootstrap prompt](../../../tasks/remote/pluto-v2-t6-s4-lead-role-anchor-20260509/artifacts/REPORT.md)
+> - [T6-S5 — strengthened smoke-live acceptance + POST-T5 fixture as regression](../../../tasks/remote/pluto-v2-t6-s5-smoke-acceptance-20260509/artifacts/REPORT.md)
+> - [T6-S6 — telemetry truthfulness + runtime diagnostics](../../../tasks/remote/pluto-v2-t6-s6-telemetry-20260509/artifacts/REPORT.md)
+>
+> **POST-T5 finding (input):** `tests/fixtures/live-smoke/post-t5-poet-critic-haiku/` — captured as a permanent regression by T6-S5.
+>
+> **Successor plan:** [T7 craft fidelity + telemetry tightening](v2-craft-fidelity-and-telemetry.md) (POST-T6 validation passed at smoke level but flagged 3 sub-issues).
+
 > **Status:** drafted 2026-05-09 from POST-T5 validation finding.
 > **Authority:** this file is canonical for T6.
 > **Predecessor:** T5 actor-loop hardening (`docs/plans/completed/v2-actor-loop-hardening.md` once T5 is moved there).
