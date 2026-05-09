@@ -1,6 +1,4 @@
-import type { ActorRef, RunEvent } from '@pluto/v2-core';
-
-import { actorKey } from '../../../pluto-v2-core/src/core/team-context.js';
+import { actorKey, type ActorRef, type RunEvent } from '@pluto/v2-core';
 
 import type { WakeupPromptDelta } from '../adapters/paseo/agentic-tool-prompt-builder.js';
 import type { PromptView } from '../adapters/paseo/prompt-view.js';

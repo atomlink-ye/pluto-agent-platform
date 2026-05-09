@@ -6,7 +6,7 @@ import { join, relative, resolve } from 'node:path';
 import process from 'node:process';
 import { pathToFileURL } from 'node:url';
 
-import type { ActorRef, AuthoredSpec, replayAll } from '../../pluto-v2-core/src/index.ts';
+import type { ActorRef, AuthoredSpec, replayAll } from '@pluto/v2-core';
 import type { loadAuthoredSpec, PaseoAgentSpec, PaseoCliClient } from '../src/index.js';
 import { checkSmokeAcceptanceForRunDir } from './smoke-acceptance.js';
 
@@ -315,7 +315,7 @@ async function main(): Promise<void> {
     return;
   }
 
-  const { defaultClockProvider, defaultIdProvider, replayAll } = await import('../../pluto-v2-core/src/index.ts');
+  const { defaultClockProvider, defaultIdProvider, replayAll } = await import('@pluto/v2-core');
   const { loadAuthoredSpec, makePaseoAdapter, makePaseoCliClient, runPaseo } = await import('../src/index.js');
   const { EvidencePacketShape } = await import('../src/evidence/evidence-packet.js');
 

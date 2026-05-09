@@ -1,6 +1,7 @@
 export * from './actor-ref.js';
 export * from './authority-outcome.js';
 export * from './core/index.js';
+export { actorKey } from './core/team-context.js';
 export { FakeScriptStepSchema, type FakeScriptStep, type FakeScriptStepRef } from './core/team-context.js';
 export * from './entity-ref.js';
 export * from './projections/index.js';

@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import {
   SCHEMA_VERSION,
   RunKernel,
+  actorKey,
   compile as compileTeamContext,
   initialState,
   replayAll,
@@ -18,7 +19,6 @@ import {
   type RunState,
   type TeamContext,
 } from '@pluto/v2-core';
-import { actorKey } from '../../../../pluto-v2-core/src/core/team-context.js';
 
 import { startPlutoLocalApi } from '../../api/pluto-local-api.js';
 import {

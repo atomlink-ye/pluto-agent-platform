@@ -1,7 +1,7 @@
 import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
-import type { RunEvent } from '../../pluto-v2-core/src/index.ts';
+import type { RunEvent } from '@pluto/v2-core';
 
 const ACCEPTED_MUTATION_EVENT_KINDS = new Set([
   'task_created',
