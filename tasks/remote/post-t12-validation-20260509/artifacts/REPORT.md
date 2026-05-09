@@ -160,6 +160,26 @@ evidence file: a composite-verb close-out writes
 close-out does not. The lead's two attempts both produced no
 evidence file → confirmed primitive `complete-run` use.
 
+## T13-S1b attempt — role-aware close-out example
+
+T13-S1b (commit `e1100581`) made the example list in
+`toolCallSection` role-aware: for lead actors, the close-out
+example now reads `final-reconciliation --completed-tasks=...`,
+no longer the primitive `complete-run`. Verified the lead's
+delivered prompt now contains both the directive and the
+final-reconciliation example.
+
+POST-T13b re-run (smoke:live exit 0, 319 s) result:
+**still 8/10. evidence/final-reconciliation.json STILL ABSENT.**
+The lead model received the directive + role-specific example
++ "ONLY way to satisfy the audit gate" language and STILL
+chose primitive close-out. Three rounds of prompt-only
+intervention failed to change the lead's close-out choice
+within the smoke run timeout.
+
+This is a model-following-instructions limitation that
+prompt strengthening alone cannot fix.
+
 ## True T14 candidate — server-side enforcement
 
 Prompt-only nudges have already failed twice. The structural
@@ -183,17 +203,63 @@ This is a real architectural choice (forcing a single
 close-out path), worth its own slice plan. Out of scope for
 T12. Recommended for T14 / next iteration.
 
-## Verdict
+## T13-S2 attempt — server-side enforcement
+
+T13-S2 (commit `cabcdb4b`) added a route-layer check in
+`pluto-local-api.ts`: when the `Pluto-Run-Actor` header is
+`role:lead` AND the route is `POST /v1/tools/complete-run`,
+the server returns 403 `lead_must_use_final_reconciliation`.
+The composite verb path (`POST /v2/composite/final-reconciliation`)
+calls `handlers.pluto_complete_run` directly in-process,
+bypassing the HTTP route, so it remains unaffected. Manager-
+submitted closeouts go through `kernel.submit` and are also
+unaffected.
+
+POST-T13c re-run (smoke:live exit 0, 272 s) result:
+**10/10 PASS.**
+
+- The lead actually invoked `final-reconciliation` this
+  time. The seq=10 `run_completed` event payload now
+  carries the structured citation envelope:
+  ```json
+  {
+    "completedTasks": ["7202b877-...", "847ab5ea-...", "833155af-..."],
+    "citedMessages": ["3", "5", "9"],
+    "citedArtifactRefs": [],
+    "unresolvedIssues": [],
+    "summary": "Final accepted TL;DR: ...",
+    "audit": { "status": "pass", "failures": [] }
+  }
+  ```
+- `evidence/final-reconciliation.json` was written under
+  the actual run dir at
+  `<symphony-fixture>/.pluto/runs/symphony-summary-custom-test/evidence/`.
+- `pnpm pluto:runs audit ... --format=json` returns
+  `status: pass` with all the citations populated; exit 0.
+- `pnpm pluto:runs explain ...` renders a "Final
+  Reconciliation" section with the summary, citations,
+  audit verdict, and the diagnostics block.
+
+**Note on the smoke:live capture quirk**: the smoke
+harness moves `events.jsonl` + `paseo-transcripts/` out of
+the run dir into `tests/fixtures/live-smoke/<runId>/` for
+golden-file capture, but leaves `evidence/` at the
+original run dir. To run `pluto:runs audit` on a captured
+fixture, either point `--run-dir` at the actual run dir or
+copy `evidence/` into the fixture. Documented for the
+future-iteration toolkit.
+
+## Verdict (final)
 
 ```
 POST-T12 COMPLETE
 status: succeeded
-acceptance-criteria-met: 8/10
+acceptance-criteria-met: 10/10
 baseline-criteria: 6/6
-t12-additions: 2/4
+t12-additions: 4/4
 smoke-live-exit-code: 0
-audit-exit-code: 2 (absent)
-overall: PARTIAL — implementation complete; audit-gate exercise blocked by primitive-vs-composite choice the lead model continues to make even with directive prompt
-T13-S1: applied (prompt hardening); did not move the model
-T14 candidate: server-side enforcement of composite close-out
+audit-exit-code: 0 (pass)
+overall: PASS — full GPT Pro follow-up arc closed
+attempts: T13-S1 (prompt directive) → T13-S1b (role-aware example) → T13-S2 (route-layer enforcement)
+the model converged to final-reconciliation only under structural enforcement; prompt-only nudges were insufficient
 ```
