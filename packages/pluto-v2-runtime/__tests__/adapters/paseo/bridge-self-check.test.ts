@@ -62,6 +62,15 @@ describe('runBridgeSelfCheck', () => {
     expect(result).toMatchObject({ ok: false, reason: 'timeout' });
   });
 
+  it('reports other when spawnSync fails with an uncategorized error', async () => {
+    const result = await runBridgeSelfCheck({
+      wrapperPath: '/tmp/pluto-tool',
+      spawnSync: ((() => spawnResult({ error: new Error('spawnSync /tmp/pluto-tool EACCES') })) as unknown as SpawnSync),
+    });
+
+    expect(result).toMatchObject({ ok: false, reason: 'other' });
+  });
+
   it('reports invalid_response when stdout is not valid read-state JSON', async () => {
     const result = await runBridgeSelfCheck({
       wrapperPath: '/tmp/pluto-tool',

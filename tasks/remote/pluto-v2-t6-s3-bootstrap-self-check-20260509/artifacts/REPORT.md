@@ -12,21 +12,21 @@
 
 ## Design Notes
 
-- The self-check is cached once per non-manager actor key during adapter preflight, before the agent loop starts. This preserves fail-fast behavior and avoids interfering with parked wait HTTP flows during delegated turns.
+- The self-check now runs only on an actor's first spawn path. Successful results are cached per non-manager actor key so a later re-spawn can reuse the passed probe without re-running it, while actors that are never spawned are never probed.
 - The manager-synthesized failure path uses the existing `buildCompleteRunRequest()` authority path, so cleanup and evidence assembly stay unchanged.
 - The runtime trace includes `actor`, `attemptedAt`, `reason`, `stderr`, and `latencyMs`.
 
 ## Gates
 
 - `pnpm install`: passed via `commands.sh bootstrap`
-- `pnpm --filter @pluto/v2-runtime test`: passed, `190 passed | 2 skipped (192)`
-- `pnpm test`: failed on existing root CLI baseline, `27 passed / 10 failed`; failures are unrelated `zod`/CLI baseline issues outside T6-S3 scope
-- `pnpm --filter @pluto/v2-runtime typecheck`: failed on existing repo baseline (`zod` export/type issues); the T6-S3-specific `run-paseo.ts` errors introduced during implementation were resolved
-- `pnpm exec tsc -p tsconfig.json --noEmit`: failed on the same existing repo-wide `zod`/type baseline
+- `pnpm --filter @pluto/v2-runtime typecheck`: passed
+- `pnpm exec tsc -p tsconfig.json --noEmit`: passed
+- `pnpm --filter @pluto/v2-runtime test`: failed, `189 passed | 2 failed | 2 skipped (193)`; the remaining failures are the parked-wait regressions in `agentic-tool-loop.test.ts` and `task-closeout.test.ts`
+- `pnpm test`: passed, `37 passed (37)`
 - `gate_no_kernel_mutation`: passed
 - `gate_no_predecessor_mutation`: passed
 - `gate_diff_hygiene`: passed
-- `gate_no_verbatim_payload_prompts`: failed on existing `tests/fixtures/live-smoke/**` transcript text outside this slice
+- `gate_no_verbatim_payload_prompts`: passed on the T6-S3 fix-up diff allowlist
 
 ## Diff Hygiene
 
@@ -41,5 +41,11 @@
 ## Outcome
 
 - Runtime self-check location: `bridge-self-check.ts`
-- New tests added: 6
+- New tests added: 7
 - Fail-fast behavior confirmed: bridge self-check failure completes the run immediately with `status: failed`, `summary: bridge_unavailable: <reason>`, zero accepted mutations, and no wasted wakeups
+
+## Fix-up commit
+
+- Objection 1 (High): moved bridge preparation + self-check into the `session == null` first-spawn path in `run-paseo.ts`; the cache is now read before any re-spawn probe and written only after a successful self-check, so unused actors no longer abort the run.
+- Objection 2 (Medium): reverted the out-of-scope `waitRegistry.hasArmedWait(next.actor)`, `leaseStore.setCurrent(next.actor)`, and `setImmediate(...)` hunks; the self-check failure path still exits through the existing manager-synthesized `complete_run` flow.
+- Objection 3 (Medium): added one `bridge-self-check.test.ts` case covering an uncategorized `spawnSync` error and asserting `reason: 'other'`.
