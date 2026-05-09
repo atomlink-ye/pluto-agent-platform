@@ -5,8 +5,14 @@
     "outDir": "dist/src",
     "declaration": true,
     "declarationMap": true,
-    "rootDir": "src"
+    "rootDir": "src",
+    "types": ["node"],
+    "paths": {
+      "@pluto/v2-core": ["../pluto-v2-core/dist/src/index.d.ts"],
+      "@pluto/v2-core/*": ["../pluto-v2-core/dist/src/*"]
+    }
   },
+  "references": [{ "path": "../pluto-v2-core" }],
   "include": ["src/**/*.ts"],
   "exclude": ["dist", "node_modules", "__tests__"]
 }

@@ -2,7 +2,12 @@
   "extends": "./tsconfig.json",
   "compilerOptions": {
     "noEmit": true,
-    "rootDir": "."
+    "rootDir": "..",
+    "types": ["node", "vitest"],
+    "paths": {
+      "@pluto/v2-core": ["../pluto-v2-core/dist/src/index.d.ts"],
+      "@pluto/v2-core/*": ["../pluto-v2-core/dist/src/*"]
+    }
   },
   "include": ["__tests__/**/*.ts"],
   "exclude": ["dist", "node_modules"]
