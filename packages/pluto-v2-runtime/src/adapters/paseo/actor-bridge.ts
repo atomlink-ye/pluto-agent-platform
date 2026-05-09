@@ -11,9 +11,7 @@ export interface ActorBridgeMaterialization {
 
 export interface ActorBridgeDependencyPaths {
   readonly runtimePackageRoot: string;
-  readonly runtimeTsconfigPath: string;
-  readonly plutoToolSourcePath: string;
-  readonly tsxBinPath: string;
+  readonly plutoToolBinPath: string;
 }
 
 type FsModule = typeof import('node:fs/promises');
@@ -85,54 +83,27 @@ async function findRuntimePackageRoot(startDir: string, fs: FsModule): Promise<s
   }
 }
 
-async function assertPathExists(path: string, fs: FsModule): Promise<void> {
+async function assertCompiledPlutoToolExists(path: string, fs: FsModule): Promise<void> {
   try {
     await fs.stat(path);
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
-    throw new Error(`Required actor bridge dependency is missing at ${path}: ${detail}`);
+    throw new Error(
+      `Compiled pluto-tool bridge is missing at ${path}. Build the runtime CLI first with \`pnpm --filter @pluto/v2-runtime build\`. (${detail})`,
+    );
   }
-}
-
-async function ensureCoreSourceDependencyLinks(runtimePackageRoot: string, fs: FsModule): Promise<void> {
-  const corePackageRoot = join(dirname(runtimePackageRoot), 'pluto-v2-core');
-  const runtimeZodPath = join(runtimePackageRoot, 'node_modules', 'zod');
-  const coreNodeModulesPath = join(corePackageRoot, 'node_modules');
-  const coreZodPath = join(coreNodeModulesPath, 'zod');
-
-  await assertPathExists(runtimeZodPath, fs);
-  await fs.mkdir(coreNodeModulesPath, { recursive: true });
-
-  try {
-    await fs.lstat(coreZodPath);
-    return;
-  } catch (error) {
-    const code = typeof error === 'object' && error != null && 'code' in error ? error.code : null;
-    if (code !== 'ENOENT') {
-      throw error;
-    }
-  }
-
-  await fs.symlink(runtimeZodPath, coreZodPath, 'dir');
 }
 
 export async function resolveActorBridgeDependencyPaths(fs: FsModule = nodeFs): Promise<ActorBridgeDependencyPaths> {
   const moduleDir = dirname(fileURLToPath(import.meta.url));
   const runtimePackageRoot = await findRuntimePackageRoot(moduleDir, fs);
-  const repoRoot = dirname(dirname(runtimePackageRoot));
-  const runtimeTsconfigPath = join(runtimePackageRoot, 'tsconfig.json');
-  const plutoToolSourcePath = join(runtimePackageRoot, 'src', 'cli', 'pluto-tool.ts');
-  const tsxBinPath = join(repoRoot, 'node_modules', '.bin', 'tsx');
+  const plutoToolBinPath = join(runtimePackageRoot, 'dist', 'src', 'cli', 'pluto-tool.js');
 
-  await assertPathExists(runtimeTsconfigPath, fs);
-  await assertPathExists(plutoToolSourcePath, fs);
-  await assertPathExists(tsxBinPath, fs);
+  await assertCompiledPlutoToolExists(plutoToolBinPath, fs);
 
   return {
     runtimePackageRoot,
-    runtimeTsconfigPath,
-    plutoToolSourcePath,
-    tsxBinPath,
+    plutoToolBinPath,
   };
 }
 
@@ -142,8 +113,7 @@ export async function materializeActorBridge(input: {
   readonly apiUrl: string;
   readonly bearerToken: string;
   readonly actorKey: string;
-  readonly plutoToolSourcePath: string;
-  readonly tsxBinPath: string;
+  readonly plutoToolBinPath: string;
   readonly fs?: FsModule;
 }): Promise<ActorBridgeMaterialization> {
   const fs = input.fs ?? nodeFs;
@@ -153,21 +123,15 @@ export async function materializeActorBridge(input: {
   if (!isAbsolute(input.runBinPath)) {
     throw new Error(`runBinPath must be absolute: ${input.runBinPath}`);
   }
-  if (!isAbsolute(input.plutoToolSourcePath)) {
-    throw new Error(`plutoToolSourcePath must be absolute: ${input.plutoToolSourcePath}`);
-  }
-  if (!isAbsolute(input.tsxBinPath)) {
-    throw new Error(`tsxBinPath must be absolute: ${input.tsxBinPath}`);
+  if (!isAbsolute(input.plutoToolBinPath)) {
+    throw new Error(`plutoToolBinPath must be absolute: ${input.plutoToolBinPath}`);
   }
 
   const metadataDir = join(input.actorCwd, '.pluto');
   const handoffJsonPath = join(metadataDir, 'handoff.json');
   const wrapperPath = join(input.actorCwd, 'pluto-tool');
   const runBinDir = dirname(input.runBinPath);
-  const runtimePackageRoot = dirname(dirname(dirname(input.plutoToolSourcePath)));
-  const runtimeTsconfigPath = join(runtimePackageRoot, 'tsconfig.json');
-  await assertPathExists(runtimeTsconfigPath, fs);
-  await ensureCoreSourceDependencyLinks(runtimePackageRoot, fs);
+  await assertCompiledPlutoToolExists(input.plutoToolBinPath, fs);
   await fs.mkdir(metadataDir, { recursive: true });
   await fs.mkdir(runBinDir, { recursive: true });
   await fs.writeFile(handoffJsonPath, JSON.stringify({
@@ -182,7 +146,7 @@ export async function materializeActorBridge(input: {
     '#!/bin/bash',
     'set -euo pipefail',
     `export PATH=${shellQuote(`${nodeBinDir}:/usr/local/bin:/usr/bin:/bin`)}\${PATH:+:$PATH}`,
-    `exec ${shellQuote(input.tsxBinPath)} --tsconfig ${shellQuote(runtimeTsconfigPath)} ${shellQuote(input.plutoToolSourcePath)} "$@"`,
+    `exec node ${shellQuote(input.plutoToolBinPath)} "$@"`,
     '',
   ].join('\n');
   await fs.writeFile(input.runBinPath, runBinWrapper, 'utf8');

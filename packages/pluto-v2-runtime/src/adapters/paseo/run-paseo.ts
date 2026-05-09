@@ -615,8 +615,7 @@ async function prepareAgentInjection(args: {
     apiUrl: args.handoff.apiUrl,
     bearerToken: args.handoff.bearerToken,
     actorKey: args.handoff.actorKey,
-    plutoToolSourcePath: bridgePaths.plutoToolSourcePath,
-    tsxBinPath: bridgePaths.tsxBinPath,
+    plutoToolBinPath: bridgePaths.plutoToolBinPath,
   });
   return {
     cwd: actorDir,

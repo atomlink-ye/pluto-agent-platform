@@ -1,9 +1,15 @@
 {
   "name": "@pluto/v2-core",
   "type": "module",
-  "exports": "./index.js",
+  "exports": {
+    ".": {
+      "types": "./dist/src/index.d.ts",
+      "default": "./dist/src/index.js"
+    }
+  },
   "scripts": {
     "build": "tsc -b tsconfig.json",
-    "typecheck": "tsc -p tsconfig.json --noEmit"
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run"
   }
 }

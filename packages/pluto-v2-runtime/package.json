@@ -8,6 +8,7 @@
     "pluto-tool": "./dist/src/cli/pluto-tool.js"
   },
   "scripts": {
+    "prebuild": "pnpm --filter @pluto/v2-core build",
     "typecheck:src": "tsc -p tsconfig.src.json --noEmit",
     "typecheck:test": "tsc -p tsconfig.test.json --noEmit",
     "typecheck:diagnostics": "tsc -p tsconfig.src.json --extendedDiagnostics --noEmit",
