@@ -22,6 +22,15 @@ setup_repo() { cd "${WORKSPACE}"; git fetch --all --prune; git checkout main; gi
 setup_worktrees() { cd "${WORKSPACE}"; mkdir -p "${WORKTREE_ROOT}"; if ! git worktree list | grep -q "${INTEGRATION_WORKTREE}"; then git worktree add -b "${BRANCH}" "${INTEGRATION_WORKTREE}" main; fi }
 bootstrap() { cd "${INTEGRATION_WORKTREE}"; timed_run "${BUNDLE_DIR}/artifacts/gate-bootstrap.txt" env NODE_ENV=development pnpm install --force; }
 
+restore_zod_shim() {
+  cd "${INTEGRATION_WORKTREE}"
+  if [ ! -f packages/pluto-v2-core/node_modules/zod/package.json ]; then
+    mkdir -p packages/pluto-v2-core/node_modules
+    cp -RL packages/pluto-v2-runtime/node_modules/zod packages/pluto-v2-core/node_modules/zod
+  fi
+  ls packages/pluto-v2-core/node_modules/zod/package.json
+}
+
 gate_typecheck() {
   cd "${INTEGRATION_WORKTREE}"
   timed_run "${BUNDLE_DIR}/artifacts/gate-typecheck-runtime.txt" pnpm --filter @pluto/v2-runtime typecheck
@@ -114,6 +123,7 @@ case "${1:-}" in
   setup_repo) setup_repo ;;
   setup_worktrees) setup_worktrees ;;
   bootstrap) bootstrap ;;
+  restore_zod_shim) restore_zod_shim ;;
   gate_typecheck) gate_typecheck ;;
   gate_test) gate_test ;;
   gate_no_kernel_mutation) gate_no_kernel_mutation ;;
