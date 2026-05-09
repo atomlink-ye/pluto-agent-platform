@@ -14,6 +14,10 @@ import {
 
 type OutputFormat = 'json' | 'text';
 
+type TurnDisposition = 'waiting' | 'idle' | 'terminal';
+
+type NextWakeup = 'event' | 'none';
+
 type CommandName =
   | 'create-task'
   | 'change-task-state'
@@ -39,6 +43,8 @@ type ParsedCommand = {
   readonly method: 'GET' | 'POST';
   readonly path: string;
   readonly body?: unknown;
+  readonly noWait?: boolean;
+  readonly waitTimeoutMs?: number;
 };
 
 type ParsedCli = ParsedHelp | ParsedCommand;
@@ -47,6 +53,35 @@ export type PlutoToolRuntimeEnv = {
   readonly apiUrl: string;
   readonly token: string;
   readonly actor?: string;
+};
+
+type MutationResponse = Record<string, unknown> & {
+  readonly turnDisposition?: TurnDisposition;
+  readonly nextWakeup?: NextWakeup;
+};
+
+type WaitResponse =
+  | {
+      readonly outcome: 'event';
+      readonly latestEvent: unknown;
+      readonly delta: unknown;
+    }
+  | {
+      readonly outcome: 'timeout';
+    }
+  | {
+      readonly outcome: 'cancelled';
+      readonly reason: string;
+    };
+
+type AutoWaitTimeoutResult = {
+  readonly kind: 'wait_timeout';
+  readonly timeoutMs: number;
+};
+
+type AutoWaitResult = {
+  readonly mutation: MutationResponse;
+  readonly wait: WaitResponse | AutoWaitTimeoutResult;
 };
 
 type ParsedGlobalFlags = {
@@ -84,15 +119,17 @@ const GLOBAL_HELP = [
   '',
   'Flags:',
   '  --actor <key>       Explicit actor key (required for mutating commands)',
+  '  --no-wait           Skip the default post-mutation wait',
+  '  --wait-timeout-ms   Auto-wait timeout for mutating commands (default: 120000)',
   '  --format=json|text  Output format (default: json)',
   '  --help              Show help',
 ].join('\n');
 
 const HELP_BY_COMMAND: Record<CommandName, string> = {
-  'create-task': 'Usage: pluto-tool --actor <key> create-task --owner=<role|manager> --title=<text> [--depends-on=<id>...] [--format=json|text]',
-  'change-task-state': 'Usage: pluto-tool --actor <key> change-task-state --task-id=<id> --to=<state> [--format=json|text]',
-  'send-mailbox': 'Usage: pluto-tool --actor <key> send-mailbox --to=<role|manager> --kind=<kind> --body=<text|@path> [--format=json|text]',
-  'publish-artifact': 'Usage: pluto-tool --actor <key> publish-artifact --kind=<final|intermediate> --media-type=<mime> --byte-size=<n> [--body=<text|@path>] [--format=json|text]',
+  'create-task': 'Usage: pluto-tool --actor <key> create-task --owner=<role|manager> --title=<text> [--depends-on=<id>...] [--no-wait] [--wait-timeout-ms=<n>] [--format=json|text]',
+  'change-task-state': 'Usage: pluto-tool --actor <key> change-task-state --task-id=<id> --to=<state> [--no-wait] [--wait-timeout-ms=<n>] [--format=json|text]',
+  'send-mailbox': 'Usage: pluto-tool --actor <key> send-mailbox --to=<role|manager> --kind=<kind> --body=<text|@path> [--no-wait] [--wait-timeout-ms=<n>] [--format=json|text]',
+  'publish-artifact': 'Usage: pluto-tool --actor <key> publish-artifact --kind=<final|intermediate> --media-type=<mime> --byte-size=<n> [--body=<text|@path>] [--no-wait] [--wait-timeout-ms=<n>] [--format=json|text]',
   'complete-run': 'Usage: pluto-tool --actor <key> complete-run --status=<succeeded|failed|cancelled> --summary=<text> [--format=json|text]',
   'wait': 'Usage: pluto-tool --actor <key> wait [--timeout-sec=<0-1200>] [--format=json|text]',
   'read-state': 'Usage: pluto-tool [--actor <key>] read-state [--format=json|text]',
@@ -281,6 +318,14 @@ function parseFlagTokens(tokens: readonly string[]): {
       continue;
     }
 
+    if (key === 'no-wait') {
+      if (inlineValue !== undefined && inlineValue.length > 0) {
+        throw new Error('--no-wait does not take a value');
+      }
+      flags.set(key, ['true']);
+      continue;
+    }
+
     if (value == null || value.startsWith('--')) {
       throw new Error(`Missing value for --${key}`);
     }
@@ -315,6 +360,20 @@ function takeMany(flags: Map<string, string[]>, key: string): string[] {
   const values = flags.get(key) ?? [];
   flags.delete(key);
   return values;
+}
+
+function takeBoolean(flags: Map<string, string[]>, key: string): boolean {
+  const values = flags.get(key);
+  if (values == null || values.length === 0) {
+    return false;
+  }
+
+  flags.delete(key);
+  if (values.length !== 1 || values[0] !== 'true') {
+    throw new Error(`--${key} does not take a value`);
+  }
+
+  return true;
 }
 
 function assertKnownFlags(flags: Map<string, string[]>, command: CommandName): void {
@@ -358,6 +417,31 @@ function parseWaitTimeoutSec(value: string): number {
   }
 
   return parsed;
+}
+
+function parseWaitTimeoutMs(value: string, flagName: string): number {
+  return parsePositiveInteger(value, flagName);
+}
+
+function resolveAutoWaitTimeoutMs(command: ParsedCommand, env: NodeJS.ProcessEnv): number {
+  if (command.waitTimeoutMs != null) {
+    return command.waitTimeoutMs;
+  }
+
+  const raw = env.PLUTO_WAIT_TIMEOUT_MS;
+  if (raw == null || raw.trim().length === 0) {
+    return 120000;
+  }
+
+  return parseWaitTimeoutMs(raw, 'PLUTO_WAIT_TIMEOUT_MS');
+}
+
+function isMutatingCommand(command: ParsedCommand): boolean {
+  return command.name === 'create-task'
+    || command.name === 'change-task-state'
+    || command.name === 'send-mailbox'
+    || command.name === 'publish-artifact'
+    || command.name === 'complete-run';
 }
 
 export async function parseCliArgs(argv: readonly string[]): Promise<ParsedCli> {
@@ -406,6 +490,8 @@ export async function parseCliArgs(argv: readonly string[]): Promise<ParsedCli> 
       const owner = parseActorFlag(requireOne(flags, 'owner', commandToken), '--owner');
       const title = requireOne(flags, 'title', commandToken);
       const dependsOn = takeMany(flags, 'depends-on');
+      const noWait = takeBoolean(flags, 'no-wait');
+      const waitTimeoutMs = takeOne(flags, 'wait-timeout-ms');
       assertKnownFlags(flags, commandToken);
       return {
         kind: 'command',
@@ -415,6 +501,8 @@ export async function parseCliArgs(argv: readonly string[]): Promise<ParsedCli> 
         format,
         method: 'POST',
         path: '/tools/create-task',
+        noWait,
+        ...(waitTimeoutMs == null ? {} : { waitTimeoutMs: parseWaitTimeoutMs(waitTimeoutMs, '--wait-timeout-ms') }),
         body: {
           title,
           ownerActor: owner,
@@ -425,6 +513,8 @@ export async function parseCliArgs(argv: readonly string[]): Promise<ParsedCli> 
     case 'change-task-state': {
       const taskId = requireOne(flags, 'task-id', commandToken);
       const to = requireOne(flags, 'to', commandToken);
+      const noWait = takeBoolean(flags, 'no-wait');
+      const waitTimeoutMs = takeOne(flags, 'wait-timeout-ms');
       if (!(TASK_STATE_VALUES as readonly string[]).includes(to)) {
         throw new Error(`--to must be one of: ${TASK_STATE_VALUES.join(', ')}`);
       }
@@ -437,12 +527,16 @@ export async function parseCliArgs(argv: readonly string[]): Promise<ParsedCli> 
         format,
         method: 'POST',
         path: '/tools/change-task-state',
+        noWait,
+        ...(waitTimeoutMs == null ? {} : { waitTimeoutMs: parseWaitTimeoutMs(waitTimeoutMs, '--wait-timeout-ms') }),
         body: { taskId, to },
       };
     }
     case 'send-mailbox': {
       const toActor = parseActorFlag(requireOne(flags, 'to', commandToken), '--to');
       const kind = requireOne(flags, 'kind', commandToken);
+      const noWait = takeBoolean(flags, 'no-wait');
+      const waitTimeoutMs = takeOne(flags, 'wait-timeout-ms');
       if (!(MAILBOX_MESSAGE_KIND_VALUES as readonly string[]).includes(kind)) {
         throw new Error(`--kind must be one of: ${MAILBOX_MESSAGE_KIND_VALUES.join(', ')}`);
       }
@@ -456,11 +550,15 @@ export async function parseCliArgs(argv: readonly string[]): Promise<ParsedCli> 
         format,
         method: 'POST',
         path: '/tools/append-mailbox-message',
+        noWait,
+        ...(waitTimeoutMs == null ? {} : { waitTimeoutMs: parseWaitTimeoutMs(waitTimeoutMs, '--wait-timeout-ms') }),
         body: { toActor, kind, body },
       };
     }
     case 'publish-artifact': {
       const kind = requireOne(flags, 'kind', commandToken);
+      const noWait = takeBoolean(flags, 'no-wait');
+      const waitTimeoutMs = takeOne(flags, 'wait-timeout-ms');
       if (!(ARTIFACT_PUBLISHED_KIND_VALUES as readonly string[]).includes(kind)) {
         throw new Error(`--kind must be one of: ${ARTIFACT_PUBLISHED_KIND_VALUES.join(', ')}`);
       }
@@ -476,6 +574,8 @@ export async function parseCliArgs(argv: readonly string[]): Promise<ParsedCli> 
         format,
         method: 'POST',
         path: '/tools/publish-artifact',
+        noWait,
+        ...(waitTimeoutMs == null ? {} : { waitTimeoutMs: parseWaitTimeoutMs(waitTimeoutMs, '--wait-timeout-ms') }),
         body: {
           kind,
           mediaType,
@@ -563,7 +663,72 @@ type ApiResult = {
   readonly contentType: string;
 };
 
-async function callApi(env: PlutoToolRuntimeEnv, command: ParsedCommand): Promise<ApiResult> {
+async function autoWaitForMutation(args: {
+  env: PlutoToolRuntimeEnv;
+  actor: string;
+  mutation: MutationResponse;
+  timeoutMs: number;
+}): Promise<AutoWaitResult> {
+  const timeoutSec = Math.ceil(args.timeoutMs / 1000);
+  const waitController = new AbortController();
+  const waitPromise = callApi({
+    ...args.env,
+    actor: args.actor,
+  }, {
+    kind: 'command',
+    name: 'wait',
+    actor: args.actor,
+    requiresActor: true,
+    format: 'json',
+    method: 'POST',
+    path: '/tools/wait-for-event',
+    body: {
+      timeoutSec,
+    },
+  }, {
+    signal: waitController.signal,
+  });
+
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  const timeoutHandle = new Promise<ApiResult | AutoWaitTimeoutResult>((resolve) => {
+    timer = setTimeout(() => {
+      waitController.abort();
+      resolve({
+        kind: 'wait_timeout',
+        timeoutMs: args.timeoutMs,
+      });
+    }, args.timeoutMs);
+  });
+
+  try {
+    const settled = await Promise.race([waitPromise, timeoutHandle]);
+    if ('data' in settled) {
+      return {
+        mutation: args.mutation,
+        wait: settled.data as WaitResponse,
+      };
+    }
+
+    if (settled.kind === 'wait_timeout') {
+      return {
+        mutation: args.mutation,
+        wait: settled,
+      };
+    }
+
+    throw new Error('Unexpected auto-wait outcome');
+  } finally {
+    if (timer != null) {
+      clearTimeout(timer);
+    }
+  }
+}
+
+async function callApi(
+  env: PlutoToolRuntimeEnv,
+  command: ParsedCommand,
+  options?: { signal?: AbortSignal },
+): Promise<ApiResult> {
   const response = await fetch(`${env.apiUrl}${command.path}`, {
     method: command.method,
     headers: {
@@ -571,6 +736,7 @@ async function callApi(env: PlutoToolRuntimeEnv, command: ParsedCommand): Promis
       ...(env.actor == null ? {} : { 'Pluto-Run-Actor': env.actor }),
       ...(command.body === undefined ? {} : { 'content-type': 'application/json' }),
     },
+    ...(options?.signal == null ? {} : { signal: options.signal }),
     ...(command.body === undefined ? {} : { body: JSON.stringify(command.body) }),
   });
   const text = await response.text();
@@ -626,12 +792,29 @@ function withActorEnvelope(actor: string, data: unknown): unknown {
 }
 
 function shouldWrapJsonResult(command: ParsedCommand): boolean {
-  return command.name !== 'wait';
+  return command.name !== 'wait' && !isMutatingCommand(command);
 }
 
 function textSummary(command: ParsedCommand, result: unknown): string {
   if (typeof result === 'string') {
     return result;
+  }
+
+  if (isMutatingCommand(command) && result != null && typeof result === 'object' && 'mutation' in (result as Record<string, unknown>)) {
+    const merged = result as AutoWaitResult;
+    const mutationSummary = textSummary({ ...command, noWait: true }, merged.mutation);
+    const waitSummary = merged.wait != null && typeof merged.wait === 'object' && 'kind' in merged.wait
+      ? 'wait timed out'
+      : textSummary({
+          kind: 'command',
+          name: 'wait',
+          actor: command.actor,
+          requiresActor: true,
+          format: command.format,
+          method: 'POST',
+          path: '/tools/wait-for-event',
+        }, merged.wait);
+    return `${mutationSummary}; ${waitSummary}`;
   }
 
   if (command.name === 'read-state') {
@@ -694,19 +877,34 @@ export async function runCli(
       ...runtimeEnv,
       ...(actor == null ? {} : { actor }),
     }, parsed);
+    const maybeAutoWaitResult = actor != null
+      && isMutatingCommand(parsed)
+      && parsed.name !== 'complete-run'
+      && parsed.noWait !== true
+      && result.data != null
+      && typeof result.data === 'object'
+      && (result.data as MutationResponse).turnDisposition === 'waiting'
+        ? await autoWaitForMutation({
+            env: runtimeEnv,
+            actor,
+            mutation: result.data as MutationResponse,
+            timeoutMs: resolveAutoWaitTimeoutMs(parsed, env),
+          })
+        : null;
+    const output = maybeAutoWaitResult ?? result.data;
     if (parsed.format === 'text') {
-      io.stdout.write(`${textSummary(parsed, result.data)}\n`);
-      return isCancelledWaitResult(parsed, result.data) ? 1 : 0;
+      io.stdout.write(`${textSummary(parsed, output)}\n`);
+      return isCancelledWaitResult(parsed, output) ? 1 : 0;
     }
 
     io.stdout.write(`${JSON.stringify(
       actor == null || !shouldWrapJsonResult(parsed)
-        ? result.data
-        : withActorEnvelope(actor, result.data),
+        ? output
+        : withActorEnvelope(actor, output),
       null,
       2,
     )}\n`);
-    return isCancelledWaitResult(parsed, result.data) ? 1 : 0;
+    return isCancelledWaitResult(parsed, output) ? 1 : 0;
   } catch (error) {
     io.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
     return 1;

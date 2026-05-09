@@ -15,11 +15,14 @@ import {
   counterIdProvider,
   fixedClockProvider,
   initialState,
+  type RunEvent,
   type ActorRef,
 } from '@pluto/v2-core';
 
+import type { PromptView } from '../../src/adapters/paseo/prompt-view.js';
+import { makeWaitRegistry } from '../../src/api/wait-registry.js';
 import { startPlutoLocalApi } from '../../src/api/pluto-local-api.js';
-import { parseCliArgs } from '../../src/cli/pluto-tool.js';
+import { parseCliArgs, runCli as runCliInProcess } from '../../src/cli/pluto-tool.js';
 import { makeTurnLeaseStore } from '../../src/mcp/turn-lease.js';
 import { makePlutoToolHandlers } from '../../src/tools/pluto-tool-handlers.js';
 
@@ -133,6 +136,131 @@ async function runCli(args: readonly string[], env: NodeJS.ProcessEnv) {
   });
 }
 
+function actorKey(actor: ActorRef): string {
+  switch (actor.kind) {
+    case 'manager':
+      return 'manager';
+    case 'system':
+      return 'system';
+    case 'role':
+      return `role:${actor.role}`;
+  }
+}
+
+function promptViewFor(actor: ActorRef): PromptView {
+  return {
+    run: {
+      runId: 'run-1',
+      scenarioRef: 'scenario/pluto-tool-cli',
+      runProfileRef: 'unit-test',
+    },
+    userTask: actor.kind === 'role' && actor.role === 'lead' ? 'Ship it.' : null,
+    forActor: actor,
+    playbook: null,
+    budgets: {
+      turnIndex: 1,
+      maxTurns: 10,
+      parseFailuresThisTurn: 0,
+      maxParseFailuresPerTurn: 0,
+      kernelRejections: 0,
+      maxKernelRejections: 3,
+      noProgressTurns: 0,
+      maxNoProgressTurns: 3,
+    },
+    tasks: [],
+    mailbox: [],
+    artifacts: [],
+    activeDelegation: null,
+    lastRejection: null,
+  };
+}
+
+function createIoCapture() {
+  let stdout = '';
+  let stderr = '';
+  return {
+    io: {
+      stdout: {
+        write(chunk: string) {
+          stdout += chunk;
+          return true;
+        },
+      },
+      stderr: {
+        write(chunk: string) {
+          stderr += chunk;
+          return true;
+        },
+      },
+    },
+    read() {
+      return { stdout, stderr };
+    },
+  };
+}
+
+async function withWaitApi(
+  run: (context: {
+    url: string;
+    token: string;
+    handlers: ReturnType<typeof makePlutoToolHandlers>;
+    kernel: ReturnType<typeof createKernel>;
+    waitRegistry: ReturnType<typeof makeWaitRegistry>;
+  }) => Promise<void>,
+) {
+  const kernel = createKernel();
+  const handlers = makePlutoToolHandlers({
+    kernel,
+    runId: 'run-1',
+    schemaVersion: SCHEMA_VERSION,
+    clock: () => new Date(FIXED_ISO),
+    idProvider: sequentialRequestIds([
+      '00000000-0000-4000-8000-000000000101',
+      '00000000-0000-4000-8000-000000000102',
+      '00000000-0000-4000-8000-000000000103',
+      '00000000-0000-4000-8000-000000000104',
+    ]),
+    artifactSidecar: {
+      write: vi.fn(async (artifactId: string, _body: string | Uint8Array) => `/tmp/run-1/${artifactId}.txt`),
+      read: vi.fn(async (_artifactId: string) => ({ path: '/tmp/artifact.txt', body: 'artifact body' })),
+    },
+    transcriptSidecar: {
+      read: vi.fn(async (_actorKey: string) => 'transcript text'),
+    },
+    promptViewer: {
+      forActor: vi.fn((actor: ActorRef) => promptViewFor(actor)),
+    },
+  });
+  const token = 'cli-test-token';
+  const leaseStore = makeTurnLeaseStore({ kind: 'role', role: 'lead' });
+  const cursorByActorKey = new Map<string, number>();
+  const waitRegistry = makeWaitRegistry({
+    events: () => kernel.eventLog.read(0, kernel.eventLog.head + 1),
+    getPromptViewForActor: (actor) => promptViewFor(actor),
+  });
+  const api = await startPlutoLocalApi({
+    bearerToken: token,
+    registeredActorKeys: new Set(['manager', 'role:lead', 'role:planner', 'role:generator', 'role:evaluator', 'system']),
+    handlers,
+    leaseStore,
+    waitService: {
+      registry: waitRegistry,
+      cursorForActor(actor) {
+        return cursorByActorKey.get(actorKey(actor)) ?? kernel.eventLog.head;
+      },
+      onEventDelivered(actor, sequence) {
+        cursorByActorKey.set(actorKey(actor), sequence);
+      },
+    },
+  });
+
+  try {
+    await run({ url: api.url, token, handlers, kernel, waitRegistry });
+  } finally {
+    await api.shutdown();
+  }
+}
+
 describe('pluto-tool argv parsing', () => {
   it('parses each subcommand into the expected REST request', async () => {
     const tempDir = await mkdtemp(join(tmpdir(), 'pluto-tool-cli-'));
@@ -155,6 +283,7 @@ describe('pluto-tool argv parsing', () => {
           name: 'create-task',
           method: 'POST',
           path: '/tools/create-task',
+          noWait: false,
           body: {
             title: 'Draft',
             ownerActor: { kind: 'role', role: 'generator' },
@@ -167,7 +296,16 @@ describe('pluto-tool argv parsing', () => {
           kind: 'command',
           name: 'change-task-state',
           path: '/tools/change-task-state',
+          noWait: false,
           body: { taskId: 'task-1', to: 'completed' },
+        });
+
+      await expect(parseCliArgs(['create-task', '--owner=generator', '--title=Draft', '--no-wait', '--wait-timeout-ms=2500']))
+        .resolves.toMatchObject({
+          kind: 'command',
+          name: 'create-task',
+          noWait: true,
+          waitTimeoutMs: 2500,
         });
 
       await expect(parseCliArgs(['send-mailbox', '--to=lead', '--kind=completion', `--body=@${bodyPath}`]))
@@ -229,7 +367,7 @@ describe('pluto-tool subprocess', () => {
   it('returns API JSON responses from a real subprocess', async () => {
     await withApi(async ({ url, token }) => {
       const result = await runCli(
-        ['--actor', 'role:lead', 'create-task', '--owner=generator', '--title=Draft haiku v1'],
+        ['--actor', 'role:lead', 'create-task', '--owner=generator', '--title=Draft haiku v1', '--no-wait'],
         {
           PLUTO_RUN_API_URL: url,
           PLUTO_RUN_TOKEN: token,
@@ -239,10 +377,103 @@ describe('pluto-tool subprocess', () => {
       expect(result.exitCode).toBe(0);
       expect(result.stderr).toBe('');
       expect(JSON.parse(result.stdout)).toMatchObject({
-        actor: 'role:lead',
         accepted: true,
         taskId: expect.any(String),
+        turnDisposition: 'waiting',
+        nextWakeup: 'event',
       });
+    });
+  });
+
+  it('auto-waits after a successful mutating command by default and returns merged JSON', async () => {
+    await withWaitApi(async ({ url, token, handlers, kernel, waitRegistry }) => {
+      const capture = createIoCapture();
+      const releaseLead = new Promise<void>((resolve) => {
+        setTimeout(async () => {
+        await handlers.pluto_append_mailbox_message({ currentActor: { kind: 'role', role: 'generator' }, isLead: false }, {
+          toActor: { kind: 'role', role: 'lead' },
+          kind: 'completion',
+          body: 'done',
+        });
+        const event = kernel.eventLog.read(0, kernel.eventLog.head + 1).at(-1) as RunEvent;
+        waitRegistry.notify(event, (actor) => promptViewFor(actor));
+          resolve();
+        }, 20);
+      });
+
+      const exitCode = await runCliInProcess(
+        ['--actor', 'role:lead', 'create-task', '--owner=generator', '--title=Draft haiku v1'],
+        {
+          PLUTO_RUN_API_URL: url,
+          PLUTO_RUN_TOKEN: token,
+        },
+        capture.io as unknown as Pick<typeof process, 'stdout' | 'stderr'>,
+      );
+
+      await releaseLead;
+
+      const { stdout, stderr } = capture.read();
+      expect(exitCode).toBe(0);
+      expect(stderr).toBe('');
+      expect(JSON.parse(stdout)).toMatchObject({
+        mutation: {
+          accepted: true,
+          taskId: expect.any(String),
+          turnDisposition: 'waiting',
+          nextWakeup: 'event',
+        },
+        wait: {
+          outcome: expect.stringMatching(/event|cancelled/),
+        },
+      });
+    });
+  });
+
+  it('returns only the mutation payload when --no-wait is passed', async () => {
+    await withApi(async ({ url, token }) => {
+      const capture = createIoCapture();
+      const exitCode = await runCliInProcess(
+        ['--actor', 'role:lead', 'create-task', '--owner=generator', '--title=Draft haiku v1', '--no-wait'],
+        {
+          PLUTO_RUN_API_URL: url,
+          PLUTO_RUN_TOKEN: token,
+        },
+        capture.io as unknown as Pick<typeof process, 'stdout' | 'stderr'>,
+      );
+
+      const { stdout, stderr } = capture.read();
+      expect(exitCode).toBe(0);
+      expect(stderr).toBe('');
+      expect(JSON.parse(stdout)).toMatchObject({
+        accepted: true,
+        taskId: expect.any(String),
+        turnDisposition: 'waiting',
+        nextWakeup: 'event',
+      });
+      expect(stdout).not.toContain('"wait"');
+    });
+  });
+
+  it('does not auto-wait for complete-run and returns terminal disposition', async () => {
+    await withApi(async ({ url, token }) => {
+      const capture = createIoCapture();
+      const exitCode = await runCliInProcess(
+        ['--actor', 'role:lead', 'complete-run', '--status=succeeded', '--summary=done'],
+        {
+          PLUTO_RUN_API_URL: url,
+          PLUTO_RUN_TOKEN: token,
+        },
+        capture.io as unknown as Pick<typeof process, 'stdout' | 'stderr'>,
+      );
+
+      const { stdout, stderr } = capture.read();
+      expect(exitCode).toBe(0);
+      expect(stderr).toBe('');
+      expect(JSON.parse(stdout)).toMatchObject({
+        accepted: true,
+        turnDisposition: 'terminal',
+      });
+      expect(stdout).not.toContain('"wait"');
     });
   });
 

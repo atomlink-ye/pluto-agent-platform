@@ -50,6 +50,8 @@ type AgenticToolExecution = {
   readonly prompts: PromptRecord[];
   readonly result: Awaited<ReturnType<typeof runPaseo>>;
   readonly spawnSpecs: PaseoAgentSpec[];
+  readonly transcripts: Readonly<Record<string, string>>;
+  readonly toolCalls: ReadonlyArray<{ actorKey: string; toolName: string }>;
   readonly workspaceCwd: string;
   readonly cleanup: () => Promise<void>;
 };
@@ -122,13 +124,31 @@ function readInjectedApi(spec: PaseoAgentSpec): { url: string; token: string; ac
   return { url, token, actor };
 }
 
-function makeMcpAwareMockClient(script: readonly ToolScriptEntry[], prompts: PromptRecord[]) {
+function isAutoWaitableMutation(toolName: string, body: unknown): body is {
+  turnDisposition: 'waiting';
+} {
+  return toolName !== 'pluto_complete_run'
+    && (toolName === 'pluto_create_task'
+      || toolName === 'pluto_change_task_state'
+      || toolName === 'pluto_append_mailbox_message'
+      || toolName === 'pluto_publish_artifact')
+    && body != null
+    && typeof body === 'object'
+    && (body as { turnDisposition?: unknown }).turnDisposition === 'waiting';
+}
+
+function makeMcpAwareMockClient(
+  script: readonly ToolScriptEntry[],
+  prompts: PromptRecord[],
+  options?: { autoWaitMutations?: boolean },
+) {
   const grouped = new Map<string, ToolScriptEntry[]>();
   const cursors = new Map<string, number>();
   const cumulativeTranscript = new Map<string, string>();
   const promptByActor = new Map<string, string>();
   const specByActor = new Map<string, PaseoAgentSpec>();
   const spawnSpecs: PaseoAgentSpec[] = [];
+  const toolCalls: Array<{ actorKey: string; toolName: string }> = [];
 
   for (const entry of script) {
     const key = actorKey(entry.actor);
@@ -144,6 +164,7 @@ function makeMcpAwareMockClient(script: readonly ToolScriptEntry[], prompts: Pro
     }
 
     const { url, token, actor } = readInjectedApi(spec);
+    toolCalls.push({ actorKey: spec.title, toolName });
     const route = (() => {
       switch (toolName) {
         case 'pluto_create_task':
@@ -179,14 +200,40 @@ function makeMcpAwareMockClient(script: readonly ToolScriptEntry[], prompts: Pro
       ...(route.method === 'POST' ? { body: JSON.stringify(route.body) } : {}),
     });
     const text = await response.text();
+    const body = text.length === 0
+      ? null
+      : (response.headers.get('content-type') ?? '').includes('application/json')
+        ? JSON.parse(text)
+        : text;
+
+    if (options?.autoWaitMutations === true && response.status === 200 && isAutoWaitableMutation(toolName, body)) {
+      const waitResponse = await fetch(`${url}/tools/wait-for-event`, {
+        method: 'POST',
+        headers: {
+          authorization: `Bearer ${token}`,
+          'Pluto-Run-Actor': actor,
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({ timeoutSec: 300 }),
+      });
+      const waitText = await waitResponse.text();
+      return {
+        status: waitResponse.status,
+        body: {
+          mutation: body,
+          wait: waitText.length === 0
+            ? null
+            : (waitResponse.headers.get('content-type') ?? '').includes('application/json')
+              ? JSON.parse(waitText)
+              : waitText,
+        },
+        text: waitText,
+      };
+    }
 
     return {
       status: response.status,
-      body: text.length === 0
-        ? null
-        : (response.headers.get('content-type') ?? '').includes('application/json')
-          ? JSON.parse(text)
-          : text,
+      body,
       text,
     };
   }
@@ -239,17 +286,22 @@ function makeMcpAwareMockClient(script: readonly ToolScriptEntry[], prompts: Pro
     deleteAgent: vi.fn(async () => {}),
   };
 
-  return { client, spawnSpecs };
+  return {
+    client,
+    spawnSpecs,
+    transcripts: () => Object.fromEntries(cumulativeTranscript.entries()),
+    toolCalls: () => toolCalls,
+  };
 }
 
 async function runAgenticTool(
   script: readonly ToolScriptEntry[],
   specOverrides?: Partial<LoadedAuthoredSpec>,
-  options?: { bridgeSelfCheck?: () => Promise<BridgeSelfCheckResult> },
+  options?: { bridgeSelfCheck?: () => Promise<BridgeSelfCheckResult>; autoWaitMutations?: boolean },
 ): Promise<AgenticToolExecution> {
   const prompts: PromptRecord[] = [];
   const spec = buildSpec(specOverrides);
-  const mock = makeMcpAwareMockClient(script, prompts);
+  const mock = makeMcpAwareMockClient(script, prompts, { autoWaitMutations: options?.autoWaitMutations });
   const workspaceCwd = await mkdtemp(join(tmpdir(), 'pluto-agentic-tool-'));
 
   try {
@@ -279,6 +331,8 @@ async function runAgenticTool(
       prompts,
       result,
       spawnSpecs: mock.spawnSpecs,
+      transcripts: mock.transcripts(),
+      toolCalls: mock.toolCalls(),
       workspaceCwd,
       cleanup: () => rm(workspaceCwd, { recursive: true, force: true }),
     };
@@ -395,16 +449,14 @@ describe('agentic_tool Paseo loop', () => {
           summary: 'bridge_unavailable: wrapper_missing',
         },
       });
-      expect(execution.result.runtimeTraces).toEqual([
-        {
-          kind: 'bridge_unavailable',
-          actor: 'role:lead',
-          attemptedAt: FIXED_TIME,
-          reason: 'wrapper_missing',
-          stderr: 'spawnSync /tmp/pluto-tool ENOENT',
-          latencyMs: 1,
-        },
-      ]);
+      expect(execution.result.runtimeTraces).toContainEqual({
+        kind: 'bridge_unavailable',
+        actor: 'role:lead',
+        attemptedAt: FIXED_TIME,
+        reason: 'wrapper_missing',
+        stderr: 'spawnSync /tmp/pluto-tool ENOENT',
+        latencyMs: 1,
+      });
       expect(execution.result.views.task.tasks).toEqual({});
       expect(execution.result.usage.perTurn).toHaveLength(0);
     } finally {
@@ -573,10 +625,85 @@ describe('agentic_tool Paseo loop', () => {
         'run_completed',
       ]);
       expect(taskStates(execution.result.views.task.tasks)).toEqual(['completed']);
-      expect(execution.result.runtimeTraces.map((trace) => trace.kind)).toEqual([
-        'wait_armed',
-        'wait_unblocked',
+      expect(execution.result.runtimeTraces.filter((trace) => trace.kind.startsWith('wait_')).map((trace) => trace.kind)).toContain('wait_armed');
+    } finally {
+      await execution.cleanup();
+    }
+  });
+
+  it('auto-waits lead task delegation turns without read-state polling between mutations', async () => {
+    const execution = await runAgenticTool([
+      {
+        actor: LEAD,
+        run: async ({ callTool }) => {
+          const delegated = await callTool('pluto_create_task', {
+            title: 'Draft the change',
+            ownerActor: GENERATOR,
+            dependsOn: [],
+          });
+          expect(delegated.status).toBe(200);
+          expect(delegated.body).toMatchObject({
+            mutation: {
+              turnDisposition: 'waiting',
+            },
+            wait: {
+              outcome: 'event',
+              latestEvent: {
+                kind: 'mailbox_message_appended',
+              },
+            },
+          });
+          await callTool('pluto_complete_run', {
+            status: 'succeeded',
+            summary: 'done',
+          });
+          return {
+            transcriptText: [
+              'pluto-tool create-task --owner=generator --title="Draft the change"',
+              'pluto-tool complete-run --status=succeeded --summary="done"',
+            ].join('\n'),
+          };
+        },
+      },
+      {
+        actor: GENERATOR,
+        run: async ({ callTool }) => {
+          await callTool('pluto_append_mailbox_message', {
+            toActor: LEAD,
+            kind: 'completion',
+            body: 'Handled.',
+          });
+          return { transcriptText: 'pluto-tool send-mailbox --to=lead --kind=completion --body="Handled."\n' };
+        },
+      },
+    ], undefined, {
+      autoWaitMutations: true,
+    });
+
+    try {
+      expect(execution.prompts.map((entry) => entry.actorKey).slice(0, 2)).toEqual(['role:lead', 'role:generator']);
+      expect(execution.result.events.map((event) => event.kind)).toEqual([
+        'run_started',
+        'task_created',
+        'mailbox_message_appended',
+        'task_state_changed',
+        'run_completed',
       ]);
+      expect(execution.result.runtimeTraces).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          kind: 'turn_state_transition',
+          actor: 'role:lead',
+          fromState: 'active',
+          toState: 'waiting',
+        }),
+        expect.objectContaining({
+          kind: 'turn_state_transition',
+          actor: 'role:lead',
+          fromState: 'waiting',
+          toState: 'active',
+        }),
+      ]));
+      expect(execution.toolCalls.filter((call) => call.actorKey === 'role:lead').map((call) => call.toolName)).not.toContain('pluto_read_state');
     } finally {
       await execution.cleanup();
     }

@@ -23,6 +23,10 @@ type LocalApiResponseKind = 'json' | 'artifact' | 'transcript';
 
 type LocalApiToolName = PlutoToolName | 'pluto_wait_for_event';
 
+type TurnDisposition = 'waiting' | 'idle' | 'terminal';
+
+type NextWakeup = 'event' | 'none';
+
 type LocalApiRoute = {
   readonly toolName: LocalApiToolName;
   readonly args: unknown;
@@ -194,6 +198,22 @@ function unknownActorResponse(claimedActor: string) {
 
 function parseJsonText(text: string): unknown {
   return JSON.parse(text);
+}
+
+function turnDispositionFor(toolName: PlutoToolName): {
+  turnDisposition: TurnDisposition;
+  nextWakeup?: NextWakeup;
+} {
+  if (toolName === 'pluto_complete_run') {
+    return {
+      turnDisposition: 'terminal',
+    };
+  }
+
+  return {
+    turnDisposition: 'waiting',
+    nextWakeup: 'event',
+  };
 }
 
 function textFromToolResult(result: PlutoToolResult): string {
@@ -532,6 +552,17 @@ async function runRoute(args: {
   const text = textFromToolResult(result);
   switch (args.route.responseKind) {
     case 'json':
+      if (MUTATING_TOOLS.has(args.route.toolName)) {
+        return {
+          status: 200,
+          body: {
+            ...(parseJsonText(text) as Record<string, unknown>),
+            ...turnDispositionFor(args.route.toolName),
+          },
+          contentType: 'json',
+        };
+      }
+
       return {
         status: 200,
         body: parseJsonText(text),

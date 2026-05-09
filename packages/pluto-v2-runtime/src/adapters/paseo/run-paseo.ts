@@ -158,6 +158,8 @@ type ObservedMutatingToolCall = {
   deferredWaitNotifyEvent: RunEvent | null;
 };
 
+export type ActorTurnState = 'active' | 'waiting' | 'idle' | 'terminal';
+
 export type TaskCloseoutRejectedTraceEvent = {
   readonly kind: 'task_closeout_rejected';
   readonly actor: string;
@@ -174,7 +176,20 @@ export type BridgeUnavailableTraceEvent = {
   readonly latencyMs: number;
 };
 
-export type RuntimeTraceEvent = WaitTraceEvent | TaskCloseoutRejectedTraceEvent | BridgeUnavailableTraceEvent;
+export type TurnStateTransitionTraceEvent = {
+  readonly kind: 'turn_state_transition';
+  readonly actor: string;
+  readonly fromState: ActorTurnState | null;
+  readonly toState: ActorTurnState;
+  readonly reason: 'session_started' | 'prompt_sent' | 'mutation_accepted' | 'wait_delivered' | 'session_idle' | 'run_completed';
+  readonly timestamp: string;
+};
+
+export type RuntimeTraceEvent =
+  | WaitTraceEvent
+  | TaskCloseoutRejectedTraceEvent
+  | BridgeUnavailableTraceEvent
+  | TurnStateTransitionTraceEvent;
 
 class PaseoRuntimeError extends Error {
   readonly runtimeTraces: ReadonlyArray<RuntimeTraceEvent>;
@@ -627,6 +642,8 @@ async function runAgenticToolLoop(
   const agentInjectionByActorKey = new Map<string, AgentInjection>();
   const pendingMutationByActorKey = new Map<string, Deferred<ObservedMutatingToolCall>>();
   const pendingArmByActorKey = new Map<string, Deferred<void>>();
+  const turnStateByActorKey = new Map<string, ActorTurnState>();
+  const trackedActorByKey = new Map<string, ActorRef>();
   const usage = createUsageAccumulator();
   let initiatingActor: ActorRef | null = null;
   const leaseStore = makeTurnLeaseStore(leadActor);
@@ -664,6 +681,35 @@ async function runAgenticToolLoop(
     }
   };
 
+  const transitionTurnState = (
+    actor: ActorRef,
+    toState: ActorTurnState,
+    reason: TurnStateTransitionTraceEvent['reason'],
+  ) => {
+    const key = actorKey(actor);
+    const fromState = turnStateByActorKey.get(key) ?? null;
+    if (fromState === toState) {
+      return;
+    }
+
+    trackedActorByKey.set(key, actor);
+    turnStateByActorKey.set(key, toState);
+    pushRuntimeTrace({
+      kind: 'turn_state_transition',
+      actor: key,
+      fromState,
+      toState,
+      reason,
+      timestamp: options.clockProvider.nowIso(),
+    });
+  };
+
+  const transitionAllActorsTerminal = () => {
+    for (const actor of trackedActorByKey.values()) {
+      transitionTurnState(actor, 'terminal', 'run_completed');
+    }
+  };
+
   const waitRegistry = makeWaitRegistry({
     events: () => kernel.eventLog.read(0, kernel.eventLog.head + 1),
     getPromptViewForActor: promptViewForActor,
@@ -672,6 +718,13 @@ async function runAgenticToolLoop(
   const waitShutdownController = new AbortController();
 
   const rememberDeliveredEvent = (actor: ActorRef, sequence: number) => {
+    const key = actorKey(actor);
+    deliveryCursorByActorKey.set(key, sequence);
+    waitCursorByActorKey.set(key, sequence);
+    transitionTurnState(actor, 'active', 'wait_delivered');
+  };
+
+  const seedDeliveryCursor = (actor: ActorRef, sequence: number) => {
     const key = actorKey(actor);
     deliveryCursorByActorKey.set(key, sequence);
     waitCursorByActorKey.set(key, sequence);
@@ -769,6 +822,11 @@ async function runAgenticToolLoop(
 
       if (call.event != null && call.event.kind !== 'request_rejected') {
         rememberActorMutationEvent(call.actor, call.event.sequence);
+        transitionTurnState(
+          call.actor,
+          call.toolName === 'pluto_complete_run' && call.event.kind === 'run_completed' ? 'terminal' : 'waiting',
+          'mutation_accepted',
+        );
         if (plannedDelegatedTaskCloseout == null) {
           waitRegistry.notify(call.event, promptViewForActor);
         }
@@ -854,6 +912,7 @@ async function runAgenticToolLoop(
             options,
           ),
         );
+        transitionAllActorsTerminal();
         return {
           ...usage.finalize(),
           initiatingActor,
@@ -873,6 +932,7 @@ async function runAgenticToolLoop(
       if (budgetFailure != null) {
         initiatingActor = { kind: 'manager' };
         kernel.submit(buildCompleteRunRequest(kernel.state.runId, budgetFailure, options));
+        transitionAllActorsTerminal();
         break;
       }
 
@@ -928,12 +988,13 @@ async function runAgenticToolLoop(
           initialPrompt: prompt,
           ...(injection.cwd == null ? {} : { cwd: injection.cwd }),
         });
-        rememberDeliveredEvent(actor, latestEvent.sequence);
+        seedDeliveryCursor(actor, latestEvent.sequence);
         const sessionState: AgentSessionState = {
           agentId: spawnedSession.agentId,
           idlePromise: null,
         };
         agentSessionByActorKey.set(key, sessionState);
+        transitionTurnState(actor, 'active', 'session_started');
         startIdleWatcher(key, sessionState);
         session = sessionState;
       } else {
@@ -954,8 +1015,9 @@ async function runAgenticToolLoop(
               currentPromptView: promptView,
             }),
           });
+          transitionTurnState(actor, 'active', 'prompt_sent');
           await options.client.sendPrompt(session.agentId, prompt);
-          rememberDeliveredEvent(actor, latestEvent.sequence);
+          seedDeliveryCursor(actor, latestEvent.sequence);
           startIdleWatcher(key, session);
         }
       }
@@ -969,6 +1031,7 @@ async function runAgenticToolLoop(
       let waitExitCode = 0;
       let waitFailure: string | null = null;
       let observed: ObservedMutatingToolCall | null = null;
+      let sessionReturnedIdle = false;
       const turnOutcome = await Promise.race([
         mutationDeferred.promise.then((call) => ({ kind: 'mutation' as const, call })),
         idlePromise.then((idle) => ({ kind: 'idle' as const, idle })),
@@ -976,6 +1039,7 @@ async function runAgenticToolLoop(
       pendingMutationByActorKey.delete(key);
 
       if (turnOutcome.kind === 'idle') {
+        sessionReturnedIdle = true;
         waitExitCode = turnOutcome.idle.exitCode;
         waitFailure = turnOutcome.idle.failure;
       } else {
@@ -985,6 +1049,7 @@ async function runAgenticToolLoop(
           armDeferred.promise.then(() => ({ kind: 'armed' as const })),
         ]);
         if (parkedOrIdle.kind === 'idle') {
+          sessionReturnedIdle = true;
           waitExitCode = parkedOrIdle.idle.exitCode;
           waitFailure = parkedOrIdle.idle.failure;
         }
@@ -999,6 +1064,10 @@ async function runAgenticToolLoop(
         waitExitCode,
         ...snapshot.usageEstimate,
       });
+
+      if (sessionReturnedIdle && turnStateByActorKey.get(key) !== 'terminal') {
+        transitionTurnState(actor, 'idle', 'session_idle');
+      }
 
       if (waitFailure != null || waitExitCode !== 0) {
         const errorMessage = waitFailure ?? `paseo wait exited with code ${waitExitCode}`;
@@ -1156,6 +1225,7 @@ async function runAgenticToolLoop(
 
       if (observed.toolName === 'pluto_complete_run' && observed.event.kind === 'run_completed') {
         initiatingActor = observed.actor;
+        transitionAllActorsTerminal();
         break;
       }
       state = {
@@ -1243,7 +1313,7 @@ export async function runPaseo<S>(
     const views = replayAll(events);
     const evidencePacket = assembleEvidencePacket(views, events, kernel.state.runId, {
       initiatingActor: usage.initiatingActor,
-      runtimeTraces: usage.runtimeTraces,
+      runtimeTraces: usage.runtimeTraces.filter((trace) => trace.kind !== 'turn_state_transition'),
     });
 
     return {

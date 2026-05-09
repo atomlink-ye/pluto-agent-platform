@@ -11,6 +11,8 @@ const ACCEPTED_MUTATION_EVENT_KINDS = new Set([
   'run_completed',
 ]);
 const TERMINAL_TASK_STATES = new Set(['completed', 'cancelled', 'failed']);
+const MUTATION_COMMAND_PATTERN = /\b(create-task|change-task-state|send-mailbox|publish-artifact|complete-run)\b/;
+const READ_STATE_COMMAND_PATTERN = /\bread-state\b/;
 
 export type SmokeAcceptanceArtifacts = {
   events: ReadonlyArray<RunEvent>;
@@ -33,6 +35,26 @@ function parseJsonLines<T>(text: string): T[] {
 
 function isRoleActor(actor: unknown): actor is { kind: 'role'; role: string } {
   return typeof actor === 'object' && actor != null && 'kind' in actor && actor.kind === 'role' && 'role' in actor;
+}
+
+function actorKeyOf(actor: unknown): string | null {
+  if (typeof actor !== 'object' || actor == null || !('kind' in actor)) {
+    return null;
+  }
+
+  if (actor.kind === 'manager') {
+    return 'manager';
+  }
+
+  if (actor.kind === 'system') {
+    return 'system';
+  }
+
+  if (actor.kind === 'role' && 'role' in actor && typeof actor.role === 'string') {
+    return `role:${actor.role}`;
+  }
+
+  return null;
 }
 
 function acceptedTerminalRunEvent(events: ReadonlyArray<RunEvent>): Extract<RunEvent, { kind: 'run_completed' }> | null {
@@ -66,6 +88,70 @@ function delegatedTaskStates(events: ReadonlyArray<RunEvent>): Map<string, strin
   }
 
   return states;
+}
+
+function acceptedMutationEventsByActor(events: ReadonlyArray<RunEvent>): Map<string, RunEvent[]> {
+  const byActor = new Map<string, RunEvent[]>();
+
+  for (const event of events) {
+    if (event.outcome !== 'accepted' || !ACCEPTED_MUTATION_EVENT_KINDS.has(event.kind)) {
+      continue;
+    }
+
+    const key = actorKeyOf(event.actor);
+    if (key == null) {
+      continue;
+    }
+
+    const bucket = byActor.get(key) ?? [];
+    bucket.push(event);
+    byActor.set(key, bucket);
+  }
+
+  return byActor;
+}
+
+function pollingFailuresByActor(input: {
+  events: ReadonlyArray<RunEvent>;
+  transcripts: Readonly<Record<string, string>>;
+}): string[] {
+  const failures: string[] = [];
+  const mutationsByActor = acceptedMutationEventsByActor(input.events);
+
+  for (const [actor, transcript] of Object.entries(input.transcripts)) {
+    const mutationEvents = mutationsByActor.get(actor) ?? [];
+    let mutationIndex = -1;
+    let readStateCallsSinceMutation = 0;
+
+    for (const rawLine of transcript.split('\n')) {
+      const line = rawLine.trim();
+      if (line.length === 0) {
+        continue;
+      }
+
+      if (READ_STATE_COMMAND_PATTERN.test(line)) {
+        if (mutationIndex >= 0) {
+          readStateCallsSinceMutation += 1;
+        }
+        continue;
+      }
+
+      if (!MUTATION_COMMAND_PATTERN.test(line)) {
+        continue;
+      }
+
+      if (mutationIndex >= 0 && readStateCallsSinceMutation > 0) {
+        failures.push(
+          `polling_detected: actor=${actor} after_mutation=${mutationEvents[mutationIndex]?.eventId ?? `mutation-${mutationIndex + 1}`} read_state_calls=${readStateCallsSinceMutation}`,
+        );
+      }
+
+      mutationIndex += 1;
+      readStateCallsSinceMutation = 0;
+    }
+  }
+
+  return failures;
 }
 
 export function checkSmokeAcceptance(input: SmokeAcceptanceArtifacts & { expectFailure: boolean }): SmokeAcceptanceResult {
@@ -130,6 +216,8 @@ export function checkSmokeAcceptance(input: SmokeAcceptanceArtifacts & { expectF
   if (nonTerminalDelegatedTasks.length > 0) {
     failures.push(`delegated task did not reach terminal state: ${nonTerminalDelegatedTasks.join(', ')}`);
   }
+
+  failures.push(...pollingFailuresByActor(input));
 
   return { ok: failures.length === 0, failures };
 }

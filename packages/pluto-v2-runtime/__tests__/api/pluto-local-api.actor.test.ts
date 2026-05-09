@@ -137,7 +137,12 @@ describe('pluto local api actor header enforcement', () => {
     try {
       const response = await requestApi({ url: api.url, actor: 'role:lead' });
       expect(response.status).toBe(200);
-      expect(response.body).toMatchObject({ accepted: true, taskId: expect.any(String) });
+      expect(response.body).toMatchObject({
+        accepted: true,
+        taskId: expect.any(String),
+        turnDisposition: 'waiting',
+        nextWakeup: 'event',
+      });
     } finally {
       await api.shutdown();
     }

@@ -187,6 +187,8 @@ describe('startPlutoLocalApi', () => {
         eventId: uuid('1'),
         sequence: 0,
         taskId: uuid('2'),
+        turnDisposition: 'waiting',
+        nextWakeup: 'event',
       });
       const taskId = (createTask.body as { taskId: string }).taskId;
 
@@ -220,7 +222,7 @@ describe('startPlutoLocalApi', () => {
         },
       });
       expect(changeTaskState.status).toBe(200);
-      expect(changeTaskState.body).toMatchObject({ accepted: true, sequence: 1 });
+      expect(changeTaskState.body).toMatchObject({ accepted: true, sequence: 1, turnDisposition: 'waiting', nextWakeup: 'event' });
 
       leaseStore.setCurrent(leadActor());
       const sendMailbox = await requestApi({
@@ -235,7 +237,7 @@ describe('startPlutoLocalApi', () => {
         },
       });
       expect(sendMailbox.status).toBe(200);
-      expect(sendMailbox.body).toMatchObject({ accepted: true, sequence: 2 });
+      expect(sendMailbox.body).toMatchObject({ accepted: true, sequence: 2, turnDisposition: 'waiting', nextWakeup: 'event' });
 
       leaseStore.setCurrent(leadActor());
       const publishArtifact = await requestApi({
@@ -256,6 +258,8 @@ describe('startPlutoLocalApi', () => {
         sequence: 3,
         artifactId: expect.any(String),
         path: expect.stringContaining('.txt'),
+        turnDisposition: 'waiting',
+        nextWakeup: 'event',
       });
       const artifactId = (publishArtifact.body as { artifactId: string }).artifactId;
 
@@ -299,7 +303,7 @@ describe('startPlutoLocalApi', () => {
         },
       });
       expect(completeRun.status).toBe(200);
-      expect(completeRun.body).toMatchObject({ accepted: true, sequence: 4 });
+      expect(completeRun.body).toMatchObject({ accepted: true, sequence: 4, turnDisposition: 'terminal' });
       expect(kernel.eventLog.read().map((event) => event.kind)).toEqual([
         'task_created',
         'task_state_changed',
