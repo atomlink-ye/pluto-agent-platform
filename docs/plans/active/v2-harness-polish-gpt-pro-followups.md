@@ -121,6 +121,11 @@ Files:
     closeouts, mailbox by role, evidence list, final
     reconciliation summary, audit result if present.
 - Root script: `pluto:runs` → `tsx packages/pluto-v2-runtime/src/cli/runs.ts`.
+- Implementation note (2026-05-09): current runtime bundles expose
+  `projections/tasks.json`, `projections/mailbox.jsonl`, and
+  `projections/artifacts.json` as the canonical on-disk views;
+  `replay` checks `tasks.json`, while `explain` reads those views plus
+  optional `evidence/final-reconciliation.json`.
 
 ### T12-S4b — Audit CLI
 

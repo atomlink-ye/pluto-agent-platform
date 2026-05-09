@@ -16,6 +16,7 @@
     "docker:down": "docker compose -f docker/compose.yml down -v",
     "docker:up": "docker compose -f docker/compose.yml up -d",
     "pluto:run": "pnpm build:runtime-cli && tsx src/cli/run.ts",
+    "pluto:runs": "tsx packages/pluto-v2-runtime/src/cli/runs.ts",
     "smoke:live": "pnpm build:runtime-cli && pnpm --filter @pluto/v2-runtime exec tsx scripts/smoke-live.ts",
     "spec:hygiene": "node scripts/spec-hygiene.mjs",
     "test": "vitest run",

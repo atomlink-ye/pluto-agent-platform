@@ -3,6 +3,7 @@
 Pluto `main` is v2-only after S7.
 
 - Supported CLI entrypoint: `pnpm pluto:run --spec <path>`
+- Run inspection surface: `pnpm pluto:runs replay <runId>` and `pnpm pluto:runs explain <runId>`
 - Active runtime surface: `packages/pluto-v2-core/`, `packages/pluto-v2-runtime/`, and the root CLI bridge in `src/cli/`
 - Archived v1.6 harness: `origin/legacy-v1.6-harness-prototype`
 
@@ -34,6 +35,11 @@ orchestration:
 - `evidencePacketPath`
 - `transcriptPaths`
 - `exitCode`
+
+`pluto:runs` inspects completed runs:
+
+- `pnpm pluto:runs replay <runId> [--run-dir=<path>]` replays `events.jsonl` and checks the task projection for drift.
+- `pnpm pluto:runs explain <runId> [--run-dir=<path>] [--format=json]` prints a readable run narrative or emits structured JSON.
 
 Legacy selectors and v1.6 runtime flags are no longer part of active usage on `main`.
 
@@ -74,6 +80,7 @@ Root validation now centers on:
 
 ```bash
 pnpm smoke:live --spec=packages/pluto-v2-runtime/test-fixtures/scenarios/hello-team-agentic-tool-mock/scenario.yaml
+pnpm pluto:runs explain run-hello-team-agentic-tool-mock --run-dir=.tmp/live-quickstart/.pluto/runs/run-hello-team-agentic-tool-mock
 ```
 
 The live smoke path uses the `agentic_tool` lane and the in-process Pluto MCP server. See `docs/harness.md` and `docs/testing-and-evals.md` for the retained control surface.

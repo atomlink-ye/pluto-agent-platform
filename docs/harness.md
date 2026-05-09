@@ -14,9 +14,11 @@
 
 ```bash
 pnpm pluto:run --spec <path>
+pnpm pluto:runs replay <runId> [--run-dir=<path>]
+pnpm pluto:runs explain <runId> [--run-dir=<path>] [--format=json]
 ```
 
-This is the only supported mainline invocation.
+`pluto:run` remains the execution entrypoint. `pluto:runs` is the retained post-run inspection surface.
 
 ## Runtime Modes
 
@@ -96,9 +98,14 @@ CLI-launched Paseo actors now default to `orchestrator` mode. Set `PASEO_MODE=bu
 ## Evidence Surface
 
 - `events.jsonl`
+- `projections/tasks.json`
+- `projections/mailbox.jsonl`
+- `projections/artifacts.json`
 - `evidence-packet.json`
 - `usage-summary.json`
 - `final-report.md`
+- `artifacts/*.txt`
+- `evidence/final-reconciliation.json` *(optional; populated by the final-reconciliation audit lane)*
 - `paseo-transcripts/*.txt`
 - `authored-spec.yaml`, `playbook.md`, `playbook.sha256` for `agentic_tool` smoke captures
 - retained live-smoke fixtures under `tests/fixtures/live-smoke/`
