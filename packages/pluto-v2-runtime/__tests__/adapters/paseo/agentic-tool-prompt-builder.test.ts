@@ -16,6 +16,7 @@ const EXACT_MATCH_PHRASE = ['must', 'match', 'exactly'].join(' ');
 const PAYLOAD_MATCH_PHRASE = ['payload', 'must', 'match', 'exactly'].join(' ');
 const CRAFT_FIDELITY_HEADING = '## Craft fidelity (lead-only)';
 const RUN_ID = '44444444-4444-4444-8444-444444444444';
+const RUN_BIN_PATH = '/tmp/pluto-run/bin/pluto-tool';
 const WRAPPER_PATH = '/tmp/pluto-run/agents/role:lead/pluto-tool';
 
 const BASE_PROMPT_VIEW: PromptView = {
@@ -98,6 +99,7 @@ function buildPrompt(actor: ActorRef): string {
     playbook: PLAYBOOK,
     userTask: BASE_PROMPT_VIEW.userTask,
     toolNames: PLUTO_TOOL_NAMES,
+    runBinPath: RUN_BIN_PATH,
     wrapperPath: WRAPPER_PATH,
   });
 }
@@ -237,11 +239,13 @@ describe('buildAgenticToolPrompt', () => {
     expect(prompt).toContain('pluto_complete_run');
     expect(prompt).toContain('pluto_read_transcript');
     expect(prompt).toContain('## How to call Pluto tools');
-    expect(prompt).toContain(`Invoke the Pluto tool by running \`${WRAPPER_PATH}\` from your bash shell.`);
-    expect(prompt).toContain(`${WRAPPER_PATH} create-task --owner=generator --title="Draft haiku v1"`);
-    expect(prompt).toContain(`${WRAPPER_PATH} send-mailbox --to=lead --kind=completion --body="Draft attached: ..."`);
-    expect(prompt).toContain(`${WRAPPER_PATH} wait --timeout-sec=300`);
-    expect(prompt).toContain(`${WRAPPER_PATH} read-transcript --actor-key=role:generator`);
+    expect(prompt).toContain(`Invoke the Pluto tool by running \`${RUN_BIN_PATH}\` from your bash shell.`);
+    expect(prompt).toContain('Always pass `--actor role:lead` explicitly.');
+    expect(prompt).toContain(`The per-actor wrapper \`${WRAPPER_PATH}\` is a backward-compat shortcut that forwards to the same run-level binary.`);
+    expect(prompt).toContain(`${RUN_BIN_PATH} --actor role:lead create-task --owner=generator --title="Draft haiku v1"`);
+    expect(prompt).toContain(`${RUN_BIN_PATH} --actor role:lead send-mailbox --to=lead --kind=completion --body="Draft attached: ..."`);
+    expect(prompt).toContain(`${RUN_BIN_PATH} --actor role:lead wait --timeout-sec=300`);
+    expect(prompt).toContain(`${RUN_BIN_PATH} --actor role:lead read-transcript --actor-key=role:generator`);
     expect(prompt).toContain('End your turn with EXACTLY ONE mutating Pluto tool call.');
     expect(prompt).toContain(`After that mutating call, prefer ${WRAPPER_PATH} wait`);
     expect(prompt).not.toContain('available in your shell');
@@ -250,5 +254,15 @@ describe('buildAgenticToolPrompt', () => {
     expect(prompt).not.toContain('Bearer auth is preconfigured');
     expect(prompt).not.toContain('token-123');
     expect(prompt).not.toContain('http://127.0.0.1');
+  });
+
+  it('anchors each bootstrap prompt to the shared run binary with the actor-specific --actor value', () => {
+    const leadPrompt = buildPrompt(LEAD);
+    const generatorPrompt = buildPrompt(GENERATOR);
+
+    expect(leadPrompt).toContain(RUN_BIN_PATH);
+    expect(leadPrompt).toContain('--actor role:lead');
+    expect(generatorPrompt).toContain(RUN_BIN_PATH);
+    expect(generatorPrompt).toContain('--actor role:generator');
   });
 });

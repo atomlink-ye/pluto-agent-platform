@@ -33,6 +33,7 @@ export interface PlutoLocalApiConfig {
   bindHost?: '127.0.0.1';
   port?: number;
   bearerToken: string;
+  registeredActorKeys?: ReadonlySet<string>;
   handlers: PlutoToolHandlers;
   leaseStore: TurnLeaseStore;
   waitService?: {
@@ -88,6 +89,19 @@ function writeText(response: ServerResponse, statusCode: number, body: string): 
 
 function isLeadActor(actor: ActorRef): boolean {
   return actor.kind === 'role' && actor.role === 'lead';
+}
+
+function actorKey(actor: ActorRef): string {
+  switch (actor.kind) {
+    case 'manager':
+      return 'manager';
+    case 'system':
+      return 'system';
+    case 'role':
+      return `role:${actor.role}`;
+    default:
+      throw new Error(`Unsupported actor kind: ${(actor as { kind: string }).kind}`);
+  }
 }
 
 function actorFromShorthand(value: string): ActorRef | null {
@@ -160,6 +174,21 @@ function parseActorHeader(rawHeader: string | string[] | undefined):
   return {
     ok: true,
     actor: actor.data,
+  };
+}
+
+function routeRequiresActor(route: LocalApiRoute): boolean {
+  return route.toolName === 'pluto_read_state'
+    || route.toolName === 'pluto_wait_for_event'
+    || MUTATING_TOOLS.has(route.toolName);
+}
+
+function unknownActorResponse(claimedActor: string) {
+  return {
+    error: {
+      code: 'unknown_actor',
+      detail: `actor ${claimedActor} not registered for this run`,
+    },
   };
 }
 
@@ -402,14 +431,8 @@ async function runRoute(args: {
         onDisconnect();
       }
     }, 25);
-    const onRequestClose = () => {
-      if (args.request.destroyed) {
-        onDisconnect();
-      }
-    };
 
     args.request.once('aborted', onDisconnect);
-    args.request.once('close', onRequestClose);
     args.response.once('close', onDisconnect);
     socket?.once('close', onDisconnect);
 
@@ -460,7 +483,6 @@ async function runRoute(args: {
     } finally {
       clearInterval(disconnectPoll);
       args.request.off('aborted', onDisconnect);
-      args.request.off('close', onRequestClose);
       args.response.off('close', onDisconnect);
       socket?.off('close', onDisconnect);
     }
@@ -560,17 +582,6 @@ export async function startPlutoLocalApi(
       return;
     }
 
-    const parsedActor = parseActorHeader(request.headers[ACTOR_HEADER]);
-    if (!parsedActor.ok) {
-      writeJson(response, 403, {
-        error: {
-          code: 'PLUTO_ACTOR_REQUIRED',
-          message: parsedActor.message,
-        },
-      });
-      return;
-    }
-
     let routeBody: unknown;
     try {
       routeBody = await readRouteBody(request);
@@ -596,15 +607,54 @@ export async function startPlutoLocalApi(
       return;
     }
 
+    const parsedActor = parseActorHeader(request.headers[ACTOR_HEADER]);
+    const requiresActor = routeRequiresActor(route);
+    if (!parsedActor.ok) {
+      if (requiresActor && request.headers[ACTOR_HEADER] == null) {
+        writeJson(response, 400, {
+          error: {
+            code: 'missing_actor_header',
+            detail: parsedActor.message,
+          },
+        });
+        return;
+      }
+      if (requiresActor) {
+        writeJson(response, 400, {
+          error: {
+            code: 'invalid_actor_header',
+            detail: parsedActor.message,
+          },
+        });
+        return;
+      }
+    }
+
+    if (parsedActor.ok && config.registeredActorKeys != null && !config.registeredActorKeys.has(actorKey(parsedActor.actor))) {
+      writeJson(response, 403, unknownActorResponse(actorKey(parsedActor.actor)));
+      return;
+    }
+
+    if (requiresActor && !parsedActor.ok) {
+      writeJson(response, 400, {
+        error: {
+          code: 'missing_actor_header',
+          detail: `${ACTOR_HEADER} header is required.`,
+        },
+      });
+      return;
+    }
+
     try {
+        const sessionActor = parsedActor.ok ? parsedActor.actor : ({ kind: 'system' } satisfies ActorRef);
         const result = await runRoute({
           config,
           route,
           request,
           response,
           session: {
-            currentActor: parsedActor.actor,
-            isLead: isLeadActor(parsedActor.actor),
+            currentActor: sessionActor,
+            isLead: isLeadActor(sessionActor),
           },
         });
         if (response.writableEnded || response.destroyed) {

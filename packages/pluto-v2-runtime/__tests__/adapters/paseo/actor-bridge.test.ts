@@ -129,14 +129,20 @@ async function startPromptViewServer(promptView: PromptView, expected: {
   };
 }
 
+function runBinPathFor(rootDir: string): string {
+  return join(rootDir, '.pluto', 'runs', 'run-1', 'bin', 'pluto-tool');
+}
+
 describe('actor bridge materialization', () => {
   it('writes a handoff file with the live run connection details', async () => {
     const tempDir = await mkdtemp(join(tmpdir(), 'pluto-v2-actor-bridge-'));
     const paths = await resolveActorBridgeDependencyPaths();
+    const actorDir = join(tempDir, 'lead');
 
     try {
       const bridge = await materializeActorBridge({
-        actorCwd: tempDir,
+        actorCwd: actorDir,
+        runBinPath: runBinPathFor(tempDir),
         apiUrl: 'http://127.0.0.1:9876',
         bearerToken: 'bridge-token',
         actorKey: 'role:lead',
@@ -158,10 +164,12 @@ describe('actor bridge materialization', () => {
   it('marks the wrapper as executable', async () => {
     const tempDir = await mkdtemp(join(tmpdir(), 'pluto-v2-actor-bridge-'));
     const paths = await resolveActorBridgeDependencyPaths();
+    const actorDir = join(tempDir, 'lead');
 
     try {
       const bridge = await materializeActorBridge({
-        actorCwd: tempDir,
+        actorCwd: actorDir,
+        runBinPath: runBinPathFor(tempDir),
         apiUrl: 'http://127.0.0.1:9876',
         bearerToken: 'bridge-token',
         actorKey: 'role:lead',
@@ -171,6 +179,9 @@ describe('actor bridge materialization', () => {
 
       const wrapperStat = await stat(bridge.wrapperPath);
       expect(wrapperStat.mode & 0o100).toBe(0o100);
+
+      const runBinStat = await stat(bridge.runBinPath);
+      expect(runBinStat.mode & 0o100).toBe(0o100);
     } finally {
       await rm(tempDir, { recursive: true, force: true });
     }
@@ -180,6 +191,7 @@ describe('actor bridge materialization', () => {
     const tempDir = await mkdtemp(join(tmpdir(), 'pluto-v2-actor-bridge-'));
     const paths = await resolveActorBridgeDependencyPaths();
     const token = 'actor-bridge-token';
+    const actorDir = join(tempDir, 'lead');
     const server = await startPromptViewServer(promptViewForLead(), {
       token,
       actor: 'role:lead',
@@ -187,7 +199,8 @@ describe('actor bridge materialization', () => {
 
     try {
       const bridge = await materializeActorBridge({
-        actorCwd: tempDir,
+        actorCwd: actorDir,
+        runBinPath: runBinPathFor(tempDir),
         apiUrl: server.url,
         bearerToken: token,
         actorKey: 'role:lead',
@@ -196,7 +209,7 @@ describe('actor bridge materialization', () => {
       });
 
       const result = spawnSync(bridge.wrapperPath, ['read-state'], {
-        cwd: tempDir,
+        cwd: actorDir,
         env: {},
         encoding: 'utf8',
         timeout: 10000,
@@ -212,6 +225,39 @@ describe('actor bridge materialization', () => {
       });
     } finally {
       await server.stop();
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it('reuses the same run-level binary path across actors in one run', async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), 'pluto-v2-actor-bridge-'));
+    const paths = await resolveActorBridgeDependencyPaths();
+    const sharedRunBinPath = runBinPathFor(tempDir);
+
+    try {
+      const leadBridge = await materializeActorBridge({
+        actorCwd: join(tempDir, 'lead'),
+        runBinPath: sharedRunBinPath,
+        apiUrl: 'http://127.0.0.1:9876',
+        bearerToken: 'bridge-token',
+        actorKey: 'role:lead',
+        plutoToolSourcePath: paths.plutoToolSourcePath,
+        tsxBinPath: paths.tsxBinPath,
+      });
+      const generatorBridge = await materializeActorBridge({
+        actorCwd: join(tempDir, 'generator'),
+        runBinPath: sharedRunBinPath,
+        apiUrl: 'http://127.0.0.1:9876',
+        bearerToken: 'bridge-token',
+        actorKey: 'role:generator',
+        plutoToolSourcePath: paths.plutoToolSourcePath,
+        tsxBinPath: paths.tsxBinPath,
+      });
+
+      expect(leadBridge.runBinPath).toBe(sharedRunBinPath);
+      expect(generatorBridge.runBinPath).toBe(sharedRunBinPath);
+      expect(leadBridge.runBinPath).toBe(generatorBridge.runBinPath);
+    } finally {
       await rm(tempDir, { recursive: true, force: true });
     }
   });

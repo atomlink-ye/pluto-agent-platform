@@ -4,6 +4,7 @@ import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 
 export interface ActorBridgeMaterialization {
+  readonly runBinPath: string;
   readonly wrapperPath: string;
   readonly handoffJsonPath: string;
 }
@@ -137,6 +138,7 @@ export async function resolveActorBridgeDependencyPaths(fs: FsModule = nodeFs): 
 
 export async function materializeActorBridge(input: {
   readonly actorCwd: string;
+  readonly runBinPath: string;
   readonly apiUrl: string;
   readonly bearerToken: string;
   readonly actorKey: string;
@@ -148,6 +150,9 @@ export async function materializeActorBridge(input: {
   if (!isAbsolute(input.actorCwd)) {
     throw new Error(`actorCwd must be absolute: ${input.actorCwd}`);
   }
+  if (!isAbsolute(input.runBinPath)) {
+    throw new Error(`runBinPath must be absolute: ${input.runBinPath}`);
+  }
   if (!isAbsolute(input.plutoToolSourcePath)) {
     throw new Error(`plutoToolSourcePath must be absolute: ${input.plutoToolSourcePath}`);
   }
@@ -158,11 +163,13 @@ export async function materializeActorBridge(input: {
   const metadataDir = join(input.actorCwd, '.pluto');
   const handoffJsonPath = join(metadataDir, 'handoff.json');
   const wrapperPath = join(input.actorCwd, 'pluto-tool');
+  const runBinDir = dirname(input.runBinPath);
   const runtimePackageRoot = dirname(dirname(dirname(input.plutoToolSourcePath)));
   const runtimeTsconfigPath = join(runtimePackageRoot, 'tsconfig.json');
   await assertPathExists(runtimeTsconfigPath, fs);
   await ensureCoreSourceDependencyLinks(runtimePackageRoot, fs);
   await fs.mkdir(metadataDir, { recursive: true });
+  await fs.mkdir(runBinDir, { recursive: true });
   await fs.writeFile(handoffJsonPath, JSON.stringify({
     apiUrl: input.apiUrl,
     bearerToken: input.bearerToken,
@@ -171,6 +178,16 @@ export async function materializeActorBridge(input: {
   }, null, 2));
 
   const nodeBinDir = dirname(process.execPath);
+  const runBinWrapper = [
+    '#!/bin/bash',
+    'set -euo pipefail',
+    `export PATH=${shellQuote(`${nodeBinDir}:/usr/local/bin:/usr/bin:/bin`)}\${PATH:+:$PATH}`,
+    `exec ${shellQuote(input.tsxBinPath)} --tsconfig ${shellQuote(runtimeTsconfigPath)} ${shellQuote(input.plutoToolSourcePath)} "$@"`,
+    '',
+  ].join('\n');
+  await fs.writeFile(input.runBinPath, runBinWrapper, 'utf8');
+  await fs.chmod(input.runBinPath, 0o755);
+
   const wrapper = [
     '#!/bin/bash',
     'set -euo pipefail',
@@ -190,13 +207,14 @@ export async function materializeActorBridge(input: {
     `export PLUTO_RUN_API_URL="$(${shellQuote(process.execPath)} -e ${shellQuote(handoffFieldReader('apiUrl'))} "$HANDOFF")"`,
     `export PLUTO_RUN_TOKEN="$(${shellQuote(process.execPath)} -e ${shellQuote(handoffFieldReader('bearerToken'))} "$HANDOFF")"`,
     `export PLUTO_RUN_ACTOR="$(${shellQuote(process.execPath)} -e ${shellQuote(handoffFieldReader('actorKey'))} "$HANDOFF")"`,
-    `exec ${shellQuote(input.tsxBinPath)} --tsconfig ${shellQuote(runtimeTsconfigPath)} ${shellQuote(input.plutoToolSourcePath)} "$@"`,
+    `exec ${shellQuote(input.runBinPath)} --actor "$PLUTO_RUN_ACTOR" "$@"`,
     '',
   ].join('\n');
   await fs.writeFile(wrapperPath, wrapper, 'utf8');
   await fs.chmod(wrapperPath, 0o755);
 
   return {
+    runBinPath: input.runBinPath,
     wrapperPath,
     handoffJsonPath,
   };

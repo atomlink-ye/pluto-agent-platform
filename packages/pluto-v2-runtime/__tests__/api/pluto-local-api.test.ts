@@ -147,6 +147,7 @@ async function withApi(
   const leaseStore = makeTurnLeaseStore(leadActor());
   const api = await startPlutoLocalApi({
     bearerToken: TOKEN,
+    registeredActorKeys: new Set(['manager', 'role:lead', 'role:planner', 'role:generator', 'role:evaluator', 'system']),
     handlers,
     leaseStore,
   });
@@ -309,7 +310,7 @@ describe('startPlutoLocalApi', () => {
     });
   });
 
-  it('returns 401 for bad bearer tokens and 403 when the actor header is missing', async () => {
+  it('returns 401 for bad bearer tokens and 400 when the actor header is missing for read-state', async () => {
     await withApi({}, async ({ url }) => {
       const unauthorized = await requestApi({
         url,
@@ -326,10 +327,10 @@ describe('startPlutoLocalApi', () => {
         method: 'GET',
         path: '/state',
       });
-      expect(missingActor.status).toBe(403);
+      expect(missingActor.status).toBe(400);
       expect(missingActor.body).toMatchObject({
         error: {
-          code: 'PLUTO_ACTOR_REQUIRED',
+          code: 'missing_actor_header',
         },
       });
     });

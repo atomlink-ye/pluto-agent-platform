@@ -188,6 +188,7 @@ class PaseoRuntimeError extends Error {
 
 type AgentInjection = {
   cwd: string;
+  runBinPath: string;
   wrapperPath: string;
   handoffJsonPath: string;
 };
@@ -562,11 +563,13 @@ async function prepareAgentInjection(args: {
   workspaceCwd: string;
   handoff: PaseoAgentEnvHandoff;
 }): Promise<AgentInjection> {
+  const runBinPath = join(args.workspaceCwd, '.pluto', 'runs', args.runId, 'bin', 'pluto-tool');
   const actorDir = join(args.workspaceCwd, '.pluto', 'runs', args.runId, 'agents', actorKey(args.actor));
   await mkdir(actorDir, { recursive: true });
   const bridgePaths = await resolveActorBridgeDependencyPaths();
   const bridge = await materializeActorBridge({
     actorCwd: actorDir,
+    runBinPath,
     apiUrl: args.handoff.apiUrl,
     bearerToken: args.handoff.bearerToken,
     actorKey: args.handoff.actorKey,
@@ -575,6 +578,7 @@ async function prepareAgentInjection(args: {
   });
   return {
     cwd: actorDir,
+    runBinPath: bridge.runBinPath,
     wrapperPath: bridge.wrapperPath,
     handoffJsonPath: bridge.handoffJsonPath,
   };
@@ -791,6 +795,7 @@ async function runAgenticToolLoop(
     bearerToken,
     handlers,
     leaseStore,
+    registeredActorKeys: new Set(authored.declaredActors.map((actorName: string) => actorKey(authored.actors[actorName] as ActorRef))),
     waitService: {
       registry: waitRegistry,
       cursorForActor(actor) {
@@ -914,6 +919,7 @@ async function runAgenticToolLoop(
           playbook: authored.playbook,
           userTask: authored.userTask ?? null,
           toolNames: PLUTO_TOOL_NAMES,
+          runBinPath: injection.runBinPath,
           wrapperPath: injection.wrapperPath,
         });
 

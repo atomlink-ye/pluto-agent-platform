@@ -33,6 +33,8 @@ type ParsedHelp = {
 type ParsedCommand = {
   readonly kind: 'command';
   readonly name: CommandName;
+  readonly actor?: string;
+  readonly requiresActor: boolean;
   readonly format: OutputFormat;
   readonly method: 'GET' | 'POST';
   readonly path: string;
@@ -44,7 +46,14 @@ type ParsedCli = ParsedHelp | ParsedCommand;
 export type PlutoToolRuntimeEnv = {
   readonly apiUrl: string;
   readonly token: string;
-  readonly actor: string;
+  readonly actor?: string;
+};
+
+type ParsedGlobalFlags = {
+  readonly actor?: string;
+  readonly help: boolean;
+  readonly commandToken?: string;
+  readonly rest: readonly string[];
 };
 
 const COMMANDS: ReadonlyArray<CommandName> = [
@@ -60,7 +69,7 @@ const COMMANDS: ReadonlyArray<CommandName> = [
 ];
 
 const GLOBAL_HELP = [
-  'Usage: pluto-tool <command> [flags]',
+  'Usage: pluto-tool [--actor <key>] <command> [flags]',
   '',
   'Commands:',
   '  create-task',
@@ -74,20 +83,21 @@ const GLOBAL_HELP = [
   '  read-transcript',
   '',
   'Flags:',
+  '  --actor <key>       Explicit actor key (required for mutating commands)',
   '  --format=json|text  Output format (default: json)',
   '  --help              Show help',
 ].join('\n');
 
 const HELP_BY_COMMAND: Record<CommandName, string> = {
-  'create-task': 'Usage: pluto-tool create-task --owner=<role|manager> --title=<text> [--depends-on=<id>...] [--format=json|text]',
-  'change-task-state': 'Usage: pluto-tool change-task-state --task-id=<id> --to=<state> [--format=json|text]',
-  'send-mailbox': 'Usage: pluto-tool send-mailbox --to=<role|manager> --kind=<kind> --body=<text|@path> [--format=json|text]',
-  'publish-artifact': 'Usage: pluto-tool publish-artifact --kind=<final|intermediate> --media-type=<mime> --byte-size=<n> [--body=<text|@path>] [--format=json|text]',
-  'complete-run': 'Usage: pluto-tool complete-run --status=<succeeded|failed|cancelled> --summary=<text> [--format=json|text]',
-  'wait': 'Usage: pluto-tool wait [--timeout-sec=<0-1200>] [--format=json|text]',
-  'read-state': 'Usage: pluto-tool read-state [--format=json|text]',
-  'read-artifact': 'Usage: pluto-tool read-artifact --artifact-id=<id> [--format=json|text]',
-  'read-transcript': 'Usage: pluto-tool read-transcript --actor-key=<key> [--format=json|text]',
+  'create-task': 'Usage: pluto-tool --actor <key> create-task --owner=<role|manager> --title=<text> [--depends-on=<id>...] [--format=json|text]',
+  'change-task-state': 'Usage: pluto-tool --actor <key> change-task-state --task-id=<id> --to=<state> [--format=json|text]',
+  'send-mailbox': 'Usage: pluto-tool --actor <key> send-mailbox --to=<role|manager> --kind=<kind> --body=<text|@path> [--format=json|text]',
+  'publish-artifact': 'Usage: pluto-tool --actor <key> publish-artifact --kind=<final|intermediate> --media-type=<mime> --byte-size=<n> [--body=<text|@path>] [--format=json|text]',
+  'complete-run': 'Usage: pluto-tool --actor <key> complete-run --status=<succeeded|failed|cancelled> --summary=<text> [--format=json|text]',
+  'wait': 'Usage: pluto-tool --actor <key> wait [--timeout-sec=<0-1200>] [--format=json|text]',
+  'read-state': 'Usage: pluto-tool [--actor <key>] read-state [--format=json|text]',
+  'read-artifact': 'Usage: pluto-tool [--actor <key>] read-artifact --artifact-id=<id> [--format=json|text]',
+  'read-transcript': 'Usage: pluto-tool [--actor <key>] read-transcript --actor-key=<key> [--format=json|text]',
 };
 
 function isCommandName(value: string): value is CommandName {
@@ -103,6 +113,19 @@ function roleActor(role: string): ActorRef | null {
     kind: 'role',
     role: role as (typeof ACTOR_ROLE_VALUES)[number],
   };
+}
+
+function actorKey(actor: ActorRef): string {
+  switch (actor.kind) {
+    case 'manager':
+      return 'manager';
+    case 'system':
+      return 'system';
+    case 'role':
+      return `role:${actor.role}`;
+    default:
+      throw new Error(`Unsupported actor kind: ${(actor as { kind: string }).kind}`);
+  }
 }
 
 function parseActorFlag(value: string, flagName: string): ActorRef {
@@ -125,6 +148,20 @@ function parseActorFlag(value: string, flagName: string): ActorRef {
   throw new Error(`${flagName} must be one of: manager, ${ACTOR_ROLE_VALUES.join(', ')}`);
 }
 
+function parseSessionActorKey(value: string, flagName: string): string {
+  const normalized = value.trim();
+  if (normalized === 'manager') {
+    return 'manager';
+  }
+
+  if (normalized === 'system') {
+    return 'system';
+  }
+
+  const actor = parseActorFlag(normalized, flagName);
+  return actorKey(actor);
+}
+
 function normalizeApiUrl(value: string): string {
   return value.endsWith('/') ? value.slice(0, -1) : value;
 }
@@ -141,10 +178,66 @@ function requireEnv(name: string, env: NodeJS.ProcessEnv): string {
 }
 
 export function readRuntimeEnv(env: NodeJS.ProcessEnv = process.env): PlutoToolRuntimeEnv {
+  const actor = env.PLUTO_RUN_ACTOR;
   return {
     apiUrl: normalizeApiUrl(requireEnv('PLUTO_RUN_API_URL', env)),
     token: requireEnv('PLUTO_RUN_TOKEN', env),
-    actor: requireEnv('PLUTO_RUN_ACTOR', env),
+    ...(typeof actor === 'string' && actor.trim().length > 0 ? { actor } : {}),
+  };
+}
+
+function parseGlobalFlags(argv: readonly string[]): ParsedGlobalFlags {
+  let actor: string | undefined;
+  let help = false;
+
+  for (let index = 0; index < argv.length; index += 1) {
+    const token = argv[index];
+    if (token == null) {
+      break;
+    }
+
+    if (!token.startsWith('--')) {
+      return {
+        actor,
+        help,
+        commandToken: token,
+        rest: argv.slice(index + 1),
+      };
+    }
+
+    if (token === '--help') {
+      help = true;
+      continue;
+    }
+
+    if (token === '--actor') {
+      const value = argv[index + 1];
+      if (value == null || value.startsWith('--')) {
+        throw new Error('Missing value for --actor');
+      }
+      if (actor != null) {
+        throw new Error('--actor may only be provided once');
+      }
+      actor = parseSessionActorKey(value, '--actor');
+      index += 1;
+      continue;
+    }
+
+    if (token.startsWith('--actor=')) {
+      if (actor != null) {
+        throw new Error('--actor may only be provided once');
+      }
+      actor = parseSessionActorKey(token.slice('--actor='.length), '--actor');
+      continue;
+    }
+
+    throw new Error(`Unexpected global flag: ${token}`);
+  }
+
+  return {
+    actor,
+    help,
+    rest: [],
   };
 }
 
@@ -268,16 +361,25 @@ function parseWaitTimeoutSec(value: string): number {
 }
 
 export async function parseCliArgs(argv: readonly string[]): Promise<ParsedCli> {
-  const [commandToken, ...rest] = argv;
-  if (commandToken == null || commandToken === '--help') {
+  const parsedGlobals = parseGlobalFlags(argv);
+  if (parsedGlobals.commandToken == null) {
     return {
       kind: 'help',
       text: GLOBAL_HELP,
     };
   }
 
+  const { actor: globalActor, commandToken, help: globalHelp, rest } = parsedGlobals;
+
   if (!isCommandName(commandToken)) {
     throw new Error(`Unknown command: ${commandToken}`);
+  }
+
+  if (globalHelp) {
+    return {
+      kind: 'help',
+      text: HELP_BY_COMMAND[commandToken],
+    };
   }
 
   const { format, help, flags } = parseFlagTokens(rest);
@@ -288,6 +390,17 @@ export async function parseCliArgs(argv: readonly string[]): Promise<ParsedCli> 
     };
   }
 
+  const actorFlag = takeOne(flags, 'actor');
+  const requestedActor = actorFlag == null
+    ? globalActor
+    : (() => {
+        const parsedActor = parseSessionActorKey(actorFlag, '--actor');
+        if (globalActor != null) {
+          throw new Error('--actor may only be provided once');
+        }
+        return parsedActor;
+      })();
+
   switch (commandToken) {
     case 'create-task': {
       const owner = parseActorFlag(requireOne(flags, 'owner', commandToken), '--owner');
@@ -297,6 +410,8 @@ export async function parseCliArgs(argv: readonly string[]): Promise<ParsedCli> 
       return {
         kind: 'command',
         name: commandToken,
+        actor: requestedActor,
+        requiresActor: true,
         format,
         method: 'POST',
         path: '/tools/create-task',
@@ -317,6 +432,8 @@ export async function parseCliArgs(argv: readonly string[]): Promise<ParsedCli> 
       return {
         kind: 'command',
         name: commandToken,
+        actor: requestedActor,
+        requiresActor: true,
         format,
         method: 'POST',
         path: '/tools/change-task-state',
@@ -334,6 +451,8 @@ export async function parseCliArgs(argv: readonly string[]): Promise<ParsedCli> 
       return {
         kind: 'command',
         name: commandToken,
+        actor: requestedActor,
+        requiresActor: true,
         format,
         method: 'POST',
         path: '/tools/append-mailbox-message',
@@ -352,6 +471,8 @@ export async function parseCliArgs(argv: readonly string[]): Promise<ParsedCli> 
       return {
         kind: 'command',
         name: commandToken,
+        actor: requestedActor,
+        requiresActor: true,
         format,
         method: 'POST',
         path: '/tools/publish-artifact',
@@ -373,6 +494,8 @@ export async function parseCliArgs(argv: readonly string[]): Promise<ParsedCli> 
       return {
         kind: 'command',
         name: commandToken,
+        actor: requestedActor,
+        requiresActor: true,
         format,
         method: 'POST',
         path: '/tools/complete-run',
@@ -385,6 +508,8 @@ export async function parseCliArgs(argv: readonly string[]): Promise<ParsedCli> 
       return {
         kind: 'command',
         name: commandToken,
+        actor: requestedActor,
+        requiresActor: true,
         format,
         method: 'POST',
         path: '/tools/wait-for-event',
@@ -398,6 +523,8 @@ export async function parseCliArgs(argv: readonly string[]): Promise<ParsedCli> 
       return {
         kind: 'command',
         name: commandToken,
+        actor: requestedActor,
+        requiresActor: true,
         format,
         method: 'GET',
         path: '/state',
@@ -408,6 +535,8 @@ export async function parseCliArgs(argv: readonly string[]): Promise<ParsedCli> 
       return {
         kind: 'command',
         name: commandToken,
+        actor: requestedActor,
+        requiresActor: false,
         format,
         method: 'GET',
         path: `/artifacts/${encodeURIComponent(artifactId)}`,
@@ -419,6 +548,8 @@ export async function parseCliArgs(argv: readonly string[]): Promise<ParsedCli> 
       return {
         kind: 'command',
         name: commandToken,
+        actor: requestedActor,
+        requiresActor: false,
         format,
         method: 'GET',
         path: `/transcripts/${encodeURIComponent(actorKey)}`,
@@ -437,7 +568,7 @@ async function callApi(env: PlutoToolRuntimeEnv, command: ParsedCommand): Promis
     method: command.method,
     headers: {
       authorization: `Bearer ${env.token}`,
-      'Pluto-Run-Actor': env.actor,
+      ...(env.actor == null ? {} : { 'Pluto-Run-Actor': env.actor }),
       ...(command.body === undefined ? {} : { 'content-type': 'application/json' }),
     },
     ...(command.body === undefined ? {} : { body: JSON.stringify(command.body) }),
@@ -449,8 +580,11 @@ async function callApi(env: PlutoToolRuntimeEnv, command: ParsedCommand): Promis
   if (!response.ok) {
     const message = typeof data === 'string'
       ? data
-      : (() => {
-          const error = (data as { error?: { message?: string; code?: string } }).error;
+        : (() => {
+          const error = (data as { error?: { message?: string; code?: string; detail?: string } }).error;
+          if (error?.code && error.detail) {
+            return `${error.code}: ${error.detail}`;
+          }
           if (error?.code && error.message) {
             return `${error.code}: ${error.message}`;
           }
@@ -463,6 +597,36 @@ async function callApi(env: PlutoToolRuntimeEnv, command: ParsedCommand): Promis
   }
 
   return { data, contentType };
+}
+
+function resolveActorForCommand(parsed: ParsedCommand, runtimeEnv: PlutoToolRuntimeEnv): string | undefined {
+  const candidate = parsed.actor ?? runtimeEnv.actor;
+  if (candidate == null || candidate.trim().length === 0) {
+    if (parsed.requiresActor) {
+      throw new Error('missing_actor: pass --actor <key> or set PLUTO_RUN_ACTOR');
+    }
+    return undefined;
+  }
+
+  return parseSessionActorKey(candidate, parsed.actor == null ? 'PLUTO_RUN_ACTOR' : '--actor');
+}
+
+function withActorEnvelope(actor: string, data: unknown): unknown {
+  if (data != null && typeof data === 'object' && !Array.isArray(data)) {
+    return {
+      actor,
+      ...(data as Record<string, unknown>),
+    };
+  }
+
+  return {
+    actor,
+    value: data,
+  };
+}
+
+function shouldWrapJsonResult(command: ParsedCommand): boolean {
+  return command.name !== 'wait';
 }
 
 function textSummary(command: ParsedCommand, result: unknown): string {
@@ -525,13 +689,23 @@ export async function runCli(
     }
 
     const runtimeEnv = readRuntimeEnv(env);
-    const result = await callApi(runtimeEnv, parsed);
+    const actor = resolveActorForCommand(parsed, runtimeEnv);
+    const result = await callApi({
+      ...runtimeEnv,
+      ...(actor == null ? {} : { actor }),
+    }, parsed);
     if (parsed.format === 'text') {
       io.stdout.write(`${textSummary(parsed, result.data)}\n`);
       return isCancelledWaitResult(parsed, result.data) ? 1 : 0;
     }
 
-    io.stdout.write(`${JSON.stringify(result.data, null, 2)}\n`);
+    io.stdout.write(`${JSON.stringify(
+      actor == null || !shouldWrapJsonResult(parsed)
+        ? result.data
+        : withActorEnvelope(actor, result.data),
+      null,
+      2,
+    )}\n`);
     return isCancelledWaitResult(parsed, result.data) ? 1 : 0;
   } catch (error) {
     io.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);

@@ -89,6 +89,7 @@ async function withApi(run: (context: { url: string; token: string }) => Promise
   const token = 'cli-test-token';
   const api = await startPlutoLocalApi({
     bearerToken: token,
+    registeredActorKeys: new Set(['manager', 'role:lead', 'role:planner', 'role:generator', 'role:evaluator', 'system']),
     handlers,
     leaseStore: makeTurnLeaseStore({ kind: 'role', role: 'lead' }),
   });
@@ -139,6 +140,14 @@ describe('pluto-tool argv parsing', () => {
 
     try {
       await writeFile(bodyPath, 'body from file', 'utf8');
+
+      await expect(parseCliArgs(['--actor', 'role:lead', 'create-task', '--owner=generator', '--title=Draft']))
+        .resolves.toMatchObject({
+          kind: 'command',
+          name: 'create-task',
+          actor: 'role:lead',
+          requiresActor: true,
+        });
 
       await expect(parseCliArgs(['create-task', '--owner=generator', '--title=Draft', '--depends-on=a', '--depends-on=b']))
         .resolves.toMatchObject({
@@ -220,20 +229,32 @@ describe('pluto-tool subprocess', () => {
   it('returns API JSON responses from a real subprocess', async () => {
     await withApi(async ({ url, token }) => {
       const result = await runCli(
-        ['create-task', '--owner=generator', '--title=Draft haiku v1'],
+        ['--actor', 'role:lead', 'create-task', '--owner=generator', '--title=Draft haiku v1'],
         {
           PLUTO_RUN_API_URL: url,
           PLUTO_RUN_TOKEN: token,
-          PLUTO_RUN_ACTOR: 'role:lead',
         },
       );
 
       expect(result.exitCode).toBe(0);
       expect(result.stderr).toBe('');
       expect(JSON.parse(result.stdout)).toMatchObject({
+        actor: 'role:lead',
         accepted: true,
         taskId: expect.any(String),
       });
+    });
+  });
+
+  it('fails with a clear error when actor is missing for a mutating command', async () => {
+    await withApi(async ({ url, token }) => {
+      const result = await runCli(['create-task', '--owner=generator', '--title=Draft haiku v1'], {
+        PLUTO_RUN_API_URL: url,
+        PLUTO_RUN_TOKEN: token,
+      });
+
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain('missing_actor: pass --actor <key> or set PLUTO_RUN_ACTOR');
     });
   });
 

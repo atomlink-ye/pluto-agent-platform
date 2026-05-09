@@ -12,6 +12,7 @@ export interface AgenticToolPromptInput {
   readonly playbook: LoadedPlaybook | null;
   readonly userTask: string | null;
   readonly toolNames: ReadonlyArray<PlutoToolName>;
+  readonly runBinPath?: string;
   readonly wrapperPath: string;
   readonly maxBytes?: number;
 }
@@ -121,6 +122,8 @@ function actorLabel(actor: ActorRef, role: string | null): string {
       return 'system';
     case 'role':
       return actor.role;
+    default:
+      return (actor as { kind: string }).kind;
   }
 }
 
@@ -244,27 +247,29 @@ function toolSection(toolNames: ReadonlyArray<PlutoToolName>): string {
   ].join('\n');
 }
 
-function toolCallSection(wrapperPath: string): string {
+function toolCallSection(runBinPath: string, wrapperPath: string, actorRef: string): string {
   return [
     '## How to call Pluto tools',
     '',
-    `Invoke the Pluto tool by running \`${wrapperPath}\` from your bash shell.`,
-    'The wrapper has the run context (URL/token/actor) baked in, so',
-    'you do not need to pass tokens, headers, actor ids, or API URLs yourself.',
+    `Invoke the Pluto tool by running \`${runBinPath}\` from your bash shell.`,
+    `Always pass \`--actor ${actorRef}\` explicitly.`,
+    `The per-actor wrapper \`${wrapperPath}\` is a backward-compat shortcut that forwards to the same run-level binary.`,
+    'Both forms already have the run API URL and bearer token in scope.',
     '',
     'Examples:',
     '',
-    `  ${wrapperPath} create-task --owner=generator --title="Draft haiku v1"`,
-    `  ${wrapperPath} send-mailbox --to=lead --kind=completion --body="Draft attached: ..."`,
-    `  ${wrapperPath} change-task-state --task-id=<id> --to=completed`,
-    `  ${wrapperPath} publish-artifact --kind=final --media-type=text/plain --byte-size=64 --body="..."`,
-    `  ${wrapperPath} complete-run --status=succeeded --summary="<one-sentence>"`,
-    `  ${wrapperPath} wait --timeout-sec=300`,
-    `  ${wrapperPath} read-state`,
-    `  ${wrapperPath} read-artifact --artifact-id=<id>`,
-    `  ${wrapperPath} read-transcript --actor-key=role:generator`,
+    `  ${runBinPath} --actor ${actorRef} create-task --owner=generator --title="Draft haiku v1"`,
+    `  ${runBinPath} --actor ${actorRef} send-mailbox --to=lead --kind=completion --body="Draft attached: ..."`,
+    `  ${runBinPath} --actor ${actorRef} change-task-state --task-id=<id> --to=completed`,
+    `  ${runBinPath} --actor ${actorRef} publish-artifact --kind=final --media-type=text/plain --byte-size=64 --body="..."`,
+    `  ${runBinPath} --actor ${actorRef} complete-run --status=succeeded --summary="<one-sentence>"`,
+    `  ${runBinPath} --actor ${actorRef} wait --timeout-sec=300`,
+    `  ${runBinPath} --actor ${actorRef} read-state`,
+    `  ${runBinPath} --actor ${actorRef} read-artifact --artifact-id=<id>`,
+    `  ${runBinPath} --actor ${actorRef} read-transcript --actor-key=role:generator`,
+    `Legacy wrapper shortcut: ${wrapperPath} create-task --owner=generator --title="Draft haiku v1"`,
     '',
-    `Run \`${wrapperPath} --help\` or \`${wrapperPath} <subcommand> --help\` for`,
+    `Run \`${runBinPath} --help\` or \`${runBinPath} <subcommand> --help\` for`,
     'flag details. Output is JSON by default; pass --format=text for a',
     'short human summary.',
   ].join('\n');
@@ -278,11 +283,12 @@ function promptHeader(actor: ActorRef, role: string | null): string {
   return `You are the ${actorLabel(actor, role)} actor for a Pluto v2 tool-driven run.`;
 }
 
-function roleAnchorSection(actor: ActorRef, role: string | null, runId: string, wrapperPath: string): string {
+function roleAnchorSection(actor: ActorRef, role: string | null, runId: string, runBinPath: string, wrapperPath: string, actorRef: string): string {
   return [
     '## Role anchor',
     '',
-    `You are the live ${actorLabel(actor, role)} actor for run ${runId}. Drive this run yourself by calling Pluto tool \`${wrapperPath}\` from your shell.`,
+    `You are the live ${actorLabel(actor, role)} actor for run ${runId}. Drive this run yourself by calling Pluto tool \`${runBinPath}\` from your shell with \`--actor ${actorRef}\`.`,
+    `The actor-local shortcut \`${wrapperPath}\` still works and forwards to the same run-level binary.`,
     'Do NOT use external control planes (for example `paseo send`, `daytona exec`, or `opencode-orchestrator`) to pilot another actor for this run.',
     'There is no other actor; you are the actor.',
     isLeadActor(actor) ? '' : null,
@@ -364,6 +370,8 @@ function wakeupDeltaJson(delta: WakeupPromptDelta): string {
 export function buildAgenticToolPrompt(input: AgenticToolPromptInput): string {
   const maxBytes = input.maxBytes ?? DEFAULT_AGENTIC_TOOL_PROMPT_MAX_BYTES;
   const roleLabel = input.role ?? (input.actor.kind === 'role' ? input.actor.role : null);
+  const actorRef = input.actor.kind === 'role' ? `role:${input.actor.role}` : input.actor.kind;
+  const runBinPath = input.runBinPath ?? input.wrapperPath;
   const promptView = promptViewForActor(input.actor, input.promptView);
   const promptViewJsonCandidates = promptViewCandidates(promptView);
   const playbookBody = input.playbook == null
@@ -377,11 +385,11 @@ export function buildAgenticToolPrompt(input: AgenticToolPromptInput): string {
   const playbookHeader = isLeadActor(input.actor) ? 'Playbook:' : `Playbook for ${actorLabel(input.actor, roleLabel)}:`;
   const fixedSections = [
     promptHeader(input.actor, roleLabel),
-    roleAnchorSection(input.actor, roleLabel, input.runId, input.wrapperPath),
+    roleAnchorSection(input.actor, roleLabel, input.runId, runBinPath, input.wrapperPath, actorRef),
     isLeadActor(input.actor) ? LEAD_FRAMING : '',
     userTaskSection,
     toolSection(input.toolNames),
-    toolCallSection(input.wrapperPath),
+    toolCallSection(runBinPath, input.wrapperPath, actorRef),
     turnRuleSection(input.actor, input.wrapperPath),
   ];
 
