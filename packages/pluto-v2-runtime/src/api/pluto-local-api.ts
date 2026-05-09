@@ -216,6 +216,12 @@ function turnDispositionFor(toolName: PlutoToolName): {
   };
 }
 
+function isAcceptedMutationBody(body: unknown): body is Record<string, unknown> & { accepted: true } {
+  return body != null
+    && typeof body === 'object'
+    && (body as { accepted?: unknown }).accepted === true;
+}
+
 function textFromToolResult(result: PlutoToolResult): string {
   if (!result.ok) {
     throw new Error('Expected an ok tool result.');
@@ -553,10 +559,19 @@ async function runRoute(args: {
   switch (args.route.responseKind) {
     case 'json':
       if (MUTATING_TOOLS.has(args.route.toolName)) {
+        const parsed = parseJsonText(text);
+        if (!isAcceptedMutationBody(parsed)) {
+          return {
+            status: 200,
+            body: parsed,
+            contentType: 'json',
+          };
+        }
+
         return {
           status: 200,
           body: {
-            ...(parseJsonText(text) as Record<string, unknown>),
+            ...parsed,
             ...turnDispositionFor(args.route.toolName),
           },
           contentType: 'json',

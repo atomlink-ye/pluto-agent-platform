@@ -206,6 +206,7 @@ async function withWaitApi(
     handlers: ReturnType<typeof makePlutoToolHandlers>;
     kernel: ReturnType<typeof createKernel>;
     waitRegistry: ReturnType<typeof makeWaitRegistry>;
+    leaseStore: ReturnType<typeof makeTurnLeaseStore>;
   }) => Promise<void>,
 ) {
   const kernel = createKernel();
@@ -255,7 +256,7 @@ async function withWaitApi(
   });
 
   try {
-    await run({ url: api.url, token, handlers, kernel, waitRegistry });
+    await run({ url: api.url, token, handlers, kernel, waitRegistry, leaseStore });
   } finally {
     await api.shutdown();
   }
@@ -474,6 +475,35 @@ describe('pluto-tool subprocess', () => {
         turnDisposition: 'terminal',
       });
       expect(stdout).not.toContain('"wait"');
+    });
+  });
+
+  it('returns promptly for rejected mutations without entering auto-wait', async () => {
+    await withWaitApi(async ({ url, token, leaseStore }) => {
+      leaseStore.setCurrent({ kind: 'role', role: 'generator' });
+      const capture = createIoCapture();
+      const startedAt = Date.now();
+
+      const exitCode = await runCliInProcess(
+        ['--actor', 'role:generator', 'create-task', '--owner=generator', '--title=Rejected draft', '--wait-timeout-ms=2000'],
+        {
+          PLUTO_RUN_API_URL: url,
+          PLUTO_RUN_TOKEN: token,
+        },
+        capture.io as unknown as Pick<typeof process, 'stdout' | 'stderr'>,
+      );
+
+      const elapsedMs = Date.now() - startedAt;
+      const { stdout, stderr } = capture.read();
+      expect(exitCode).toBe(0);
+      expect(stderr).toBe('');
+      expect(elapsedMs).toBeLessThan(1000);
+      expect(JSON.parse(stdout)).toMatchObject({
+        accepted: false,
+        reason: 'actor_not_authorized',
+      });
+      expect(stdout).not.toContain('"wait"');
+      expect(stdout).not.toContain('turnDisposition');
     });
   });
 

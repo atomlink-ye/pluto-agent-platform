@@ -56,6 +56,7 @@ export type PlutoToolRuntimeEnv = {
 };
 
 type MutationResponse = Record<string, unknown> & {
+  readonly accepted?: boolean;
   readonly turnDisposition?: TurnDisposition;
   readonly nextWakeup?: NextWakeup;
 };
@@ -883,6 +884,7 @@ export async function runCli(
       && parsed.noWait !== true
       && result.data != null
       && typeof result.data === 'object'
+      && (result.data as MutationResponse).accepted === true
       && (result.data as MutationResponse).turnDisposition === 'waiting'
         ? await autoWaitForMutation({
             env: runtimeEnv,

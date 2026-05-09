@@ -187,6 +187,33 @@ describe('smoke acceptance', () => {
     expect(result.failures).toContain('fewer than 2 actors have non-empty transcripts');
   });
 
+  it('does not flag polling when read-state appears only in prose between tool calls', async () => {
+    const runDir = await createRunDir({
+      events: [
+        runStarted(0),
+        taskCreated(1),
+        mailboxAppended(2, GENERATOR, LEAD, 'completion'),
+        taskStateChanged(3, 'completed'),
+        mailboxAppended(4, LEAD, GENERATOR, 'plan'),
+        runCompleted(5, 'succeeded'),
+      ],
+      transcripts: {
+        'role:lead': [
+          'pluto-tool create-task --owner=generator --title="Draft haiku"',
+          'I mentioned read-state in my notes, but did not call it.',
+          'pluto-tool send-mailbox --to=generator --kind=plan --body="Follow-up"',
+        ].join('\n'),
+        'role:generator': 'pluto-tool send-mailbox --to=lead --kind=completion --body="Draft is ready."\n',
+        manager: '',
+      },
+    });
+
+    const result = checkSmokeAcceptanceForRunDir({ runDir, expectFailure: false });
+
+    expect(result.ok).toBe(true);
+    expect(result.failures.some((failure) => failure.startsWith('polling_detected:'))).toBe(false);
+  });
+
   it('fails when a delegated task never reaches a terminal state', async () => {
     const runDir = await createRunDir({
       events: [

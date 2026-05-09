@@ -261,6 +261,10 @@ describe('agentic_tool turn-state tracing', () => {
       const turnTransitions = result.runtimeTraces.filter(
         (trace): trace is TurnStateTransitionTraceEvent => trace.kind === 'turn_state_transition',
       );
+      const runCompletedTerminalActors = turnTransitions
+        .filter((trace) => trace.reason === 'run_completed' && trace.toState === 'terminal')
+        .map((trace) => trace.actor)
+        .sort();
 
       expect(turnTransitions).toEqual(expect.arrayContaining([
         expect.objectContaining({
@@ -277,24 +281,21 @@ describe('agentic_tool turn-state tracing', () => {
         }),
         expect.objectContaining({
           actor: 'role:lead',
+          toState: 'terminal',
+        }),
+        expect.objectContaining({
           fromState: 'waiting',
           toState: 'active',
           reason: 'wait_delivered',
         }),
-        expect.objectContaining({
-          actor: 'role:lead',
-          fromState: 'active',
-          toState: 'terminal',
-          reason: 'mutation_accepted',
-        }),
-        expect.objectContaining({
-          actor: 'role:generator',
-          fromState: 'waiting',
-          toState: 'terminal',
-          reason: 'run_completed',
-        }),
       ]));
-      expect(turnTransitions.length).toBeGreaterThanOrEqual(5);
+      expect(runCompletedTerminalActors).toEqual([
+        'manager',
+        'role:evaluator',
+        'role:generator',
+        'role:planner',
+      ]);
+      expect(turnTransitions.length).toBeGreaterThanOrEqual(6);
     } finally {
       await rm(workspaceCwd, { recursive: true, force: true });
     }

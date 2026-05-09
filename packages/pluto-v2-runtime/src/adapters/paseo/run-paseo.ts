@@ -705,8 +705,8 @@ async function runAgenticToolLoop(
   };
 
   const transitionAllActorsTerminal = () => {
-    for (const actor of trackedActorByKey.values()) {
-      transitionTurnState(actor, 'terminal', 'run_completed');
+    for (const actorName of authored.declaredActors) {
+      transitionTurnState(authored.actors[actorName] as ActorRef, 'terminal', 'run_completed');
     }
   };
 

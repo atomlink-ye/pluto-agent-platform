@@ -11,8 +11,7 @@ const ACCEPTED_MUTATION_EVENT_KINDS = new Set([
   'run_completed',
 ]);
 const TERMINAL_TASK_STATES = new Set(['completed', 'cancelled', 'failed']);
-const MUTATION_COMMAND_PATTERN = /\b(create-task|change-task-state|send-mailbox|publish-artifact|complete-run)\b/;
-const READ_STATE_COMMAND_PATTERN = /\bread-state\b/;
+const PLUTO_TOOL_COMMAND_PATTERN = /^(?:[$>#]\s*)?(?:\S+\/)?pluto-tool\b(?:\s+--actor\s+\S+)?\s+(create-task|change-task-state|send-mailbox|publish-artifact|complete-run|read-state)\b/;
 
 export type SmokeAcceptanceArtifacts = {
   events: ReadonlyArray<RunEvent>;
@@ -129,14 +128,15 @@ function pollingFailuresByActor(input: {
         continue;
       }
 
-      if (READ_STATE_COMMAND_PATTERN.test(line)) {
-        if (mutationIndex >= 0) {
-          readStateCallsSinceMutation += 1;
-        }
+      const matchedCommand = line.match(PLUTO_TOOL_COMMAND_PATTERN)?.[1];
+      if (matchedCommand == null) {
         continue;
       }
 
-      if (!MUTATION_COMMAND_PATTERN.test(line)) {
+      if (matchedCommand === 'read-state') {
+        if (mutationIndex >= 0) {
+          readStateCallsSinceMutation += 1;
+        }
         continue;
       }
 

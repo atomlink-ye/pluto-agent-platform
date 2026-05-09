@@ -38,3 +38,12 @@
 ## Stop Conditions
 
 - No stop condition was hit.
+
+## Review fixup (review round 2)
+
+- Objection 1: rejected mutating responses no longer advertise `turnDisposition` / `nextWakeup`, and the CLI now only auto-waits when `accepted === true` and `turnDisposition === "waiting"`.
+- Objection 2: `transitionAllActorsTerminal()` now terminalizes the full declared-actor set on run completion, including actors that never emitted a prior transition.
+- Objection 3: smoke polling detection now matches anchored `pluto-tool ... <subcommand>` command lines instead of loose prose substring hits, and a prose-only `read-state` regression test was added.
+- Objection 4: `task-closeout.test.ts` now restores the original exact wait-trace sequence assertion after filtering to wait-trace kinds.
+- New tests added in this review fixup: 2.
+- Fixup validation: `pnpm install`, `pnpm --filter @pluto/v2-runtime test`, and `pnpm test` passed; both `tsc`-based typecheck commands hit sandbox memory limits (`SIGABRT` / `137`) despite retrying with raised heap, so they remain an environment limitation rather than a code regression signal.

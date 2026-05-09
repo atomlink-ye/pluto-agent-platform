@@ -311,6 +311,26 @@ describe('startPlutoLocalApi', () => {
         'artifact_published',
         'run_completed',
       ]);
+
+      leaseStore.setCurrent(generatorActor());
+      const rejectedCreateTask = await requestApi({
+        url,
+        method: 'POST',
+        path: '/tools/create-task',
+        actor: 'role:generator',
+        body: {
+          title: 'Unauthorized draft',
+          ownerActor: { kind: 'role', role: 'generator' },
+          dependsOn: [],
+        },
+      });
+      expect(rejectedCreateTask.status).toBe(200);
+      expect(rejectedCreateTask.body).toMatchObject({
+        accepted: false,
+        reason: 'actor_not_authorized',
+      });
+      expect(rejectedCreateTask.body).not.toHaveProperty('turnDisposition');
+      expect(rejectedCreateTask.body).not.toHaveProperty('nextWakeup');
     });
   });
 
