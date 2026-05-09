@@ -2,7 +2,7 @@
 
 Pluto `main` is v2-only after S7.
 
-- Supported CLI surfaces: `pnpm pluto:run --spec <path>`, `pnpm pluto:runs replay <runId>`, and `pnpm pluto:runs explain <runId>`
+- Supported CLI surfaces: `pnpm pluto:run --spec <path>`, `pnpm pluto:runs replay|explain|audit <runId>`
 - Active runtime surface: `packages/pluto-v2-core/`, `packages/pluto-v2-runtime/`, and the root CLI bridge in `src/cli/`
 - Archived v1.6 harness: `origin/legacy-v1.6-harness-prototype`
 
@@ -37,8 +37,9 @@ orchestration:
 
 `pluto:runs` inspects completed runs:
 
-- `pnpm pluto:runs replay <runId> [--run-dir=<path>]` replays `events.jsonl` and checks the task projection for drift.
+- `pnpm pluto:runs replay <runId> [--run-dir=<path>]` replays `events.jsonl` and checks the task projection for drift. Exit 0 on PASS, 1 on DRIFT, 2 on bad input.
 - `pnpm pluto:runs explain <runId> [--run-dir=<path>] [--format=json]` prints a readable run narrative or emits structured JSON.
+- `pnpm pluto:runs audit <runId> [--run-dir=<path>] [--format=json]` reports the final-reconciliation audit result. Exit 0 on `pass`, 1 on `failed_audit`, 2 if the audit evidence is absent.
 
 Legacy selectors and v1.6 runtime flags are no longer part of active usage on `main`.
 

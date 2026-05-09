@@ -16,9 +16,10 @@
 pnpm pluto:run --spec <path>
 pnpm pluto:runs replay <runId> [--run-dir=<path>]
 pnpm pluto:runs explain <runId> [--run-dir=<path>] [--format=json]
+pnpm pluto:runs audit <runId> [--run-dir=<path>] [--format=json]
 ```
 
-`pluto:run` remains the execution entrypoint. `pluto:runs` is the retained post-run inspection surface.
+`pluto:run` remains the execution entrypoint. `pluto:runs` is the retained post-run inspection surface; `audit` exits 0 on `pass`, 1 on `failed_audit`, 2 when the final-reconciliation evidence is absent.
 
 ## Runtime Modes
 

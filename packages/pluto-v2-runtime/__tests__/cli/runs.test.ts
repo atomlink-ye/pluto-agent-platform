@@ -498,4 +498,73 @@ describe.sequential('pluto:runs', () => {
     expect(output.runtimeDiagnostics).toBeNull();
     expect(output.tasks).toHaveLength(1);
   });
+
+  it('audit returns PASS and exit 0 when final-reconciliation reports pass', async () => {
+    const { runDir } = await createSyntheticRun();
+    const capture = createIoCapture();
+    const exitCode = await runCli(['audit', 'run-1', '--run-dir', runDir], capture.io);
+
+    expect(exitCode).toBe(0);
+    expect(capture.read().stderr).toBe('');
+    expect(capture.read().stdout).toContain('PASS - final reconciliation audit succeeded');
+  });
+
+  it('audit returns FAILED_AUDIT and exit 1 when final-reconciliation reports failed_audit', async () => {
+    const { runDir } = await createSyntheticRun({
+      finalReconciliation: {
+        summary: 'Lead cited a missing task.',
+        completedTaskIds: ['task-missing'],
+        citedMessageIds: [],
+        citedArtifactRefs: [],
+        unresolvedIssues: [],
+        audit: {
+          status: 'failed_audit',
+          failures: [{ kind: 'missing_task', ref: 'task-missing' }],
+        },
+      },
+    });
+
+    const capture = createIoCapture();
+    const exitCode = await runCli(['audit', 'run-1', '--run-dir', runDir], capture.io);
+
+    expect(exitCode).toBe(1);
+    const stdout = capture.read().stdout;
+    expect(stdout).toContain('FAILED_AUDIT - final reconciliation audit reported failures');
+    expect(stdout).toContain('missing_task: task-missing');
+  });
+
+  it('audit returns ABSENT and exit 2 when no final-reconciliation evidence exists', async () => {
+    const { runDir } = await createSyntheticRun({ finalReconciliation: null });
+    await rm(join(runDir, 'evidence'), { recursive: true, force: true });
+
+    const capture = createIoCapture();
+    const exitCode = await runCli(['audit', 'run-1', '--run-dir', runDir], capture.io);
+
+    expect(exitCode).toBe(2);
+    expect(capture.read().stdout).toContain('ABSENT - no final-reconciliation evidence');
+  });
+
+  it('audit emits structured JSON when --format=json', async () => {
+    const { runDir } = await createSyntheticRun({
+      finalReconciliation: {
+        summary: 'All cited work reconciled cleanly.',
+        completedTaskIds: ['task-1'],
+        citedMessageIds: ['msg-1'],
+        citedArtifactRefs: ['artifact-1'],
+        unresolvedIssues: [],
+        audit: { status: 'pass', failures: [] },
+      },
+    });
+
+    const capture = createIoCapture();
+    const exitCode = await runCli(['audit', 'run-1', '--run-dir', runDir, '--format=json'], capture.io);
+
+    expect(exitCode).toBe(0);
+    const output = JSON.parse(capture.read().stdout) as Awaited<ReturnType<typeof __internal.auditRun>>;
+    expect(output.status).toBe('pass');
+    expect(output.completedTaskIds).toEqual(['task-1']);
+    expect(output.citedMessageIds).toEqual(['msg-1']);
+    expect(output.citedArtifactRefs).toEqual(['artifact-1']);
+    expect(output.failures).toEqual([]);
+  });
 });

@@ -27,7 +27,7 @@ import { z } from 'zod';
 import { EvidencePacketShape, type EvidencePacket, type RuntimeDiagnostics } from '../evidence/evidence-packet.js';
 import { parseAuthoredSpec } from '../loader/authored-spec-loader.js';
 
-type CommandName = 'replay' | 'explain';
+type CommandName = 'replay' | 'explain' | 'audit';
 type OutputFormat = 'json' | 'text';
 type WarningSink = (message: string) => void;
 
@@ -142,7 +142,7 @@ type TaskProjectionMap = z.infer<typeof TaskProjectionViewStateSchema>['tasks'];
 type ArtifactProjection = z.infer<typeof ArtifactProjectionSchema>;
 type SpecContext = Pick<TeamContext, 'declaredActors' | 'initialTasks'>;
 
-const COMMANDS: readonly CommandName[] = ['replay', 'explain'];
+const COMMANDS: readonly CommandName[] = ['replay', 'explain', 'audit'];
 const DEFAULT_RUN_ROOT = join('.pluto', 'runs');
 const MAX_BODY_PREVIEW = 120;
 const SPEC_FILE_CANDIDATES = [
@@ -161,6 +161,7 @@ const HELP_TEXT = [
   'Commands:',
   '  replay   Re-derive the run state from events.jsonl and compare it to the task projection',
   '  explain  Print a readable run narrative (or JSON with --format=json)',
+  '  audit    Report final-reconciliation audit pass / failed_audit; exit 0/1/2',
   '',
   'Flags:',
   '  --run-dir <path>      Use an explicit run directory (or a parent containing <runId>)',
@@ -333,7 +334,7 @@ function parseCliArgs(argv: readonly string[]): ParsedCli {
 
   const commandToken = argv[0];
   if (commandToken == null || !isCommandName(commandToken)) {
-    throw new Error('expected command: replay or explain');
+    throw new Error('expected command: replay, explain, or audit');
   }
 
   const runId = argv[1]?.trim();
@@ -996,6 +997,136 @@ async function explainRun(
   };
 }
 
+type AuditFailureEntry = {
+  readonly kind: string;
+  readonly ref: string | null;
+};
+
+type AuditOutput = {
+  readonly runId: string;
+  readonly runDir: string;
+  readonly evidencePath: string | null;
+  readonly status: 'pass' | 'failed_audit' | 'absent';
+  readonly summary: string | null;
+  readonly completedTaskIds: readonly string[];
+  readonly citedMessageIds: readonly string[];
+  readonly citedArtifactRefs: readonly string[];
+  readonly unresolvedIssues: readonly string[];
+  readonly failures: readonly AuditFailureEntry[];
+};
+
+function readStringArray(value: unknown): readonly string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value.filter((entry): entry is string => typeof entry === 'string');
+}
+
+function readAuditFailures(value: unknown): readonly AuditFailureEntry[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value.flatMap((entry) => {
+    const record = recordOf(entry);
+    if (record == null || typeof record.kind !== 'string') {
+      return [];
+    }
+    return [{
+      kind: record.kind,
+      ref: typeof record.ref === 'string' ? record.ref : null,
+    }];
+  });
+}
+
+async function auditRun(
+  runId: string,
+  override: string | undefined,
+  warn: WarningSink = noopWarn,
+): Promise<AuditOutput> {
+  const layout = await discoverLayout(runId, override);
+  if (!(await pathExists(layout.eventsPath))) {
+    throw new Error(`missing events.jsonl at ${layout.eventsPath}`);
+  }
+
+  const events = await readJsonLines(layout.eventsPath, RunEventSchema);
+  await assertRunIdMatches(runId, layout, events, warn);
+
+  const finalReconciliation = await maybeReadFinalReconciliation(layout.finalReconciliationPath);
+  if (finalReconciliation == null) {
+    return {
+      runId,
+      runDir: layout.runDir,
+      evidencePath: layout.finalReconciliationPath,
+      status: 'absent',
+      summary: null,
+      completedTaskIds: [],
+      citedMessageIds: [],
+      citedArtifactRefs: [],
+      unresolvedIssues: [],
+      failures: [],
+    };
+  }
+
+  const auditRecord = recordOf(finalReconciliation.audit);
+  const auditStatusRaw = typeof auditRecord?.status === 'string' ? auditRecord.status : null;
+  const status: AuditOutput['status'] = auditStatusRaw === 'pass'
+    ? 'pass'
+    : auditStatusRaw === 'failed_audit'
+      ? 'failed_audit'
+      : 'absent';
+
+  return {
+    runId,
+    runDir: layout.runDir,
+    evidencePath: layout.finalReconciliationPath,
+    status,
+    summary: typeof finalReconciliation.summary === 'string' ? finalReconciliation.summary : null,
+    completedTaskIds: readStringArray(finalReconciliation.completedTaskIds),
+    citedMessageIds: readStringArray(finalReconciliation.citedMessageIds),
+    citedArtifactRefs: readStringArray(finalReconciliation.citedArtifactRefs),
+    unresolvedIssues: readStringArray(finalReconciliation.unresolvedIssues),
+    failures: readAuditFailures(auditRecord?.failures),
+  };
+}
+
+function renderAuditText(output: AuditOutput): string {
+  if (output.status === 'absent') {
+    return `ABSENT - no final-reconciliation evidence at ${output.evidencePath ?? '<runDir>/evidence/final-reconciliation.json'}`;
+  }
+
+  const header = output.status === 'pass'
+    ? 'PASS - final reconciliation audit succeeded'
+    : 'FAILED_AUDIT - final reconciliation audit reported failures';
+
+  const lines = [header];
+  if (output.summary != null) {
+    lines.push(`Summary: ${output.summary}`);
+  }
+  if (output.completedTaskIds.length > 0) {
+    lines.push(`Completed tasks (${output.completedTaskIds.length}): ${output.completedTaskIds.join(', ')}`);
+  }
+  if (output.citedMessageIds.length > 0) {
+    lines.push(`Cited messages (${output.citedMessageIds.length}): ${output.citedMessageIds.join(', ')}`);
+  }
+  if (output.citedArtifactRefs.length > 0) {
+    lines.push(`Cited artifacts (${output.citedArtifactRefs.length}): ${output.citedArtifactRefs.join(', ')}`);
+  }
+  if (output.unresolvedIssues.length > 0) {
+    lines.push(`Unresolved issues (${output.unresolvedIssues.length}):`);
+    for (const issue of output.unresolvedIssues) {
+      lines.push(`  - ${issue}`);
+    }
+  }
+  if (output.failures.length > 0) {
+    lines.push('Failures:');
+    for (const failure of output.failures) {
+      lines.push(`  - ${failure.kind}${failure.ref ? `: ${failure.ref}` : ''}`);
+    }
+  }
+
+  return lines.join('\n');
+}
+
 function renderReplayText(summary: ReplaySummary): string {
   if (summary.drift == null) {
     return 'PASS - replay matches projection';
@@ -1103,6 +1234,22 @@ export async function runCli(argv: readonly string[], io: Io = process): Promise
       return summary.drift == null ? 0 : 1;
     }
 
+    if (parsed.name === 'audit') {
+      const output = await auditRun(parsed.runId, parsed.runDir, warn);
+      io.stdout.write(
+        parsed.format === 'json'
+          ? `${JSON.stringify(output, null, 2)}\n`
+          : `${renderAuditText(output)}\n`,
+      );
+      if (output.status === 'pass') {
+        return 0;
+      }
+      if (output.status === 'failed_audit') {
+        return 1;
+      }
+      return 2;
+    }
+
     const output = await explainRun(parsed.runId, parsed.runDir, warn);
     io.stdout.write(
       parsed.format === 'json'
@@ -1118,12 +1265,14 @@ export async function runCli(argv: readonly string[], io: Io = process): Promise
 
 export const __internal = {
   assertRunIdMatches,
+  auditRun,
   classifyFailure,
   discoverLayout,
   explainRun,
   firstDiff,
   parseCliArgs,
   replayRun,
+  renderAuditText,
   renderExplainText,
   renderReplayText,
   reconstructTeamContext,
