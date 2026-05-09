@@ -603,7 +603,6 @@ async function runAgenticToolLoop(
   const agentInjectionByActorKey = new Map<string, AgentInjection>();
   const pendingMutationByActorKey = new Map<string, Deferred<ObservedMutatingToolCall>>();
   const pendingArmByActorKey = new Map<string, Deferred<void>>();
-  const bridgeSelfCheckByActorKey = new Map<string, Awaited<ReturnType<typeof runBridgeSelfCheck>>>();
   const usage = createUsageAccumulator();
   let initiatingActor: ActorRef | null = null;
   const leaseStore = makeTurnLeaseStore(leadActor);
@@ -785,29 +784,59 @@ async function runAgenticToolLoop(
   });
 
   try {
-    const failForBridgeSelfCheck = (actor: ActorRef, selfCheck: Awaited<ReturnType<typeof runBridgeSelfCheck>>) => {
-      pushRuntimeTrace({
-        kind: 'bridge_unavailable',
-        actor: actorKey(actor),
-        attemptedAt: options.clockProvider.nowIso(),
-        reason: selfCheck.reason ?? 'other',
-        ...(selfCheck.stderr == null ? {} : { stderr: selfCheck.stderr }),
-        latencyMs: selfCheck.latencyMs,
-      });
-      initiatingActor = { kind: 'manager' };
-      kernel.submit(
-        buildCompleteRunRequest(
-          kernel.state.runId,
-          {
-            status: 'failed',
-            summary: `bridge_unavailable: ${selfCheck.reason ?? 'other'}`,
-          },
-          options,
-        ),
-      );
-    };
+    for (const actorName of authored.declaredActors) {
+      const actor = authored.actors[actorName] as ActorRef;
+      if (actor.kind === 'manager') {
+        continue;
+      }
 
-    agentLoop: for (;;) {
+      const key = actorKey(actor);
+      const handoff = {
+        apiUrl: localApi.url,
+        bearerToken,
+        actorKey: key,
+      };
+      const injection = await prepareAgentInjection({
+        runId: kernel.state.runId,
+        actor,
+        workspaceCwd,
+        handoff,
+      });
+      agentInjectionByActorKey.set(key, injection);
+      const selfCheck = await withSyntheticSelfCheckState({
+        cwd: injection.cwd,
+        promptView: promptViewForActor(actor),
+        run: () => bridgeSelfCheck({ wrapperPath: injection.wrapperPath }),
+      });
+      if (!selfCheck.ok) {
+        pushRuntimeTrace({
+          kind: 'bridge_unavailable',
+          actor: key,
+          attemptedAt: options.clockProvider.nowIso(),
+          reason: selfCheck.reason ?? 'other',
+          ...(selfCheck.stderr == null ? {} : { stderr: selfCheck.stderr }),
+          latencyMs: selfCheck.latencyMs,
+        });
+        initiatingActor = { kind: 'manager' };
+        kernel.submit(
+          buildCompleteRunRequest(
+            kernel.state.runId,
+            {
+              status: 'failed',
+              summary: `bridge_unavailable: ${selfCheck.reason ?? 'other'}`,
+            },
+            options,
+          ),
+        );
+        return {
+          ...usage.finalize(),
+          initiatingActor,
+          runtimeTraces: runtimeTraceBuffer,
+        } satisfies AgenticToolUsageSummary;
+      }
+    }
+
+    for (;;) {
       const budgetFailure = state.turnIndex >= state.maxTurns
         ? { status: 'failed' as const, summary: 'maxTurns exhausted' }
         : state.noProgressTurns > state.maxNoProgressTurns
@@ -843,51 +872,19 @@ async function runAgenticToolLoop(
         },
       };
 
-      let session = agentSessionByActorKey.get(key);
-      let injection: AgentInjection | null = null;
-      const sessionBusy = session?.idlePromise != null;
-      if (session == null) {
-        injection = agentInjectionByActorKey.get(key) ?? null;
-        if (injection == null) {
-          injection = await prepareAgentInjection({
-            runId: kernel.state.runId,
-            actor,
-            workspaceCwd,
-            handoff,
-          });
-          agentInjectionByActorKey.set(key, injection);
-        }
-
-        const cachedSelfCheck = bridgeSelfCheckByActorKey.get(key);
-        if (cachedSelfCheck?.ok !== true) {
-          if (injection == null) {
-            throw new Error(`missing prepared bridge injection for ${key}`);
-          }
-          const bridgeInjection = injection;
-          const selfCheck = await withSyntheticSelfCheckState({
-            cwd: bridgeInjection.cwd,
-            promptView,
-            run: () => bridgeSelfCheck({ wrapperPath: bridgeInjection.wrapperPath }),
-          });
-          if (!selfCheck.ok) {
-            failForBridgeSelfCheck(actor, selfCheck);
-            break agentLoop;
-          }
-          bridgeSelfCheckByActorKey.set(key, selfCheck);
-        }
-      }
-
       leaseStore.setCurrent(actor);
       const mutationDeferred = createDeferred<ObservedMutatingToolCall>();
       const armDeferred = createDeferred<void>();
       pendingMutationByActorKey.set(key, mutationDeferred);
       pendingArmByActorKey.set(key, armDeferred);
 
+      let session = agentSessionByActorKey.get(key);
+      const sessionBusy = session?.idlePromise != null;
       if (session == null) {
+        const injection = agentInjectionByActorKey.get(key);
         if (injection == null) {
           throw new Error(`missing prepared bridge injection for ${key}`);
         }
-
         const prompt = buildAgenticToolPrompt({
           actor,
           role: actor.kind === 'role' ? actor.role : null,
@@ -1068,6 +1065,20 @@ async function runAgenticToolLoop(
         continue;
       }
 
+      const next = pickNextAgenticActor({
+        state: {
+          currentActor: actor,
+          delegationPointer: state.delegationPointer,
+          delegationTaskId: state.delegationTaskId,
+        },
+        acceptedEvent: observed.event,
+        directive: attemptedDirective,
+        leadActor,
+      });
+      if (waitRegistry.hasArmedWait(next.actor)) {
+        leaseStore.setCurrent(next.actor);
+      }
+
       const synthesizedCloseout = observed.plannedDelegatedTaskCloseout
         ?? planObservedDelegatedTaskCloseout({
           actor,
@@ -1111,21 +1122,14 @@ async function runAgenticToolLoop(
         waitRegistry.notify(observed.deferredWaitNotifyEvent, promptViewForActor);
       }
 
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+
       if (observed.toolName === 'pluto_complete_run' && observed.event.kind === 'run_completed') {
         initiatingActor = observed.actor;
         break;
       }
-
-      const next = pickNextAgenticActor({
-        state: {
-          currentActor: actor,
-          delegationPointer: state.delegationPointer,
-          delegationTaskId: state.delegationTaskId,
-        },
-        acceptedEvent: observed.event,
-        directive: attemptedDirective,
-        leadActor,
-      });
       state = {
         ...state,
         currentActor: next.actor,

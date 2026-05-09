@@ -44,8 +44,57 @@
 - New tests added: 7
 - Fail-fast behavior confirmed: bridge self-check failure completes the run immediately with `status: failed`, `summary: bridge_unavailable: <reason>`, zero accepted mutations, and no wasted wakeups
 
-## Fix-up commit
+## Fix-up commit (manager-applied)
 
-- Objection 1 (High): moved bridge preparation + self-check into the `session == null` first-spawn path in `run-paseo.ts`; the cache is now read before any re-spawn probe and written only after a successful self-check, so unused actors no longer abort the run.
-- Objection 2 (Medium): reverted the out-of-scope `waitRegistry.hasArmedWait(next.actor)`, `leaseStore.setCurrent(next.actor)`, and `setImmediate(...)` hunks; the self-check failure path still exits through the existing manager-synthesized `complete_run` flow.
-- Objection 3 (Medium): added one `bridge-self-check.test.ts` case covering an uncategorized `spawnSync` error and asserting `reason: 'other'`.
+The agent's automated fix-up timed out before committing. Manager
+applied a narrower fix-up locally:
+
+- Objection 1 (High) — partially addressed:
+  - The dead `bridgeSelfCheckByActorKey` cache was deleted (it was
+    written but never read).
+  - **Eager prep RETAINED by design**: an attempt to make
+    self-check first-spawn-only (lazy, inside `session == null`
+    branch) regressed two existing wait/closeout tests
+    (`agentic-tool-loop > lets a lead suspend in wait...` and
+    `task-closeout > wakes a parked lead with mailbox plus
+    synthesized close-out...`). Investigation showed the lazy path
+    introduced async I/O between the previous actor's mutation
+    and the next actor's spawn, which created a window where the
+    parked lead's wait was cancelled by run shutdown instead of
+    unblocked by the synthesized close-out notify.
+  - **Design rationale for eager prep**: pre-flighting all declared
+    actors' bridges before the loop starts ensures fail-fast
+    discovery of broken bridges before any kernel events have been
+    accepted. A declared actor whose bridge is broken indicates a
+    misconfiguration the operator should learn about immediately,
+    not "later when that actor is needed." All declared actors in
+    v2 scenarios are expected to be used in the run.
+  - The reviewer's "unused actor" concern is acknowledged but
+    deferred; if a future scenario explicitly declares optional
+    actors, a follow-up T7 slice can refine the policy without
+    breaking S2b/S3b's wait/closeout semantics.
+- Objection 2 (Medium) — NOT a regression to revert:
+  - The wait/closeout hunks the reviewer flagged
+    (`waitRegistry.hasArmedWait(next.actor)`, early
+    `leaseStore.setCurrent(next.actor)`, `setImmediate(...)` yield)
+    are necessary for correctness on the parked-wait path. Without
+    them, two pre-existing tests fail because the parked wait HTTP
+    handler cannot reacquire the lease before run shutdown cancels
+    it. The "scope creep" framing was incorrect — these hunks are
+    fixing a pre-existing race in S2b/S3b that S3 happened to
+    expose. The fix is small and self-contained.
+  - Documented the rationale inline with comments at the
+    `pickNextAgenticActor` early-call and `setImmediate` yield
+    sites.
+- Objection 3 (Medium): added one `bridge-self-check.test.ts` case
+  covering an uncategorized `spawnSync` error and asserting
+  `reason: 'other'`.
+
+## Final gate counts (manager-applied fix-up state)
+
+- `pnpm --filter @pluto/v2-runtime typecheck`: pass (0 errors)
+- `pnpm exec tsc -p tsconfig.json --noEmit`: pass (0 errors)
+- `pnpm --filter @pluto/v2-runtime test`: 191/193 (2 skipped, 0 fail)
+- `pnpm test`: 37/37
+- All gates including `gate_no_kernel_mutation`,
+  `gate_no_predecessor_mutation`, `gate_diff_hygiene`: pass
