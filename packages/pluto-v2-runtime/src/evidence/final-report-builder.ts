@@ -56,9 +56,14 @@ function initiatingActorLabel(actor: ActorRef | null): string {
   return 'unknown';
 }
 
+function isBenignWaitCancellationReason(reason: string): boolean {
+  return reason === 'client_idle_disconnect';
+}
+
 function failureWaitTracesOf(runtimeDiagnostics: RuntimeDiagnostics | undefined): RuntimeWaitTrace[] {
   return (runtimeDiagnostics?.waitTraces ?? []).filter((trace: RuntimeWaitTrace) =>
-    trace.kind === 'wait_cancelled' || trace.kind === 'wait_timed_out',
+    trace.kind === 'wait_timed_out'
+    || (trace.kind === 'wait_cancelled' && !isBenignWaitCancellationReason(trace.reason)),
   );
 }
 

@@ -50,6 +50,28 @@ describe('renderFinalReport', () => {
     expect(report).not.toContain('## Diagnostics');
   });
 
+  it('omits benign client idle wait cancellations from diagnostics', () => {
+    const views = replayAll([]);
+    const report = renderFinalReport({
+      runId: 'run-1',
+      status: 'succeeded',
+      summary: 'Done.',
+      initiatingActor: { kind: 'role', role: 'lead' },
+      evidence: views.evidence,
+      tasks: views.task,
+      mailbox: views.mailbox,
+      artifacts: [],
+      runtimeDiagnostics: {
+        bridgeUnavailable: [],
+        taskCloseoutRejected: [],
+        waitTraces: [{ kind: 'wait_cancelled', actor: 'role:lead', reason: 'client_idle_disconnect' }],
+      },
+    });
+
+    expect(report).not.toContain('## Diagnostics');
+    expect(report).not.toContain('client_idle_disconnect');
+  });
+
   it('renders unavailable usage totals as unavailable instead of zero', () => {
     const views = replayAll([]);
     const report = renderFinalReport({

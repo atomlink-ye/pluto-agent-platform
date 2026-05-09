@@ -238,6 +238,7 @@ function isTranscriptCursorRecord(
 const DEFAULT_MAX_STEPS = 1000;
 const DEFAULT_WAIT_TIMEOUT_SEC = 600;
 const TRANSCRIPT_TAIL_LINES = 200;
+const CLIENT_IDLE_DISCONNECT_REASON = 'client_idle_disconnect';
 
 function toPublicRunEvent(event: RunEvent): RunEvent {
   const { acceptedRequestKey: _acceptedRequestKey, ...publicEvent } =
@@ -783,6 +784,7 @@ async function runAgenticToolLoop(
         return waitCursorByActorKey.get(key) ?? deliveryCursorByActorKey.get(key) ?? -1;
       },
       onEventDelivered: rememberDeliveredEvent,
+      disconnectReason: CLIENT_IDLE_DISCONNECT_REASON,
       shutdownSignal: waitShutdownController.signal,
       shutdownReason: 'run_shutdown',
     },

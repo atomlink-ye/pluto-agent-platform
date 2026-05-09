@@ -4,10 +4,11 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { SCHEMA_VERSION, type ActorRef, type RunEvent } from '@pluto/v2-core';
+import { SCHEMA_VERSION, replayAll, type ActorRef, type RunEvent } from '@pluto/v2-core';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { checkSmokeAcceptanceForRunDir } from '../../scripts/smoke-acceptance.js';
+import { renderFinalReport } from '../../src/evidence/final-report-builder.js';
 
 const REPO_ROOT = fileURLToPath(new URL('../../../../', import.meta.url));
 const TSX_BIN = join(REPO_ROOT, 'node_modules', '.bin', 'tsx');
@@ -285,6 +286,31 @@ describe('smoke acceptance', () => {
       ok: true,
       failures: [],
     });
+  });
+
+  it('does not fail acceptance for a run whose report suppresses benign client idle disconnects', async () => {
+    const views = replayAll([]);
+    const finalReport = renderFinalReport({
+      runId: 'run-smoke-acceptance',
+      status: 'succeeded',
+      summary: 'done',
+      initiatingActor: LEAD,
+      evidence: views.evidence,
+      tasks: views.task,
+      mailbox: views.mailbox,
+      artifacts: [],
+      runtimeDiagnostics: {
+        bridgeUnavailable: [],
+        taskCloseoutRejected: [],
+        waitTraces: [{ kind: 'wait_cancelled', actor: 'role:lead', reason: 'client_idle_disconnect' }],
+      },
+    });
+    const runDir = await createRunDir({ finalReport });
+
+    const result = checkSmokeAcceptanceForRunDir({ runDir, expectFailure: false });
+
+    expect(result).toEqual({ ok: true, failures: [] });
+    expect(finalReport).not.toContain('## Diagnostics');
   });
 
   it('treats the captured POST-T5 fixture as a diagnosed expected failure', () => {

@@ -15,7 +15,7 @@ import {
 
 import type { PromptView } from '../../src/adapters/paseo/prompt-view.js';
 import { startPlutoLocalApi } from '../../src/api/pluto-local-api.js';
-import { makeWaitRegistry } from '../../src/api/wait-registry.js';
+import { makeWaitRegistry, type WaitTraceEvent } from '../../src/api/wait-registry.js';
 import { makeTurnLeaseStore } from '../../src/mcp/turn-lease.js';
 import { makePlutoToolHandlers } from '../../src/tools/pluto-tool-handlers.js';
 
@@ -113,16 +113,19 @@ async function withWaitApi(
     events: RunEvent[];
     registry: ReturnType<typeof makeWaitRegistry>;
     leaseStore: ReturnType<typeof makeTurnLeaseStore>;
-    traces: string[];
+    traces: WaitTraceEvent[];
     triggerShutdown(reason?: string): void;
     shutdown(): Promise<void>;
   }) => Promise<void>,
+  options?: {
+    disconnectReason?: string;
+  },
 ) {
   const kernel = createKernel();
   const leaseStore = makeTurnLeaseStore(LEAD);
   const shutdownController = new AbortController();
   const events: RunEvent[] = [];
-  const traces: string[] = [];
+  const traces: WaitTraceEvent[] = [];
   const cursorByActorKey = new Map<string, number>();
   const handlers = makePlutoToolHandlers({
     kernel,
@@ -144,7 +147,7 @@ async function withWaitApi(
   const registry = makeWaitRegistry({
     events: () => events,
     getPromptViewForActor: (actor) => promptViewFor(actor, [{ sequence: 0, from: GENERATOR, to: LEAD, kind: 'completion', body: 'done' }]),
-    onTrace: (event) => traces.push(event.kind),
+    onTrace: (event) => traces.push(event),
   });
   const api = await startPlutoLocalApi({
     bearerToken: TOKEN,
@@ -158,6 +161,7 @@ async function withWaitApi(
       onEventDelivered(actor, sequence) {
         cursorByActorKey.set(`${actor.kind}:${actor.kind === 'role' ? actor.role : actor.kind}`, sequence);
       },
+      disconnectReason: options?.disconnectReason,
       shutdownSignal: shutdownController.signal,
       shutdownReason: 'run_shutdown',
     },
@@ -241,16 +245,47 @@ describe('pluto local api wait-for-event route', () => {
       });
 
       await vi.waitFor(() => {
-        expect(traces).toContain('wait_armed');
+        expect(traces.some((trace) => trace.kind === 'wait_armed')).toBe(true);
       });
 
       controller.abort();
       await pending.catch(() => undefined);
 
       await vi.waitFor(() => {
-        expect(traces).toContain('wait_cancelled');
+        expect(traces.some((trace) => trace.kind === 'wait_cancelled' && trace.reason === 'http_disconnect')).toBe(true);
       });
     });
+  });
+
+  it('uses the configured benign disconnect reason when the HTTP client disconnects', async () => {
+    await withWaitApi(async ({ url, traces }) => {
+      const controller = new AbortController();
+      const pending = fetch(`${url}/tools/wait-for-event`, {
+        method: 'POST',
+        headers: {
+          authorization: `Bearer ${TOKEN}`,
+          'Pluto-Run-Actor': 'role:lead',
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({ timeoutSec: 300 }),
+        signal: controller.signal,
+      });
+
+      await vi.waitFor(() => {
+        expect(traces.some((trace) => trace.kind === 'wait_armed')).toBe(true);
+      });
+
+      controller.abort();
+      await pending.catch(() => undefined);
+
+      await vi.waitFor(() => {
+        expect(traces).toContainEqual({
+          kind: 'wait_cancelled',
+          actor: 'role:lead',
+          reason: 'client_idle_disconnect',
+        });
+      });
+    }, { disconnectReason: 'client_idle_disconnect' });
   });
 
   it('returns cancelled when shutdown hits during post-event lease reacquisition', async () => {
