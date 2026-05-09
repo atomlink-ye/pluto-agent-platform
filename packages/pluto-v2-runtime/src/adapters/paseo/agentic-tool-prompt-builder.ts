@@ -282,6 +282,8 @@ function compositeToolGuidance(actor: ActorRef, runBinPath: string, actorRef: st
       '',
       `Prefer \`${runBinPath} --actor ${actorRef} final-reconciliation --completed-tasks=<id>[,<id>...] --cited-messages=<id>[,<id>...] --summary="<one-sentence>"\` when the run is ready to terminate.`,
       'This is the canonical lead close-out path. It calls the lower-level `complete-run` primitive internally and stores the structured reconciliation payload in the terminal summary.',
+      'When you pass `--summary`, it must quote the generator\'s last accepted completion output VERBATIM in any place where you reference it.',
+      'Do not rewrite, paraphrase, improve, or "polish" that output - copy the generator\'s completion bullets exactly as written in your mailbox.',
       'Evaluator verdict mailbox messages may arrive with kind `final` for `pass`, or kind `task` for `needs-revision` and `fail`.',
       'Always inspect `body.verdict` to determine the outcome. Do not infer evaluator verdict outcome from mailbox `kind` alone.',
     ].join('\n');

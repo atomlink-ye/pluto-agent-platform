@@ -280,4 +280,15 @@ describe('buildAgenticToolPrompt', () => {
     expect(leadPrompt).toContain('Evaluator verdict mailbox messages may arrive with kind `final` for `pass`, or kind `task` for `needs-revision` and `fail`.');
     expect(leadPrompt).toContain('Always inspect `body.verdict` to determine the outcome. Do not infer evaluator verdict outcome from mailbox `kind` alone.');
   });
+
+  it('requires verbatim generator wording in the lead final-reconciliation section', () => {
+    const leadPrompt = buildPrompt(LEAD);
+    const sectionStart = leadPrompt.indexOf('## Canonical composite verb');
+    const reconciliationSection = leadPrompt.slice(sectionStart);
+
+    expect(reconciliationSection).toContain('final-reconciliation');
+    expect(reconciliationSection).toContain('VERBATIM');
+    expect(reconciliationSection).toContain('exactly as written');
+    expect(reconciliationSection).toContain('Do not rewrite, paraphrase');
+  });
 });
