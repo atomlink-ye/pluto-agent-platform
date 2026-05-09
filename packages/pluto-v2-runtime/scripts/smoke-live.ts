@@ -8,7 +8,12 @@ import { pathToFileURL } from 'node:url';
 
 import type { ActorRef, AuthoredSpec, replayAll } from '@pluto/v2-core';
 import type { loadAuthoredSpec, PaseoAgentSpec, PaseoCliClient } from '../src/index.js';
-import { checkSmokeAcceptanceForRunDir } from './smoke-acceptance.js';
+import {
+  checkSmokeAcceptanceForRunDir,
+  detectPollingBetweenMutations,
+  formatPollingDetection,
+  loadSmokeAcceptanceArtifacts,
+} from './smoke-acceptance.js';
 
 type ActorUsageTotals = {
   turns: number;
@@ -56,6 +61,8 @@ const DEFAULT_PROVIDER = 'opencode';
 const DEFAULT_MODEL = 'openai/gpt-5.4-mini';
 const DEFAULT_MODE = 'build';
 const DEFAULT_WAIT_TIMEOUT_SEC = 600;
+const POLLING_GATE_EXIT_CODE = 7;
+const POLLING_ALLOWED_RUN_IDS = new Map<string, string>();
 
 type SmokeInput = {
   authored: AuthoredSpec;
@@ -287,6 +294,33 @@ function makeTrackedClient(baseClient: PaseoCliClient, actorSpecByKey: Map<strin
   };
 }
 
+function reportPollingGateFailures(input: {
+  runId: string;
+  events: Parameters<typeof detectPollingBetweenMutations>[0]['events'];
+  transcripts: Parameters<typeof detectPollingBetweenMutations>[0]['transcripts'];
+}): boolean {
+  const detections = detectPollingBetweenMutations({
+    events: input.events,
+    transcripts: input.transcripts,
+  });
+  if (detections.length === 0) {
+    return false;
+  }
+
+  const allowReason = POLLING_ALLOWED_RUN_IDS.get(input.runId);
+  if (allowReason != null) {
+    process.stderr.write(`polling gate skipped: runId=${input.runId} reason=${allowReason}\n`);
+    return false;
+  }
+
+  process.stderr.write(`smoke-live: polling gate failed for runId=${input.runId}\n`);
+  for (const detection of detections) {
+    process.stderr.write(`${formatPollingDetection(detection)}\n`);
+  }
+  process.exitCode = POLLING_GATE_EXIT_CODE;
+  return true;
+}
+
 async function main(): Promise<void> {
   const argv = process.argv.slice(2);
   // Resolve repo root from the script's own location so `pnpm --filter ... exec`
@@ -303,6 +337,11 @@ async function main(): Promise<void> {
 
   if (runDirArg != null) {
     const runDir = resolve(repoRoot, runDirArg);
+    const artifacts = loadSmokeAcceptanceArtifacts(runDir);
+    const runId = artifacts.events[0]?.runId ?? runDirArg;
+    if (reportPollingGateFailures({ runId, events: artifacts.events, transcripts: artifacts.transcripts })) {
+      return;
+    }
     const acceptance = checkSmokeAcceptanceForRunDir({ runDir, expectFailure });
     if (!acceptance.ok) {
       for (const failure of acceptance.failures) {
@@ -497,6 +536,7 @@ async function main(): Promise<void> {
     await writeFile(join(repoRoot, 'tests/fixtures/live-smoke/agentic-tool-live-runid.txt'), `${runId}\n`, 'utf8');
   }
 
+  const transcripts: Record<string, string> = {};
   for (const actorName of authored.declaredActors) {
     const actor = authored.actors[actorName];
     if (!actor) {
@@ -504,7 +544,12 @@ async function main(): Promise<void> {
     }
     const key = actorKey(actor);
     const transcript = tracked.transcriptByActorKey.get(key) ?? '';
+    transcripts[key] = transcript;
     await writeFile(join(transcriptDir, `${key}.txt`), transcript, 'utf8');
+  }
+
+  if (reportPollingGateFailures({ runId, events: result.events, transcripts })) {
+    return;
   }
 
   const acceptance = checkSmokeAcceptanceForRunDir({ runDir: fixtureDir, expectFailure });

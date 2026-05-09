@@ -24,6 +24,12 @@ export type SmokeAcceptanceResult = {
   failures: string[];
 };
 
+export type PollingDetection = {
+  actor: string;
+  afterMutationEventId: string;
+  readStateCalls: number;
+};
+
 function parseJsonLines<T>(text: string): T[] {
   return text
     .split('\n')
@@ -110,11 +116,15 @@ function acceptedMutationEventsByActor(events: ReadonlyArray<RunEvent>): Map<str
   return byActor;
 }
 
-function pollingFailuresByActor(input: {
+export function formatPollingDetection(detection: PollingDetection): string {
+  return `polling_detected: actor=${detection.actor} after_mutation=${detection.afterMutationEventId} read_state_calls=${detection.readStateCalls}`;
+}
+
+export function detectPollingBetweenMutations(input: {
   events: ReadonlyArray<RunEvent>;
   transcripts: Readonly<Record<string, string>>;
-}): string[] {
-  const failures: string[] = [];
+}): PollingDetection[] {
+  const detections: PollingDetection[] = [];
   const mutationsByActor = acceptedMutationEventsByActor(input.events);
 
   for (const [actor, transcript] of Object.entries(input.transcripts)) {
@@ -141,9 +151,11 @@ function pollingFailuresByActor(input: {
       }
 
       if (mutationIndex >= 0 && readStateCallsSinceMutation > 0) {
-        failures.push(
-          `polling_detected: actor=${actor} after_mutation=${mutationEvents[mutationIndex]?.eventId ?? `mutation-${mutationIndex + 1}`} read_state_calls=${readStateCallsSinceMutation}`,
-        );
+        detections.push({
+          actor,
+          afterMutationEventId: mutationEvents[mutationIndex]?.eventId ?? `mutation-${mutationIndex + 1}`,
+          readStateCalls: readStateCallsSinceMutation,
+        });
       }
 
       mutationIndex += 1;
@@ -151,7 +163,14 @@ function pollingFailuresByActor(input: {
     }
   }
 
-  return failures;
+  return detections;
+}
+
+function pollingFailuresByActor(input: {
+  events: ReadonlyArray<RunEvent>;
+  transcripts: Readonly<Record<string, string>>;
+}): string[] {
+  return detectPollingBetweenMutations(input).map(formatPollingDetection);
 }
 
 export function checkSmokeAcceptance(input: SmokeAcceptanceArtifacts & { expectFailure: boolean }): SmokeAcceptanceResult {
