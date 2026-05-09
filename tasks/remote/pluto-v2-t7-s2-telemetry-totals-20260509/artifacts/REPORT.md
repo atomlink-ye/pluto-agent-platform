@@ -43,5 +43,5 @@ new tests: 3
 typecheck-new-errors: 0
 runtime-tests: 212/214
 root-tests: 27/37
-push: pending
+push: failed
 ```
