@@ -14,8 +14,7 @@ Run after meaningful v2 changes on `main`.
 - [ ] `pnpm pluto:run --spec packages/pluto-v2-runtime/test-fixtures/scenarios/hello-team-paseo-mock/scenario.yaml`
 - [ ] stdout matches the v2 bridge shape: `status`, `summary`, `evidencePacketPath`, `transcriptPaths`, `exitCode`
 - [ ] invalid or archived legacy flags fail cleanly instead of selecting another runtime path
-- [ ] `pnpm pluto:runs replay <runId> --run-dir=<path>` returns PASS for a known-good run
-- [ ] `pnpm pluto:runs explain <runId> --run-dir=<path>` prints run metadata, tasks, mailbox, and artifacts
+- [ ] `pnpm pluto:runs replay <runId> --run-dir=<path>` and `pnpm pluto:runs explain <runId> --run-dir=<path>` both produce usable output on a finished run
 
 ## 3. Package Coverage
 

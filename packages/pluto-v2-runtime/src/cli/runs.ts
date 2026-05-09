@@ -19,15 +19,17 @@ import {
   type MailboxProjectionMessage,
   type RunEvent,
   type RunState,
+  type TaskProjectionTask,
   type TeamContext,
 } from '@pluto/v2-core';
 import { z } from 'zod';
 
-import { EvidencePacketShape } from '../evidence/evidence-packet.js';
+import { EvidencePacketShape, type EvidencePacket, type RuntimeDiagnostics } from '../evidence/evidence-packet.js';
 import { parseAuthoredSpec } from '../loader/authored-spec-loader.js';
 
 type CommandName = 'replay' | 'explain';
 type OutputFormat = 'json' | 'text';
+type WarningSink = (message: string) => void;
 
 type ParsedHelp = {
   readonly kind: 'help';
@@ -52,6 +54,7 @@ type ProjectionLayout = {
   readonly artifactsPath: string | null;
   readonly evidencePacketPath: string | null;
   readonly finalReconciliationPath: string | null;
+  readonly runStatePath: string | null;
   readonly artifactDir: string | null;
 };
 
@@ -71,12 +74,19 @@ type ReplaySummary = {
   readonly drift: ReplayDrift | null;
 };
 
+type ExplainTaskHistoryEntry = {
+  readonly at: string | null;
+  readonly from: string;
+  readonly to: string;
+};
+
 type ExplainTask = {
   readonly taskId: string;
   readonly state: string;
   readonly owner: string;
   readonly summary: string;
   readonly dependsOn: readonly string[];
+  readonly history: readonly ExplainTaskHistoryEntry[];
 };
 
 type ExplainMailboxMessage = {
@@ -110,13 +120,17 @@ type ExplainOutput = {
   };
   readonly actors: readonly string[];
   readonly tasks: readonly ExplainTask[];
+  readonly tasksDriftDetected: boolean;
   readonly mailboxByActor: readonly {
     readonly actor: string;
     readonly messages: readonly ExplainMailboxMessage[];
   }[];
+  readonly citations: readonly EvidencePacket['citations'][number][];
   readonly artifacts: readonly ExplainArtifact[];
+  readonly runtimeDiagnostics: RuntimeDiagnostics | null;
   readonly finalReconciliation: JsonMap | null;
   readonly failureClassification: string | null;
+  readonly failureClassificationSource: 'structured' | 'summary' | 'none';
 };
 
 type Io = {
@@ -124,8 +138,12 @@ type Io = {
   readonly stderr: Pick<NodeJS.WritableStream, 'write'>;
 };
 
+type TaskProjectionMap = z.infer<typeof TaskProjectionViewStateSchema>['tasks'];
+type ArtifactProjection = z.infer<typeof ArtifactProjectionSchema>;
+type SpecContext = Pick<TeamContext, 'declaredActors' | 'initialTasks'>;
+
 const COMMANDS: readonly CommandName[] = ['replay', 'explain'];
-const DEFAULT_RUN_ROOT = 'runs';
+const DEFAULT_RUN_ROOT = join('.pluto', 'runs');
 const MAX_BODY_PREVIEW = 120;
 const SPEC_FILE_CANDIDATES = [
   'authored-spec.yaml',
@@ -151,6 +169,15 @@ const HELP_TEXT = [
 ].join('\n');
 
 const ArtifactProjectionSchema = z.array(ArtifactPublishedPayloadSchema);
+const RunStateRunIdSchema = z.object({
+  runId: z.string(),
+}).passthrough();
+
+const noopWarn: WarningSink = () => {};
+
+function isCommandName(value: string): value is CommandName {
+  return COMMANDS.includes(value as CommandName);
+}
 
 function toClosedActorRef(
   actor:
@@ -195,16 +222,8 @@ function cloneAuthorityPolicy(): TeamContext['policy'] {
   };
 }
 
-function isCommandName(value: string): value is CommandName {
-  return COMMANDS.includes(value as CommandName);
-}
-
 function actorLabel(actor: ActorRef | { readonly kind: 'broadcast' }): string {
-  if (actor.kind === 'broadcast') {
-    return 'broadcast';
-  }
-
-  return actorKey(actor);
+  return actor.kind === 'broadcast' ? 'broadcast' : actorKey(actor);
 }
 
 function truncateBody(body: string): string {
@@ -440,6 +459,7 @@ async function discoverLayout(runId: string, override: string | undefined): Prom
     ]),
     evidencePacketPath: await firstExistingPath([join(runDir, 'evidence-packet.json')]),
     finalReconciliationPath: await firstExistingPath([join(runDir, 'evidence', 'final-reconciliation.json')]),
+    runStatePath: await firstExistingPath([join(runDir, 'state', 'run-state.json')]),
     artifactDir: (await pathExists(join(runDir, 'artifacts'))) ? join(runDir, 'artifacts') : null,
   };
 }
@@ -463,7 +483,7 @@ async function readJsonFile<T>(filePath: string, schema: z.ZodType<T>): Promise<
   return schema.parse(JSON.parse(await readFile(filePath, 'utf8')));
 }
 
-function parseTaskProjection(input: unknown): Record<string, unknown> {
+function parseTaskProjection(input: unknown): TaskProjectionMap {
   const direct = TaskProjectionViewStateSchema.shape.tasks.safeParse(input);
   if (direct.success) {
     return direct.data;
@@ -477,7 +497,7 @@ function parseTaskProjection(input: unknown): Record<string, unknown> {
   throw new Error('tasks projection must be a task map or { tasks } object');
 }
 
-async function readTaskProjection(filePath: string): Promise<Record<string, unknown>> {
+async function readTaskProjection(filePath: string): Promise<TaskProjectionMap> {
   return parseTaskProjection(JSON.parse(await readFile(filePath, 'utf8')));
 }
 
@@ -489,7 +509,7 @@ async function maybeReadMailbox(filePath: string | null): Promise<MailboxProject
   return readJsonLines(filePath, MailboxProjectionMessageSchema);
 }
 
-async function maybeReadArtifacts(filePath: string | null) {
+async function maybeReadArtifacts(filePath: string | null): Promise<ArtifactProjection> {
   if (filePath == null) {
     return [];
   }
@@ -497,12 +517,16 @@ async function maybeReadArtifacts(filePath: string | null) {
   return readJsonFile(filePath, ArtifactProjectionSchema);
 }
 
-async function maybeReadEvidencePacket(filePath: string | null) {
+async function maybeReadEvidencePacket(filePath: string | null): Promise<EvidencePacket | null> {
   if (filePath == null) {
     return null;
   }
 
-  return readJsonFile(filePath, EvidencePacketShape);
+  const parsed = await readJsonFile(filePath, EvidencePacketShape);
+  return {
+    ...parsed,
+    initiatingActor: parsed.initiatingActor ?? null,
+  };
 }
 
 async function maybeReadFinalReconciliation(filePath: string | null): Promise<JsonMap | null> {
@@ -521,10 +545,9 @@ async function maybeReadFinalReconciliation(filePath: string | null): Promise<Js
 function collectInferredActors(events: readonly RunEvent[]): ActorRef[] {
   const actors = new Map<string, ActorRef>();
   const pushActor = (value: ActorRef | null | undefined) => {
-    if (value == null) {
-      return;
+    if (value != null) {
+      actors.set(actorKey(value), value);
     }
-    actors.set(actorKey(value), value);
   };
 
   for (const event of events) {
@@ -546,39 +569,55 @@ function collectInferredActors(events: readonly RunEvent[]): ActorRef[] {
   return [...actors.values()].sort((left, right) => actorKey(left).localeCompare(actorKey(right)));
 }
 
-async function maybeReadSpecContext(runDir: string): Promise<Pick<TeamContext, 'declaredActors' | 'initialTasks'> | null> {
+function toWarning(message: string): string {
+  return `WARNING: ${message}`;
+}
+
+async function maybeReadSpecContext(runDir: string, warn: WarningSink = noopWarn): Promise<SpecContext | null> {
   for (const candidate of SPEC_FILE_CANDIDATES) {
     const specPath = join(runDir, candidate);
     if (!(await pathExists(specPath))) {
       continue;
     }
 
-    const authored = parseAuthoredSpec(await readFile(specPath, 'utf8'), specPath);
-    const declaredActors = authored.declaredActors
-      .map((actorName) => toClosedActorRef(authored.actors[actorName]))
-      .filter((actor): actor is ActorRef => actor != null);
+    try {
+      const authored = parseAuthoredSpec(await readFile(specPath, 'utf8'), specPath);
+      const declaredActors = authored.declaredActors
+        .map((actorName) => toClosedActorRef(authored.actors[actorName]))
+        .filter((actor): actor is ActorRef => actor != null);
 
-    return {
-      declaredActors,
-      initialTasks: (authored.initialTasks ?? []).map((task) => ({
-        taskId: task.taskId,
-        title: task.title,
-        ownerActor: task.ownerActor == null ? null : toClosedActorRef(authored.actors[task.ownerActor]),
-        dependsOn: task.dependsOn,
-      })),
-    };
+      return {
+        declaredActors,
+        initialTasks: (authored.initialTasks ?? []).map((task) => ({
+          taskId: task.taskId,
+          title: task.title,
+          ownerActor: task.ownerActor == null ? null : toClosedActorRef(authored.actors[task.ownerActor]),
+          dependsOn: task.dependsOn,
+        })),
+      };
+    } catch (error) {
+      warn(
+        toWarning(
+          `unable to parse ${relative(runDir, specPath)} for replay context recovery; falling back to inferred actors (${error instanceof Error ? error.message : String(error)})`,
+        ),
+      );
+    }
   }
 
   return null;
 }
 
-async function reconstructTeamContext(runDir: string, events: readonly RunEvent[]): Promise<TeamContext> {
+async function reconstructTeamContext(
+  runDir: string,
+  events: readonly RunEvent[],
+  warn: WarningSink = noopWarn,
+): Promise<TeamContext> {
   const runStarted = events.find((event): event is Extract<RunEvent, { kind: 'run_started' }> => event.kind === 'run_started');
   if (runStarted == null) {
     throw new Error('events.jsonl is missing run_started');
   }
 
-  const specContext = await maybeReadSpecContext(runDir);
+  const specContext = await maybeReadSpecContext(runDir, warn);
   return {
     runId: runStarted.runId,
     scenarioRef: runStarted.payload.scenarioRef,
@@ -589,45 +628,98 @@ async function reconstructTeamContext(runDir: string, events: readonly RunEvent[
   };
 }
 
-async function replayRun(runId: string, override: string | undefined): Promise<ReplaySummary> {
-  const layout = await discoverLayout(runId, override);
-  if (!(await pathExists(layout.eventsPath))) {
-    throw new Error(`missing events.jsonl at ${layout.eventsPath}`);
+async function runIdFromStateFile(filePath: string | null): Promise<string | null> {
+  if (filePath == null) {
+    return null;
   }
 
-  if (layout.tasksPath == null) {
-    throw new Error(`missing task projection for ${layout.runDir}`);
+  try {
+    const parsed = RunStateRunIdSchema.safeParse(JSON.parse(await readFile(filePath, 'utf8')));
+    return parsed.success ? parsed.data.runId : null;
+  } catch {
+    return null;
   }
-
-  const events = await readJsonLines(layout.eventsPath, RunEventSchema);
-  const teamContext = await reconstructTeamContext(layout.runDir, events);
-  const projection = await readTaskProjection(layout.tasksPath);
-  const replayedViews = replayAll(events);
-
-  let state = initialState(teamContext);
-  for (const event of events) {
-    state = reduce(state, event);
-  }
-
-  const drift = firstDiff(
-    toComparable(replayedViews.task.tasks),
-    toComparable(projection),
-  );
-
-  return {
-    runId,
-    runDir: layout.runDir,
-    projectionPath: layout.tasksPath,
-    state: {
-      runId: state.runId,
-      sequence: state.sequence,
-      status: state.status,
-    },
-    drift,
-  };
 }
 
-function classifyFailure(status: string, summary: string | null): string | null {
+async function assertRunIdMatches(
+  expectedRunId: string,
+  layout: ProjectionLayout,
+  events: readonly RunEvent[],
+  warn: WarningSink = noopWarn,
+): Promise<void> {
+  const runIdFromState = await runIdFromStateFile(layout.runStatePath);
+  if (runIdFromState != null) {
+    if (runIdFromState !== expectedRunId) {
+      throw new Error(`RUN_ID_MISMATCH: expected ${expectedRunId}, found ${runIdFromState}`);
+    }
+    return;
+  }
+
+  const runIdFromEvents = events[0]?.runId ?? null;
+  if (typeof runIdFromEvents === 'string' && runIdFromEvents.length > 0) {
+    if (runIdFromEvents !== expectedRunId) {
+      throw new Error(`RUN_ID_MISMATCH: expected ${expectedRunId}, found ${runIdFromEvents}`);
+    }
+    return;
+  }
+
+  warn(toWarning(`unable to verify runId for ${layout.runDir}; continuing without mismatch check`));
+}
+
+function taskHistoryIndex(events: readonly RunEvent[]): ReadonlyMap<string, readonly ExplainTaskHistoryEntry[]> {
+  const histories = new Map<string, ExplainTaskHistoryEntry[]>();
+
+  for (const event of events) {
+    if (event.kind !== 'task_state_changed') {
+      continue;
+    }
+
+    const entries = histories.get(event.payload.taskId) ?? [];
+    entries.push({
+      at: event.timestamp,
+      from: event.payload.from,
+      to: event.payload.to,
+    });
+    histories.set(event.payload.taskId, entries);
+  }
+
+  return histories;
+}
+
+function toExplainTasks(
+  taskSource: TaskProjectionMap,
+  histories: ReadonlyMap<string, readonly ExplainTaskHistoryEntry[]>,
+): readonly ExplainTask[] {
+  return Object.entries(taskSource)
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([taskId, task]) => ({
+      taskId,
+      state: task.state,
+      owner: task.ownerActor == null ? 'unassigned' : actorLabel(task.ownerActor),
+      summary: task.title,
+      dependsOn: task.dependsOn,
+      history: histories.get(taskId) ?? [],
+    }));
+}
+
+function recordOf(value: unknown): Record<string, unknown> | null {
+  return value != null && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null;
+}
+
+function finalReconciliationAuditStatus(finalReconciliation: JsonMap | null): string | null {
+  const audit = recordOf(finalReconciliation?.audit);
+  return typeof audit?.status === 'string' ? audit.status : null;
+}
+
+function hasRuntimeDiagnostics(runtimeDiagnostics: RuntimeDiagnostics | null): boolean {
+  return (runtimeDiagnostics?.bridgeUnavailable?.length ?? 0) > 0
+    || (runtimeDiagnostics?.taskCloseoutRejected?.length ?? 0) > 0
+    || (runtimeDiagnostics?.waitTraces?.length ?? 0) > 0;
+}
+
+function classifyFailureFromSummary(status: string, summary: string | null): string | null {
   if (status !== 'failed' && status !== 'cancelled') {
     return null;
   }
@@ -649,6 +741,65 @@ function classifyFailure(status: string, summary: string | null): string | null 
   return summary?.trim() || `${status} without a summary`;
 }
 
+function classifyFailure(args: {
+  readonly status: string;
+  readonly summary: string | null;
+  readonly runtimeDiagnostics: RuntimeDiagnostics | null;
+  readonly finalReconciliation: JsonMap | null;
+}): { readonly classification: string | null; readonly source: 'structured' | 'summary' | 'none' } {
+  if (finalReconciliationAuditStatus(args.finalReconciliation) === 'failed_audit') {
+    return {
+      classification: 'audit failure',
+      source: 'structured',
+    };
+  }
+
+  const timedOutTrace = args.runtimeDiagnostics?.waitTraces?.find((trace) => trace.kind === 'wait_timed_out');
+  if (timedOutTrace?.kind === 'wait_timed_out') {
+    return {
+      classification: `${timedOutTrace.actor} wait timed out`,
+      source: 'structured',
+    };
+  }
+
+  const rejectedCloseout = args.runtimeDiagnostics?.taskCloseoutRejected?.[0];
+  if (rejectedCloseout != null) {
+    return {
+      classification: `task ${rejectedCloseout.taskId} closeout rejected`,
+      source: 'structured',
+    };
+  }
+
+  const bridgeUnavailable = args.runtimeDiagnostics?.bridgeUnavailable?.[0];
+  if (bridgeUnavailable != null) {
+    return {
+      classification: `bridge unavailable for ${bridgeUnavailable.actor}`,
+      source: 'structured',
+    };
+  }
+
+  const cancelledTrace = args.runtimeDiagnostics?.waitTraces?.find((trace) => trace.kind === 'wait_cancelled');
+  if (cancelledTrace?.kind === 'wait_cancelled') {
+    return {
+      classification: `${cancelledTrace.actor} wait cancelled: ${cancelledTrace.reason}`,
+      source: 'structured',
+    };
+  }
+
+  const summaryClassification = classifyFailureFromSummary(args.status, args.summary);
+  if (summaryClassification != null) {
+    return {
+      classification: summaryClassification,
+      source: 'summary',
+    };
+  }
+
+  return {
+    classification: null,
+    source: 'none',
+  };
+}
+
 async function artifactRefFor(layout: ProjectionLayout, artifactId: string): Promise<string> {
   if (layout.artifactDir == null) {
     return artifactId;
@@ -656,26 +807,122 @@ async function artifactRefFor(layout: ProjectionLayout, artifactId: string): Pro
 
   const entries = await readdir(layout.artifactDir);
   const match = entries.find((entry) => entry === `${artifactId}.txt` || entry.startsWith(`${artifactId}.`));
-  if (match == null) {
-    return artifactId;
-  }
-
-  return relative(layout.runDir, join(layout.artifactDir, match));
+  return match == null ? artifactId : relative(layout.runDir, join(layout.artifactDir, match));
 }
 
-async function explainRun(runId: string, override: string | undefined): Promise<ExplainOutput> {
+function renderTaskHistory(entries: readonly ExplainTaskHistoryEntry[]): string | null {
+  const [first, ...rest] = entries;
+  if (first == null) {
+    return null;
+  }
+
+  let rendered = `${first.from} -> ${first.to} (${first.at ?? 'unknown'})`;
+  for (const entry of rest) {
+    rendered += ` -> ${entry.to} (${entry.at ?? 'unknown'})`;
+  }
+
+  return rendered;
+}
+
+function appendRuntimeDiagnostics(lines: string[], runtimeDiagnostics: RuntimeDiagnostics | null): void {
+  if (!hasRuntimeDiagnostics(runtimeDiagnostics)) {
+    return;
+  }
+
+  lines.push('', 'Diagnostics');
+
+  for (const entry of runtimeDiagnostics?.bridgeUnavailable ?? []) {
+    lines.push(`- bridge_unavailable | actor=${entry.actor} | reason=${entry.reason} | latencyMs=${entry.latencyMs}`);
+  }
+
+  for (const entry of runtimeDiagnostics?.taskCloseoutRejected ?? []) {
+    lines.push(`- task_closeout_rejected | actor=${entry.actor} | taskId=${entry.taskId} | reason=${entry.reason}`);
+  }
+
+  for (const trace of runtimeDiagnostics?.waitTraces ?? []) {
+    switch (trace.kind) {
+      case 'wait_armed':
+        lines.push(`- wait_armed | actor=${trace.actor} | fromSequence=${trace.fromSequence} | at=${trace.armedAt}`);
+        break;
+      case 'wait_unblocked':
+        lines.push(`- wait_unblocked | actor=${trace.actor} | sequence=${trace.sequence} | latencyMs=${trace.latencyMs}`);
+        break;
+      case 'wait_timed_out':
+        lines.push(`- wait_timed_out | actor=${trace.actor} | timeoutMs=${trace.timeoutMs}`);
+        break;
+      case 'wait_cancelled':
+        lines.push(`- wait_cancelled | actor=${trace.actor} | reason=${trace.reason}`);
+        break;
+    }
+  }
+}
+
+async function replayRun(
+  runId: string,
+  override: string | undefined,
+  warn: WarningSink = noopWarn,
+): Promise<ReplaySummary> {
+  const layout = await discoverLayout(runId, override);
+  if (!(await pathExists(layout.eventsPath))) {
+    throw new Error(`missing events.jsonl at ${layout.eventsPath}`);
+  }
+
+  if (layout.tasksPath == null) {
+    throw new Error(`missing task projection for ${layout.runDir}`);
+  }
+
+  const events = await readJsonLines(layout.eventsPath, RunEventSchema);
+  await assertRunIdMatches(runId, layout, events, warn);
+  const teamContext = await reconstructTeamContext(layout.runDir, events, warn);
+  const projection = await readTaskProjection(layout.tasksPath);
+  const replayedViews = replayAll(events);
+
+  let state = initialState(teamContext);
+  for (const event of events) {
+    state = reduce(state, event);
+  }
+
+  return {
+    runId,
+    runDir: layout.runDir,
+    projectionPath: layout.tasksPath,
+    state: {
+      runId: state.runId,
+      sequence: state.sequence,
+      status: state.status,
+    },
+    drift: firstDiff(
+      toComparable(replayedViews.task.tasks),
+      toComparable(projection),
+    ),
+  };
+}
+
+async function explainRun(
+  runId: string,
+  override: string | undefined,
+  warn: WarningSink = noopWarn,
+): Promise<ExplainOutput> {
   const layout = await discoverLayout(runId, override);
   if (!(await pathExists(layout.eventsPath))) {
     throw new Error(`missing events.jsonl at ${layout.eventsPath}`);
   }
 
   const events = await readJsonLines(layout.eventsPath, RunEventSchema);
+  await assertRunIdMatches(runId, layout, events, warn);
   const views = replayAll(events);
   const evidencePacket = await maybeReadEvidencePacket(layout.evidencePacketPath);
   const mailboxProjection = await maybeReadMailbox(layout.mailboxPath);
   const artifactsProjection = await maybeReadArtifacts(layout.artifactsPath);
   const finalReconciliation = await maybeReadFinalReconciliation(layout.finalReconciliationPath);
+  const taskProjection = layout.tasksPath == null ? null : await readTaskProjection(layout.tasksPath);
 
+  const replayTasks = views.task.tasks;
+  const taskDrift = taskProjection == null
+    ? null
+    : firstDiff(toComparable(replayTasks), toComparable(taskProjection));
+  const taskSource = taskProjection ?? replayTasks;
+  const histories = taskHistoryIndex(events);
   const mailboxSource = mailboxProjection.length > 0 ? mailboxProjection : views.mailbox.messages;
   const timestampByMessageId = new Map(
     events
@@ -683,22 +930,7 @@ async function explainRun(runId: string, override: string | undefined): Promise<
       .map((event) => [event.payload.messageId, event.timestamp] as const),
   );
 
-  const runRecord = views.evidence.run;
-  const startedAt = evidencePacket?.startedAt ?? runRecord?.startedAt ?? null;
-  const finishedAt = evidencePacket?.completedAt ?? runRecord?.completedAt ?? null;
-  const durationMs = startedAt != null && finishedAt != null
-    ? Date.parse(finishedAt) - Date.parse(startedAt)
-    : null;
-  const tasks = Object.entries(views.task.tasks)
-    .sort(([left], [right]) => left.localeCompare(right))
-    .map(([taskId, task]) => ({
-      taskId,
-      state: task.state,
-      owner: task.ownerActor == null ? 'unassigned' : actorLabel(task.ownerActor),
-      summary: task.title,
-      dependsOn: task.dependsOn,
-    } satisfies ExplainTask));
-
+  const tasks = toExplainTasks(taskSource, histories);
   const mailboxEntries = mailboxSource.map((message) => ({
     messageId: message.messageId,
     from: actorLabel(message.fromActor),
@@ -707,7 +939,6 @@ async function explainRun(runId: string, override: string | undefined): Promise<
     timestamp: timestampByMessageId.get(message.messageId) ?? null,
     body: truncateBody(message.body),
   } satisfies ExplainMailboxMessage));
-
   const mailboxByActor = [...new Set(mailboxEntries.map((message) => message.from))]
     .sort((left, right) => left.localeCompare(right))
     .map((actor) => ({
@@ -716,18 +947,28 @@ async function explainRun(runId: string, override: string | undefined): Promise<
     }));
 
   const artifacts = await Promise.all(
-    (artifactsProjection.length > 0 ? artifactsProjection : evidencePacket?.artifacts ?? [])
-      .map(async (artifact) => ({
-        artifactId: artifact.artifactId,
-        kind: artifact.kind,
-        ref: await artifactRefFor(layout, artifact.artifactId),
-        byteSize: artifact.byteSize,
-      } satisfies ExplainArtifact)),
+    (artifactsProjection.length > 0 ? artifactsProjection : evidencePacket?.artifacts ?? []).map(async (artifact) => ({
+      artifactId: artifact.artifactId,
+      kind: artifact.kind,
+      ref: await artifactRefFor(layout, artifact.artifactId),
+      byteSize: artifact.byteSize,
+    } satisfies ExplainArtifact)),
   );
 
-  const actors = collectInferredActors(events).map((actor) => actorLabel(actor));
+  const runRecord = views.evidence.run;
+  const startedAt = evidencePacket?.startedAt ?? runRecord?.startedAt ?? null;
+  const finishedAt = evidencePacket?.completedAt ?? runRecord?.completedAt ?? null;
+  const durationMs = startedAt != null && finishedAt != null
+    ? Date.parse(finishedAt) - Date.parse(startedAt)
+    : null;
   const summary = evidencePacket?.summary ?? runRecord?.summary ?? null;
   const status = evidencePacket?.status ?? runRecord?.status ?? 'in_progress';
+  const failure = classifyFailure({
+    status,
+    summary,
+    runtimeDiagnostics: evidencePacket?.runtimeDiagnostics ?? null,
+    finalReconciliation,
+  });
 
   return {
     runId,
@@ -742,22 +983,26 @@ async function explainRun(runId: string, override: string | undefined): Promise<
       eventCount: events.length,
       summary,
     },
-    actors,
+    actors: collectInferredActors(events).map((actor) => actorLabel(actor)),
     tasks,
+    tasksDriftDetected: taskDrift != null,
     mailboxByActor,
+    citations: evidencePacket?.citations ?? [],
     artifacts: artifacts.sort((left, right) => left.artifactId.localeCompare(right.artifactId)),
+    runtimeDiagnostics: evidencePacket?.runtimeDiagnostics ?? null,
     finalReconciliation,
-    failureClassification: classifyFailure(status, summary),
+    failureClassification: failure.classification,
+    failureClassificationSource: failure.source,
   };
 }
 
 function renderReplayText(summary: ReplaySummary): string {
   if (summary.drift == null) {
-    return 'PASS — replay matches projection';
+    return 'PASS - replay matches projection';
   }
 
   return [
-    `DRIFT — replay diverged at field ${summary.drift.path}`,
+    `DRIFT - replay diverged at field ${summary.drift.path}`,
     `replayed: ${JSON.stringify(summary.drift.replayed)}`,
     `projection: ${JSON.stringify(summary.drift.projection)}`,
   ].join('\n');
@@ -775,21 +1020,39 @@ function renderExplainText(output: ExplainOutput): string {
     `- Event count: ${output.metadata.eventCount}`,
     `- Turn count: ${output.metadata.turnCount ?? 'unavailable'}`,
     `- Summary: ${output.metadata.summary ?? 'none'}`,
-    '',
-    'Actors',
-    ...output.actors.map((actor) => `- ${actor}`),
-    '',
-    'Tasks',
-    ...output.tasks.map((task) => `- ${task.taskId}: ${task.state} | owner=${task.owner} | summary=${task.summary}`),
-    '',
-    'Mailbox',
   ];
 
+  if (output.tasksDriftDetected) {
+    lines.push('- DRIFT: tasks projection differs from replay-derived tasks');
+  }
+
+  lines.push('', 'Actors');
+  for (const actor of output.actors) {
+    lines.push(`- ${actor}`);
+  }
+
+  lines.push('', 'Tasks');
+  for (const task of output.tasks) {
+    lines.push(`- ${task.taskId}: ${task.state} | owner=${task.owner} | summary=${task.summary}`);
+    const history = renderTaskHistory(task.history);
+    if (history != null) {
+      lines.push(`  ${history}`);
+    }
+  }
+
+  lines.push('', 'Mailbox');
   for (const group of output.mailboxByActor) {
     lines.push(`- ${group.actor}`);
     for (const message of group.messages) {
       lines.push(`  ${message.from} -> ${message.to} | ${message.kind} | ${message.timestamp ?? 'unknown'}`);
       lines.push(`  ${message.body}`);
+    }
+  }
+
+  if (output.citations.length > 0) {
+    lines.push('', 'Evidence');
+    for (const citation of output.citations) {
+      lines.push(`- [${citation.kind}] ${citation.text} (${citation.observedAt})`);
     }
   }
 
@@ -811,8 +1074,12 @@ function renderExplainText(output: ExplainOutput): string {
     }
   }
 
+  appendRuntimeDiagnostics(lines, output.runtimeDiagnostics);
+
   if (output.failureClassification != null) {
-    lines.push('', 'Failure Classification', `- ${output.failureClassification}`);
+    lines.push('', 'Failure Classification');
+    lines.push(`- Source: ${output.failureClassificationSource}`);
+    lines.push(`- ${output.failureClassification}`);
   }
 
   return `${lines.join('\n')}\n`;
@@ -826,13 +1093,17 @@ export async function runCli(argv: readonly string[], io: Io = process): Promise
       return 0;
     }
 
+    const warn: WarningSink = (message) => {
+      io.stderr.write(`${message}\n`);
+    };
+
     if (parsed.name === 'replay') {
-      const summary = await replayRun(parsed.runId, parsed.runDir);
+      const summary = await replayRun(parsed.runId, parsed.runDir, warn);
       io.stdout.write(`${renderReplayText(summary)}\n`);
       return summary.drift == null ? 0 : 1;
     }
 
-    const output = await explainRun(parsed.runId, parsed.runDir);
+    const output = await explainRun(parsed.runId, parsed.runDir, warn);
     io.stdout.write(
       parsed.format === 'json'
         ? `${JSON.stringify(output, null, 2)}\n`
@@ -846,6 +1117,7 @@ export async function runCli(argv: readonly string[], io: Io = process): Promise
 }
 
 export const __internal = {
+  assertRunIdMatches,
   classifyFailure,
   discoverLayout,
   explainRun,
@@ -855,6 +1127,7 @@ export const __internal = {
   renderExplainText,
   renderReplayText,
   reconstructTeamContext,
+  resolveRunDir,
 };
 
 const isEntrypoint = process.argv[1] != null && import.meta.url === pathToFileURL(process.argv[1]).href;

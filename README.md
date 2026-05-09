@@ -2,8 +2,7 @@
 
 Pluto `main` is v2-only after S7.
 
-- Supported CLI entrypoint: `pnpm pluto:run --spec <path>`
-- Run inspection surface: `pnpm pluto:runs replay <runId>` and `pnpm pluto:runs explain <runId>`
+- Supported CLI surfaces: `pnpm pluto:run --spec <path>`, `pnpm pluto:runs replay <runId>`, and `pnpm pluto:runs explain <runId>`
 - Active runtime surface: `packages/pluto-v2-core/`, `packages/pluto-v2-runtime/`, and the root CLI bridge in `src/cli/`
 - Archived v1.6 harness: `origin/legacy-v1.6-harness-prototype`
 
