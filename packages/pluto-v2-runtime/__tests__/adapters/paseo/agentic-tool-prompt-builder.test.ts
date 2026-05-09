@@ -2,17 +2,19 @@ import { describe, expect, it } from 'vitest';
 
 import type { ActorRef } from '@pluto/v2-core';
 
-import { buildAgenticToolPrompt } from '../../../src/adapters/paseo/agentic-tool-prompt-builder.js';
+import { buildAgenticToolPrompt, buildWakeupPrompt } from '../../../src/adapters/paseo/agentic-tool-prompt-builder.js';
 import type { PromptView } from '../../../src/adapters/paseo/prompt-view.js';
 import type { LoadedPlaybook } from '../../../src/loader/authored-spec-loader.js';
 import { PLUTO_TOOL_NAMES } from '../../../src/tools/pluto-tool-schemas.js';
 
 const LEAD: ActorRef = { kind: 'role', role: 'lead' };
 const GENERATOR: ActorRef = { kind: 'role', role: 'generator' };
+const EVALUATOR: ActorRef = { kind: 'role', role: 'evaluator' };
 const MANAGER: ActorRef = { kind: 'manager' };
 const SYSTEM: ActorRef = { kind: 'system' };
 const EXACT_MATCH_PHRASE = ['must', 'match', 'exactly'].join(' ');
 const PAYLOAD_MATCH_PHRASE = ['payload', 'must', 'match', 'exactly'].join(' ');
+const CRAFT_FIDELITY_HEADING = '## Craft fidelity (lead-only)';
 const RUN_ID = '44444444-4444-4444-8444-444444444444';
 const WRAPPER_PATH = '/tmp/pluto-run/agents/role:lead/pluto-tool';
 
@@ -100,13 +102,62 @@ function buildPrompt(actor: ActorRef): string {
   });
 }
 
+function buildWakeup(actor: ActorRef): string {
+  return buildWakeupPrompt({
+    actor,
+    latestEvent: {
+      kind: 'mailbox_message_appended',
+      eventId: '00000000-0000-4000-8000-000000000099',
+      runId: RUN_ID,
+      sequence: 99,
+      timestamp: '2026-05-09T00:01:39.000Z',
+      schemaVersion: '1.0',
+      actor: GENERATOR,
+      requestId: '10000000-0000-4000-8000-000000000099',
+      causationId: null,
+      correlationId: null,
+      entityRef: { kind: 'mailbox_message', messageId: 'message-99' },
+      outcome: 'accepted',
+      payload: {
+        messageId: 'message-99',
+        fromActor: GENERATOR,
+        toActor: LEAD,
+        kind: 'completion',
+        body: 'Draft attached.',
+      },
+    },
+    delta: {
+      newTasks: [],
+      updatedTasks: [],
+      newMailbox: [
+        {
+          sequence: 2,
+          from: GENERATOR,
+          to: LEAD,
+          kind: 'completion',
+          body: 'Draft attached.',
+        },
+      ],
+      newArtifacts: [],
+      delegation: GENERATOR,
+      budgets: BASE_PROMPT_VIEW.budgets,
+      lastRejection: null,
+    },
+  });
+}
+
 describe('buildAgenticToolPrompt', () => {
-  it('includes the lead-only understanding framing line', () => {
+  it('includes the lead-only understanding framing and craft-fidelity lines', () => {
     const prompt = buildPrompt(LEAD);
+    const normalized = prompt.toLowerCase();
 
     expect(prompt).toContain('**Never delegate understanding.** You stay responsible for');
     expect(prompt).toContain('The PromptView is a snapshot');
     expect(prompt).toContain('User task:\nShip a safe first draft.');
+    expect(prompt).toContain(CRAFT_FIDELITY_HEADING);
+    expect(normalized).toContain('orchestrate craft');
+    expect(prompt).toContain('VERBATIM');
+    expect(normalized).toContain('do not rewrite');
   });
 
   it('anchors every bootstrap prompt to the live actor and run id', () => {
@@ -133,9 +184,37 @@ describe('buildAgenticToolPrompt', () => {
 
     expect(prompt).not.toContain('**Never delegate understanding.**');
     expect(prompt).not.toContain('User task:\nShip a safe first draft.');
+    expect(prompt).not.toContain(CRAFT_FIDELITY_HEADING);
+    expect(prompt).not.toContain('VERBATIM');
     expect(prompt).toContain('## generator\nWrite the draft artifact and report back to the lead.');
     expect(prompt).not.toContain('## evaluator\nReview the draft for defects and gaps.');
     expect(prompt).toContain('"userTask": null');
+  });
+
+  it('keeps craft-fidelity language out of evaluator and manager bootstrap prompts', () => {
+    const prompts = [buildPrompt(EVALUATOR), buildPrompt(MANAGER)];
+
+    for (const prompt of prompts) {
+      const normalized = prompt.toLowerCase();
+
+      expect(prompt).not.toContain(CRAFT_FIDELITY_HEADING);
+      expect(prompt).not.toContain('VERBATIM');
+      expect(normalized).not.toContain('orchestrate craft');
+      expect(normalized).not.toContain('do not rewrite');
+    }
+  });
+
+  it('keeps craft-fidelity language out of wakeup prompts for every actor', () => {
+    const prompts = [buildWakeup(LEAD), buildWakeup(GENERATOR), buildWakeup(MANAGER)];
+
+    for (const prompt of prompts) {
+      const normalized = prompt.toLowerCase();
+
+      expect(prompt).not.toContain(CRAFT_FIDELITY_HEADING);
+      expect(prompt).not.toContain('VERBATIM');
+      expect(normalized).not.toContain('orchestrate craft');
+      expect(normalized).not.toContain('do not rewrite');
+    }
   });
 
   it('does not contain fenced-json directive instructions or exact-match payload language', () => {

@@ -48,6 +48,20 @@ const LEAD_FRAMING = [
   '(read / grep / bash / glob) when the situation is non-trivial.',
 ].join('\n');
 
+const LEAD_CRAFT_FIDELITY = [
+  '## Craft fidelity (lead-only)',
+  '',
+  'As lead, you orchestrate craft - you never produce craft.',
+  'Sub-actors compose poems, write code, design things, evaluate',
+  'work. You delegate, listen, route, and close.',
+  '',
+  'When you complete the run, your `pluto_complete_run` summary',
+  'must quote the delegated actor\'s final accepted output VERBATIM',
+  'in any place where you reference it. Do not rewrite, paraphrase,',
+  'improve, or "polish" sub-actor output - your job is to deliver',
+  'what the team produced, not to rewrite it.',
+].join('\n');
+
 type PromptViewTrimOptions = {
   readonly mailboxLimit: number;
   readonly taskLimit: number;
@@ -271,7 +285,9 @@ function roleAnchorSection(actor: ActorRef, role: string | null, runId: string, 
     `You are the live ${actorLabel(actor, role)} actor for run ${runId}. Drive this run yourself by calling Pluto tool \`${wrapperPath}\` from your shell.`,
     'Do NOT use external control planes (for example `paseo send`, `daytona exec`, or `opencode-orchestrator`) to pilot another actor for this run.',
     'There is no other actor; you are the actor.',
-  ].join('\n');
+    isLeadActor(actor) ? '' : null,
+    isLeadActor(actor) ? LEAD_CRAFT_FIDELITY : null,
+  ].filter((line): line is string => line != null).join('\n');
 }
 
 function turnRuleSection(actor: ActorRef, wrapperPath: string): string {
