@@ -112,7 +112,7 @@ type UsagePerTurn = {
   waitExitCode: number;
 };
 
-type RuntimeUsageStatus = 'reported' | 'unavailable';
+type RuntimeUsageStatus = 'available' | 'unavailable';
 
 type UsageSummary = {
   totalInputTokens: number;
@@ -378,7 +378,7 @@ function createUsageAccumulator() {
       const usageStatus: RuntimeUsageStatus = perTurn.some((entry) =>
         (entry.inputTokens ?? 0) > 0 || (entry.outputTokens ?? 0) > 0 || (entry.costUsd ?? 0) > 0,
       )
-        ? 'reported'
+        ? 'available'
         : 'unavailable';
 
       return {
@@ -387,7 +387,7 @@ function createUsageAccumulator() {
         totalCostUsd,
         usageStatus,
         reportedBy: 'paseo.usageEstimate',
-        estimated: usageStatus === 'reported',
+        estimated: usageStatus === 'available',
         byActor,
         perTurn,
       };

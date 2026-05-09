@@ -231,7 +231,7 @@ describe('runPaseo', () => {
       outputTokens: 11,
       costUsd: 0.03,
     });
-    expect(result.usage.usageStatus).toBe('reported');
+    expect(result.usage.usageStatus).toBe('available');
     expect(result.usage.reportedBy).toBe('paseo.usageEstimate');
     expect(result.usage.estimated).toBe(true);
     expect(result.usage.perTurn).toEqual([

@@ -228,7 +228,7 @@ describe("src/cli/run.ts default v2 runtime", () => {
       usageStatus: string;
       reportedBy: string;
     };
-    expect(usageSummary.usageStatus).toBe("reported");
+    expect(usageSummary.usageStatus).toBe("available");
     expect(usageSummary.reportedBy).toBe("paseo.usageEstimate");
   }, 30_000);
 
