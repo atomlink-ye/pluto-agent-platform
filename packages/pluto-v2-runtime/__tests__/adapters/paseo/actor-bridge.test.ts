@@ -144,7 +144,7 @@ describe('actor bridge materialization', () => {
         actorCwd: actorDir,
         runBinPath: runBinPathFor(tempDir),
         apiUrl: 'http://127.0.0.1:9876',
-        bearerToken: 'bridge-token',
+        bearerToken: 'bridge-token-lead',
         actorKey: 'role:lead',
         plutoToolSourcePath: paths.plutoToolSourcePath,
         tsxBinPath: paths.tsxBinPath,
@@ -152,7 +152,7 @@ describe('actor bridge materialization', () => {
 
       expect(JSON.parse(await readFile(bridge.handoffJsonPath, 'utf8'))).toEqual({
         apiUrl: 'http://127.0.0.1:9876',
-        bearerToken: 'bridge-token',
+        bearerToken: 'bridge-token-lead',
         actorKey: 'role:lead',
         schemaVersion: '1.0',
       });
@@ -239,7 +239,7 @@ describe('actor bridge materialization', () => {
         actorCwd: join(tempDir, 'lead'),
         runBinPath: sharedRunBinPath,
         apiUrl: 'http://127.0.0.1:9876',
-        bearerToken: 'bridge-token',
+        bearerToken: 'bridge-token-lead',
         actorKey: 'role:lead',
         plutoToolSourcePath: paths.plutoToolSourcePath,
         tsxBinPath: paths.tsxBinPath,
@@ -248,7 +248,7 @@ describe('actor bridge materialization', () => {
         actorCwd: join(tempDir, 'generator'),
         runBinPath: sharedRunBinPath,
         apiUrl: 'http://127.0.0.1:9876',
-        bearerToken: 'bridge-token',
+        bearerToken: 'bridge-token-generator',
         actorKey: 'role:generator',
         plutoToolSourcePath: paths.plutoToolSourcePath,
         tsxBinPath: paths.tsxBinPath,
@@ -257,6 +257,11 @@ describe('actor bridge materialization', () => {
       expect(leadBridge.runBinPath).toBe(sharedRunBinPath);
       expect(generatorBridge.runBinPath).toBe(sharedRunBinPath);
       expect(leadBridge.runBinPath).toBe(generatorBridge.runBinPath);
+      const leadHandoff = JSON.parse(await readFile(leadBridge.handoffJsonPath, 'utf8')) as { bearerToken: string; actorKey: string };
+      const generatorHandoff = JSON.parse(await readFile(generatorBridge.handoffJsonPath, 'utf8')) as { bearerToken: string; actorKey: string };
+      expect(leadHandoff).toMatchObject({ bearerToken: 'bridge-token-lead', actorKey: 'role:lead' });
+      expect(generatorHandoff).toMatchObject({ bearerToken: 'bridge-token-generator', actorKey: 'role:generator' });
+      expect(leadHandoff.bearerToken).not.toBe(generatorHandoff.bearerToken);
     } finally {
       await rm(tempDir, { recursive: true, force: true });
     }

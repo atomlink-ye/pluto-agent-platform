@@ -16,7 +16,19 @@ import { makeTurnLeaseStore } from '../../src/mcp/turn-lease.js';
 import { makePlutoToolHandlers } from '../../src/tools/pluto-tool-handlers.js';
 
 const FIXED_ISO = '2026-05-08T00:00:00.000Z';
-const TOKEN = 'pluto-test-token';
+const TOKEN_BY_ACTOR = new Map([
+  ['role:lead', 'pluto-test-token-lead'],
+  ['role:generator', 'pluto-test-token-generator'],
+]);
+
+function tokenForActor(actorKey = 'role:lead'): string {
+  const token = TOKEN_BY_ACTOR.get(actorKey);
+  if (token == null) {
+    throw new Error(`Missing test token for ${actorKey}`);
+  }
+
+  return token;
+}
 
 function createKernel() {
   return new RunKernel({
@@ -61,11 +73,12 @@ function createHandlers() {
 async function requestApi(args: {
   url: string;
   actor?: string;
+  token?: string;
 }) {
   const response = await fetch(`${args.url}/tools/create-task`, {
     method: 'POST',
     headers: {
-      authorization: `Bearer ${TOKEN}`,
+      authorization: `Bearer ${args.token ?? tokenForActor(args.actor)}`,
       ...(args.actor == null ? {} : { 'Pluto-Run-Actor': args.actor }),
       'content-type': 'application/json',
     },
@@ -85,7 +98,7 @@ async function requestApi(args: {
 describe('pluto local api actor header enforcement', () => {
   it('returns missing_actor_header when a mutating request omits Pluto-Run-Actor', async () => {
     const api = await startPlutoLocalApi({
-      bearerToken: TOKEN,
+      tokenByActor: TOKEN_BY_ACTOR,
       registeredActorKeys: new Set(['role:lead']),
       handlers: createHandlers(),
       leaseStore: makeTurnLeaseStore({ kind: 'role', role: 'lead' }),
@@ -106,7 +119,7 @@ describe('pluto local api actor header enforcement', () => {
 
   it('returns unknown_actor when a mutating request claims an unregistered actor', async () => {
     const api = await startPlutoLocalApi({
-      bearerToken: TOKEN,
+      tokenByActor: TOKEN_BY_ACTOR,
       registeredActorKeys: new Set(['role:lead']),
       handlers: createHandlers(),
       leaseStore: makeTurnLeaseStore({ kind: 'role', role: 'lead' }),
@@ -128,7 +141,7 @@ describe('pluto local api actor header enforcement', () => {
 
   it('accepts a mutating request when the actor header is registered', async () => {
     const api = await startPlutoLocalApi({
-      bearerToken: TOKEN,
+      tokenByActor: TOKEN_BY_ACTOR,
       registeredActorKeys: new Set(['role:lead']),
       handlers: createHandlers(),
       leaseStore: makeTurnLeaseStore({ kind: 'role', role: 'lead' }),
@@ -142,6 +155,34 @@ describe('pluto local api actor header enforcement', () => {
         taskId: expect.any(String),
         turnDisposition: 'waiting',
         nextWakeup: 'event',
+      });
+    } finally {
+      await api.shutdown();
+    }
+  });
+
+  it('returns actor_mismatch when a valid token is reused under a different actor header', async () => {
+    const api = await startPlutoLocalApi({
+      tokenByActor: TOKEN_BY_ACTOR,
+      registeredActorKeys: new Set(['role:lead', 'role:generator']),
+      handlers: createHandlers(),
+      leaseStore: makeTurnLeaseStore({ kind: 'role', role: 'lead' }),
+    });
+    const client = {
+      request: (actor: string, token?: string) => requestApi({ url: api.url, actor, token }),
+    };
+
+    try {
+      const accepted = await client.request('role:lead');
+      expect(accepted.status).toBe(200);
+
+      const mismatched = await client.request('role:generator', tokenForActor('role:lead'));
+      expect(mismatched.status).toBe(403);
+      expect(mismatched.body).toEqual({
+        error: {
+          code: 'actor_mismatch',
+          detail: 'token bound to role:lead, request claimed role:generator',
+        },
       });
     } finally {
       await api.shutdown();

@@ -647,10 +647,30 @@ async function runAgenticToolLoop(
   const usage = createUsageAccumulator();
   let initiatingActor: ActorRef | null = null;
   const leaseStore = makeTurnLeaseStore(leadActor);
-  const bearerToken = randomUUID();
+  const mcpBearerToken = randomUUID();
+  const tokenByActor = new Map(
+    authored.declaredActors.map((actorName: string) => [
+      actorKey(authored.actors[actorName] as ActorRef),
+      randomUUID(),
+    ]),
+  );
   const workspaceCwd = options.workspaceCwd ?? process.cwd();
   const bridgeSelfCheck = options.bridgeSelfCheck ?? runBridgeSelfCheck;
   const runRootDir = join(workspaceCwd, '.pluto', 'runs', kernel.state.runId);
+
+  const handoffForActor = (actor: ActorRef): PaseoAgentEnvHandoff => {
+    const key = actorKey(actor);
+    const bearerToken = tokenByActor.get(key);
+    if (bearerToken == null) {
+      throw new Error(`missing bearer token for ${key}`);
+    }
+
+    return {
+      apiUrl: localApi.url,
+      bearerToken,
+      actorKey: key,
+    };
+  };
 
   const promptViewForActor = (actor: ActorRef) => buildPromptView({
     spec: authored,
@@ -835,7 +855,7 @@ async function runAgenticToolLoop(
   });
 
   const server = await startPlutoMcpServer({
-    bearerToken,
+    bearerToken: mcpBearerToken,
     handlers,
     leaseStore,
     waitService: {
@@ -850,7 +870,7 @@ async function runAgenticToolLoop(
     },
   });
   const localApi = await startPlutoLocalApi({
-    bearerToken,
+    tokenByActor,
     handlers,
     leaseStore,
     registeredActorKeys: new Set(authored.declaredActors.map((actorName: string) => actorKey(authored.actors[actorName] as ActorRef))),
@@ -875,11 +895,7 @@ async function runAgenticToolLoop(
       }
 
       const key = actorKey(actor);
-      const handoff = {
-        apiUrl: localApi.url,
-        bearerToken,
-        actorKey: key,
-      };
+      const handoff = handoffForActor(actor);
       const injection = await prepareAgentInjection({
         runId: kernel.state.runId,
         actor,
@@ -941,11 +957,7 @@ async function runAgenticToolLoop(
       const events = kernel.eventLog.read(0, kernel.eventLog.head + 1);
       const promptView = promptViewForActor(actor);
       const latestEvent = latestRunEvent(events);
-      const handoff = {
-        apiUrl: localApi.url,
-        bearerToken,
-        actorKey: key,
-      };
+      const handoff = handoffForActor(actor);
       const baseAgentSpec = options.paseoAgentSpec(actor, handoff);
 
       const actorSpec: PaseoAgentSpec = {

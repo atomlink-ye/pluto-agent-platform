@@ -18,7 +18,48 @@ import { makeTurnLeaseStore } from '../../src/mcp/turn-lease.js';
 import { makePlutoToolHandlers } from '../../src/tools/pluto-tool-handlers.js';
 
 const FIXED_ISO = '2026-05-08T00:00:00.000Z';
-const TOKEN = 'pluto-test-token';
+const TOKEN_BY_ACTOR = new Map([
+  ['manager', 'pluto-test-token-manager'],
+  ['role:lead', 'pluto-test-token-lead'],
+  ['role:planner', 'pluto-test-token-planner'],
+  ['role:generator', 'pluto-test-token-generator'],
+  ['role:evaluator', 'pluto-test-token-evaluator'],
+  ['system', 'pluto-test-token-system'],
+]);
+
+function tokenForActor(actorKey = 'role:lead'): string {
+  const token = TOKEN_BY_ACTOR.get(actorKey);
+  if (token == null) {
+    throw new Error(`Missing test token for ${actorKey}`);
+  }
+
+  return token;
+}
+
+function tokenForHeaderActor(actorHeader?: string): string {
+  if (actorHeader == null) {
+    return tokenForActor();
+  }
+
+  if (actorHeader === 'manager' || actorHeader === 'system' || actorHeader.startsWith('role:')) {
+    return tokenForActor(actorHeader);
+  }
+
+  if (!actorHeader.startsWith('{')) {
+    return tokenForActor(`role:${actorHeader}`);
+  }
+
+  const parsed = JSON.parse(actorHeader) as { kind?: string; role?: string };
+  if (parsed.kind === 'manager' || parsed.kind === 'system') {
+    return tokenForActor(parsed.kind);
+  }
+
+  if (parsed.kind === 'role' && typeof parsed.role === 'string') {
+    return tokenForActor(`role:${parsed.role}`);
+  }
+
+  throw new Error(`Unsupported actor header in test: ${actorHeader}`);
+}
 
 const leadActor = (): ActorRef => ({ kind: 'role', role: 'lead' });
 const generatorActor = (): ActorRef => ({ kind: 'role', role: 'generator' });
@@ -115,7 +156,7 @@ async function requestApi(args: {
   const response = await fetch(`${args.url}${args.path}`, {
     method: args.method,
     headers: {
-      authorization: `Bearer ${args.token ?? TOKEN}`,
+      authorization: `Bearer ${args.token ?? tokenForHeaderActor(args.actor)}`,
       ...(args.actor == null ? {} : { 'Pluto-Run-Actor': args.actor }),
       ...(args.body === undefined ? {} : { 'content-type': 'application/json' }),
     },
@@ -146,7 +187,7 @@ async function withApi(
   const { kernel, promptViewer, handlers } = createHandlerDeps(options);
   const leaseStore = makeTurnLeaseStore(leadActor());
   const api = await startPlutoLocalApi({
-    bearerToken: TOKEN,
+    tokenByActor: TOKEN_BY_ACTOR,
     registeredActorKeys: new Set(['manager', 'role:lead', 'role:planner', 'role:generator', 'role:evaluator', 'system']),
     handlers,
     leaseStore,

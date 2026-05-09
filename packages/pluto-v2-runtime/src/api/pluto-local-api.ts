@@ -43,7 +43,7 @@ type LocalApiRoute = {
 export interface PlutoLocalApiConfig {
   bindHost?: '127.0.0.1';
   port?: number;
-  bearerToken: string;
+  tokenByActor: ReadonlyMap<string, string>;
   registeredActorKeys?: ReadonlySet<string>;
   handlers: PlutoToolHandlers;
   leaseStore: TurnLeaseStore;
@@ -202,6 +202,34 @@ function unknownActorResponse(claimedActor: string) {
       detail: `actor ${claimedActor} not registered for this run`,
     },
   };
+}
+
+function actorMismatchResponse(boundActor: string, claimedActor: string) {
+  return {
+    error: {
+      code: 'actor_mismatch',
+      detail: `token bound to ${boundActor}, request claimed ${claimedActor}`,
+    },
+  };
+}
+
+function bearerTokenFromAuthorization(rawHeader: string | string[] | undefined): string | null {
+  if (typeof rawHeader !== 'string') {
+    return null;
+  }
+
+  const match = rawHeader.match(/^Bearer\s+(.+)$/i);
+  return match?.[1]?.trim() || null;
+}
+
+function actorKeyForToken(tokenByActor: ReadonlyMap<string, string>, token: string): string | null {
+  for (const [actor, candidate] of tokenByActor.entries()) {
+    if (candidate === token) {
+      return actor;
+    }
+  }
+
+  return null;
 }
 
 function parseJsonText(text: string): unknown {
@@ -688,11 +716,6 @@ export async function startPlutoLocalApi(
       return;
     }
 
-    if (request.headers.authorization !== `Bearer ${config.bearerToken}`) {
-      writeJson(response, 401, { error: 'unauthorized' });
-      return;
-    }
-
     let routeBody: unknown;
     try {
       routeBody = await readRouteBody(request);
@@ -741,8 +764,11 @@ export async function startPlutoLocalApi(
       }
     }
 
-    if (parsedActor.ok && config.registeredActorKeys != null && !config.registeredActorKeys.has(actorKey(parsedActor.actor))) {
-      writeJson(response, 403, unknownActorResponse(actorKey(parsedActor.actor)));
+    const claimedActorKey = parsedActor.ok ? actorKey(parsedActor.actor) : null;
+    const registeredActorKeys = config.registeredActorKeys ?? new Set(config.tokenByActor.keys());
+
+    if (claimedActorKey != null && !registeredActorKeys.has(claimedActorKey)) {
+      writeJson(response, 403, unknownActorResponse(claimedActorKey));
       return;
     }
 
@@ -756,24 +782,49 @@ export async function startPlutoLocalApi(
       return;
     }
 
+    const requestToken = bearerTokenFromAuthorization(request.headers.authorization);
+    if (requestToken == null) {
+      writeJson(response, 401, { error: 'unauthorized' });
+      return;
+    }
+
+    const boundActorKey = actorKeyForToken(config.tokenByActor, requestToken);
+    if (boundActorKey == null) {
+      writeJson(response, 401, { error: 'unauthorized' });
+      return;
+    }
+
+    if (claimedActorKey != null) {
+      const expectedToken = config.tokenByActor.get(claimedActorKey);
+      if (expectedToken == null) {
+        writeJson(response, 403, unknownActorResponse(claimedActorKey));
+        return;
+      }
+
+      if (requestToken !== expectedToken) {
+        writeJson(response, 403, actorMismatchResponse(boundActorKey, claimedActorKey));
+        return;
+      }
+    }
+
     try {
-        const sessionActor = parsedActor.ok ? parsedActor.actor : ({ kind: 'system' } satisfies ActorRef);
-        const result = await runRoute({
-          config,
-          route,
-          request,
-          response,
-          session: {
-            currentActor: sessionActor,
-            isLead: isLeadActor(sessionActor),
-          },
-        });
-        if (response.writableEnded || response.destroyed) {
-          return;
-        }
-        if (result.contentType === 'json') {
-          writeJson(response, result.status, result.body);
-          return;
+      const sessionActor = parsedActor.ok ? parsedActor.actor : ({ kind: 'system' } satisfies ActorRef);
+      const result = await runRoute({
+        config,
+        route,
+        request,
+        response,
+        session: {
+          currentActor: sessionActor,
+          isLead: isLeadActor(sessionActor),
+        },
+      });
+      if (response.writableEnded || response.destroyed) {
+        return;
+      }
+      if (result.contentType === 'json') {
+        writeJson(response, result.status, result.body);
+        return;
       }
 
       writeText(response, result.status, String(result.body));

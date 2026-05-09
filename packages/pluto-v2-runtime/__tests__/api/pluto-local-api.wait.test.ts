@@ -20,9 +20,21 @@ import { makeTurnLeaseStore } from '../../src/mcp/turn-lease.js';
 import { makePlutoToolHandlers } from '../../src/tools/pluto-tool-handlers.js';
 
 const FIXED_ISO = '2026-05-08T00:00:00.000Z';
-const TOKEN = 'pluto-test-token';
+const TOKEN_BY_ACTOR = new Map([
+  ['role:lead', 'pluto-test-token-lead'],
+  ['role:generator', 'pluto-test-token-generator'],
+]);
 const LEAD: ActorRef = { kind: 'role', role: 'lead' };
 const GENERATOR: ActorRef = { kind: 'role', role: 'generator' };
+
+function tokenForActor(actorKey: 'role:lead' | 'role:generator'): string {
+  const token = TOKEN_BY_ACTOR.get(actorKey);
+  if (token == null) {
+    throw new Error(`Missing test token for ${actorKey}`);
+  }
+
+  return token;
+}
 
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => {
@@ -150,7 +162,7 @@ async function withWaitApi(
     onTrace: (event) => traces.push(event),
   });
   const api = await startPlutoLocalApi({
-    bearerToken: TOKEN,
+    tokenByActor: TOKEN_BY_ACTOR,
     handlers,
     leaseStore,
     waitService: {
@@ -190,7 +202,7 @@ describe('pluto local api wait-for-event route', () => {
       const pending = fetch(`${url}/tools/wait-for-event`, {
         method: 'POST',
         headers: {
-          authorization: `Bearer ${TOKEN}`,
+          authorization: `Bearer ${tokenForActor('role:lead')}`,
           'Pluto-Run-Actor': 'role:lead',
           'content-type': 'application/json',
         },
@@ -236,7 +248,7 @@ describe('pluto local api wait-for-event route', () => {
       const pending = fetch(`${url}/tools/wait-for-event`, {
         method: 'POST',
         headers: {
-          authorization: `Bearer ${TOKEN}`,
+          authorization: `Bearer ${tokenForActor('role:lead')}`,
           'Pluto-Run-Actor': 'role:lead',
           'content-type': 'application/json',
         },
@@ -263,7 +275,7 @@ describe('pluto local api wait-for-event route', () => {
       const pending = fetch(`${url}/tools/wait-for-event`, {
         method: 'POST',
         headers: {
-          authorization: `Bearer ${TOKEN}`,
+          authorization: `Bearer ${tokenForActor('role:lead')}`,
           'Pluto-Run-Actor': 'role:lead',
           'content-type': 'application/json',
         },
@@ -303,7 +315,7 @@ describe('pluto local api wait-for-event route', () => {
         const pending = fetch(`${url}/tools/wait-for-event`, {
           method: 'POST',
           headers: {
-            authorization: `Bearer ${TOKEN}`,
+            authorization: `Bearer ${tokenForActor('role:generator')}`,
             'Pluto-Run-Actor': 'role:generator',
             connection: 'close',
             'content-type': 'application/json',

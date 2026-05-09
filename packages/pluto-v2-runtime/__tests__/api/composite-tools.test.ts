@@ -17,11 +17,24 @@ import { makeTurnLeaseStore } from '../../src/mcp/turn-lease.js';
 import { makePlutoToolHandlers } from '../../src/tools/pluto-tool-handlers.js';
 
 const FIXED_ISO = '2026-05-08T00:00:00.000Z';
-const TOKEN = 'pluto-test-token';
+const TOKEN_BY_ACTOR = new Map([
+  ['role:lead', 'pluto-test-token-lead'],
+  ['role:generator', 'pluto-test-token-generator'],
+  ['role:evaluator', 'pluto-test-token-evaluator'],
+]);
 
 const LEAD: ActorRef = { kind: 'role', role: 'lead' };
 const GENERATOR: ActorRef = { kind: 'role', role: 'generator' };
 const EVALUATOR: ActorRef = { kind: 'role', role: 'evaluator' };
+
+function tokenForActor(actorKey: string): string {
+  const token = TOKEN_BY_ACTOR.get(actorKey);
+  if (token == null) {
+    throw new Error(`Missing test token for ${actorKey}`);
+  }
+
+  return token;
+}
 
 function createKernel() {
   return new RunKernel({
@@ -68,7 +81,7 @@ async function requestApi(args: {
   const response = await fetch(`${args.rootUrl}${args.path}`, {
     method: 'POST',
     headers: {
-      authorization: `Bearer ${TOKEN}`,
+      authorization: `Bearer ${tokenForActor(args.actor)}`,
       'Pluto-Run-Actor': args.actor,
       'content-type': 'application/json',
     },
@@ -125,7 +138,7 @@ async function withApi(run: (context: {
   });
   const leaseStore = makeTurnLeaseStore(LEAD);
   const api = await startPlutoLocalApi({
-    bearerToken: TOKEN,
+    tokenByActor: TOKEN_BY_ACTOR,
     registeredActorKeys: new Set(['manager', 'role:lead', 'role:generator', 'role:evaluator', 'system']),
     handlers,
     leaseStore,

@@ -1,3 +1,8 @@
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
 import { describe, expect, it, vi } from 'vitest';
 
 import { counterIdProvider, fixedClockProvider, type ActorRef, type AuthoredSpec } from '@pluto/v2-core';
@@ -5,6 +10,7 @@ import { counterIdProvider, fixedClockProvider, type ActorRef, type AuthoredSpec
 import type { KernelView } from '../../../src/runtime/kernel-view.js';
 import { runPaseo, type PaseoCliClient, type PaseoRuntimeAdapter, type PaseoUsageEstimate } from '../../../src/adapters/paseo/run-paseo.js';
 import { buildUsageSummary } from '../../../src/evidence/usage-summary-builder.js';
+import { loadAuthoredSpec, type LoadedAuthoredSpec } from '../../../src/loader/authored-spec-loader.js';
 
 type MockTurn = {
   actor: ActorRef;
@@ -26,6 +32,9 @@ type ClientScriptEntry = {
 };
 
 const FIXED_TIME = '2026-05-07T00:00:00.000Z';
+const AGENTIC_TOOL_SCENARIO_PATH = fileURLToPath(
+  new URL('../../../test-fixtures/scenarios/hello-team-agentic-tool-mock/scenario.yaml', import.meta.url),
+);
 
 const authored: AuthoredSpec = {
   runId: '11111111-1111-4111-8111-111111111111',
@@ -53,6 +62,41 @@ function actorKeyForTest(actor: ActorRef): string {
   }
 
   return 'unknown';
+}
+
+function buildAgenticSpec(): LoadedAuthoredSpec {
+  const loaded = loadAuthoredSpec(AGENTIC_TOOL_SCENARIO_PATH);
+  const spec = {
+    ...loaded,
+    actors: {
+      ...loaded.actors,
+      planner: { kind: 'role' as const, role: 'planner' as const },
+    },
+    declaredActors: [...loaded.declaredActors, 'planner'],
+    orchestration: {
+      ...loaded.orchestration,
+    },
+  };
+
+  Object.defineProperty(spec, 'playbook', {
+    value: loaded.playbook,
+    enumerable: false,
+    configurable: true,
+    writable: true,
+  });
+
+  return spec as LoadedAuthoredSpec;
+}
+
+function readInjectedApi(spec: { env?: Readonly<Record<string, string>> }): { url: string; token: string; actor: string } {
+  const url = spec.env?.PLUTO_RUN_API_URL;
+  const token = spec.env?.PLUTO_RUN_TOKEN;
+  const actor = spec.env?.PLUTO_RUN_ACTOR;
+  if (typeof url !== 'string' || typeof token !== 'string' || typeof actor !== 'string') {
+    throw new Error('missing run API env handoff');
+  }
+
+  return { url, token, actor };
 }
 
 function makeAdapter(options: {
@@ -498,5 +542,99 @@ describe('runPaseo', () => {
     expect(client.deleteAgent).toHaveBeenCalledTimes(2);
     expect(client.deleteAgent).toHaveBeenCalledWith('mock-role:generator');
     expect(client.deleteAgent).toHaveBeenCalledWith('mock-role:evaluator');
+  });
+
+  it('precomputes distinct actor tokens and writes the correct handoff for never-active actors', async () => {
+    const workspaceCwd = await mkdtemp(join(tmpdir(), 'pluto-v2-run-paseo-agentic-'));
+    const spec = buildAgenticSpec();
+    const spawnSpecs: Array<{ title: string; env?: Readonly<Record<string, string>> }> = [];
+    const specByAgentId = new Map<string, { title: string; env?: Readonly<Record<string, string>> }>();
+    const transcriptByAgentId = new Map<string, string>();
+    const bridgeSelfCheck = vi.fn(async () => ({ ok: true, latencyMs: 0 }));
+    const client: PaseoCliClient = {
+      spawnAgent: vi.fn(async (agentSpec) => {
+        const agentId = `mock-${agentSpec.title}`;
+        spawnSpecs.push(agentSpec);
+        specByAgentId.set(agentId, agentSpec);
+        return { agentId };
+      }),
+      sendPrompt: vi.fn(async () => {
+        throw new Error('unexpected follow-up prompt');
+      }),
+      waitIdle: vi.fn(async (agentId: string) => {
+        const agentSpec = specByAgentId.get(agentId);
+        if (agentSpec == null) {
+          throw new Error(`missing spec for ${agentId}`);
+        }
+
+        const { url, token, actor } = readInjectedApi(agentSpec);
+        const response = await fetch(`${url}/tools/complete-run`, {
+          method: 'POST',
+          headers: {
+            authorization: `Bearer ${token}`,
+            'Pluto-Run-Actor': actor,
+            'content-type': 'application/json',
+          },
+          body: JSON.stringify({ status: 'succeeded', summary: 'done' }),
+        });
+        expect(response.status).toBe(200);
+        transcriptByAgentId.set(agentId, 'lead completed the run\n');
+        return { exitCode: 0 };
+      }),
+      readTranscript: vi.fn(async (agentId: string) => transcriptByAgentId.get(agentId) ?? ''),
+      usageEstimate: vi.fn(async () => ({})),
+      deleteAgent: vi.fn(async () => {}),
+    };
+
+    try {
+      const result = await runPaseo(spec, makeAdapter({
+        pendingTurns: [],
+        stepFactory: (state) => ({
+          kind: 'done',
+          completion: { status: 'succeeded', summary: `turns:${state.turnIndex}` },
+          nextState: state,
+        }),
+      }), {
+        client,
+        idProvider: counterIdProvider(1),
+        clockProvider: fixedClockProvider(FIXED_TIME),
+        paseoAgentSpec: (actor) => ({
+          provider: 'opencode',
+          model: 'openai/gpt-5.4',
+          mode: 'build',
+          title: actorKeyForTest(actor),
+          initialPrompt: `You are ${actorKeyForTest(actor)}.`,
+        }),
+        bridgeSelfCheck,
+        workspaceCwd,
+      });
+
+      expect(result.events.at(-1)?.kind).toBe('run_completed');
+      expect(bridgeSelfCheck).toHaveBeenCalledTimes(
+        spec.declaredActors.filter((actorName) => spec.actors[actorName]?.kind !== 'manager').length,
+      );
+      expect(spawnSpecs).toHaveLength(1);
+
+      const runAgentsDir = join(workspaceCwd, '.pluto', 'runs', spec.runId, 'agents');
+      const leadHandoff = JSON.parse(await readFile(join(runAgentsDir, 'role:lead', '.pluto', 'handoff.json'), 'utf8')) as { bearerToken: string; actorKey: string };
+      const generatorHandoff = JSON.parse(await readFile(join(runAgentsDir, 'role:generator', '.pluto', 'handoff.json'), 'utf8')) as { bearerToken: string; actorKey: string };
+      const evaluatorHandoff = JSON.parse(await readFile(join(runAgentsDir, 'role:evaluator', '.pluto', 'handoff.json'), 'utf8')) as { bearerToken: string; actorKey: string };
+      const plannerHandoff = JSON.parse(await readFile(join(runAgentsDir, 'role:planner', '.pluto', 'handoff.json'), 'utf8')) as { bearerToken: string; actorKey: string };
+
+      expect(leadHandoff.actorKey).toBe('role:lead');
+      expect(generatorHandoff.actorKey).toBe('role:generator');
+      expect(evaluatorHandoff.actorKey).toBe('role:evaluator');
+      expect(plannerHandoff.actorKey).toBe('role:planner');
+      expect(new Set([
+        leadHandoff.bearerToken,
+        generatorHandoff.bearerToken,
+        evaluatorHandoff.bearerToken,
+        plannerHandoff.bearerToken,
+      ]).size).toBe(4);
+      expect(spawnSpecs[0]?.env?.PLUTO_RUN_TOKEN).toBe(leadHandoff.bearerToken);
+      expect(spawnSpecs[0]?.env?.PLUTO_RUN_ACTOR).toBe('role:lead');
+    } finally {
+      await rm(workspaceCwd, { recursive: true, force: true });
+    }
   });
 });

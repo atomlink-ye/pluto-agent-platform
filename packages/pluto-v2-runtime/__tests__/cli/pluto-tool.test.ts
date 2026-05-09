@@ -29,6 +29,23 @@ import { makePlutoToolHandlers } from '../../src/tools/pluto-tool-handlers.js';
 const FIXED_ISO = '2026-05-08T00:00:00.000Z';
 const REPO_ROOT = fileURLToPath(new URL('../../../../', import.meta.url));
 const CLI_PATH = fileURLToPath(new URL('../../src/cli/pluto-tool.ts', import.meta.url));
+const TOKEN_BY_ACTOR = new Map([
+  ['manager', 'cli-test-token-manager'],
+  ['role:lead', 'cli-test-token-lead'],
+  ['role:planner', 'cli-test-token-planner'],
+  ['role:generator', 'cli-test-token-generator'],
+  ['role:evaluator', 'cli-test-token-evaluator'],
+  ['system', 'cli-test-token-system'],
+]);
+
+function tokenForActor(actorKey = 'role:lead'): string {
+  const token = TOKEN_BY_ACTOR.get(actorKey);
+  if (token == null) {
+    throw new Error(`Missing CLI test token for ${actorKey}`);
+  }
+
+  return token;
+}
 
 function createKernel() {
   return new RunKernel({
@@ -67,7 +84,11 @@ function sequentialRequestIds(values: readonly string[]) {
   };
 }
 
-async function withApi(run: (context: { url: string; token: string }) => Promise<void>) {
+async function withApi(run: (context: {
+  url: string;
+  token: string;
+  tokenForActor: (actorKey: string) => string;
+}) => Promise<void>) {
   const handlers = makePlutoToolHandlers({
     kernel: createKernel(),
     runId: 'run-1',
@@ -89,16 +110,16 @@ async function withApi(run: (context: { url: string; token: string }) => Promise
       forActor: vi.fn((actor: ActorRef) => ({ run: { runId: 'run-1' }, forActor: actor })),
     },
   });
-  const token = 'cli-test-token';
+  const token = tokenForActor('role:lead');
   const api = await startPlutoLocalApi({
-    bearerToken: token,
+    tokenByActor: TOKEN_BY_ACTOR,
     registeredActorKeys: new Set(['manager', 'role:lead', 'role:planner', 'role:generator', 'role:evaluator', 'system']),
     handlers,
     leaseStore: makeTurnLeaseStore({ kind: 'role', role: 'lead' }),
   });
 
   try {
-    await run({ url: api.url, token });
+    await run({ url: api.url, token, tokenForActor });
   } finally {
     await api.shutdown();
   }
@@ -203,6 +224,7 @@ async function withWaitApi(
   run: (context: {
     url: string;
     token: string;
+    tokenForActor: (actorKey: string) => string;
     handlers: ReturnType<typeof makePlutoToolHandlers>;
     kernel: ReturnType<typeof createKernel>;
     waitRegistry: ReturnType<typeof makeWaitRegistry>;
@@ -232,7 +254,7 @@ async function withWaitApi(
       forActor: vi.fn((actor: ActorRef) => promptViewFor(actor)),
     },
   });
-  const token = 'cli-test-token';
+  const token = tokenForActor('role:lead');
   const leaseStore = makeTurnLeaseStore({ kind: 'role', role: 'lead' });
   const cursorByActorKey = new Map<string, number>();
   const waitRegistry = makeWaitRegistry({
@@ -240,7 +262,7 @@ async function withWaitApi(
     getPromptViewForActor: (actor) => promptViewFor(actor),
   });
   const api = await startPlutoLocalApi({
-    bearerToken: token,
+    tokenByActor: TOKEN_BY_ACTOR,
     registeredActorKeys: new Set(['manager', 'role:lead', 'role:planner', 'role:generator', 'role:evaluator', 'system']),
     handlers,
     leaseStore,
@@ -256,7 +278,7 @@ async function withWaitApi(
   });
 
   try {
-    await run({ url: api.url, token, handlers, kernel, waitRegistry, leaseStore });
+    await run({ url: api.url, token, tokenForActor, handlers, kernel, waitRegistry, leaseStore });
   } finally {
     await api.shutdown();
   }
@@ -517,7 +539,7 @@ describe('pluto-tool subprocess', () => {
   });
 
   it('auto-waits for worker-complete by default and returns merged JSON', async () => {
-    await withWaitApi(async ({ url, token, handlers, kernel, waitRegistry, leaseStore }) => {
+    await withWaitApi(async ({ url, tokenForActor, handlers, kernel, waitRegistry, leaseStore }) => {
       const created = await handlers.pluto_create_task({ currentActor: { kind: 'role', role: 'lead' }, isLead: true }, {
         title: 'Implement',
         ownerActor: { kind: 'role', role: 'generator' },
@@ -547,7 +569,7 @@ describe('pluto-tool subprocess', () => {
         ['--actor', 'role:generator', 'worker-complete', `--task-id=${taskId}`, '--summary=done'],
         {
           PLUTO_RUN_API_URL: url,
-          PLUTO_RUN_TOKEN: token,
+          PLUTO_RUN_TOKEN: tokenForActor('role:generator'),
         },
         capture.io as unknown as Pick<typeof process, 'stdout' | 'stderr'>,
       );
@@ -603,7 +625,7 @@ describe('pluto-tool subprocess', () => {
   });
 
   it('returns promptly for rejected mutations without entering auto-wait', async () => {
-    await withWaitApi(async ({ url, token, leaseStore }) => {
+    await withWaitApi(async ({ url, tokenForActor, leaseStore }) => {
       leaseStore.setCurrent({ kind: 'role', role: 'generator' });
       const capture = createIoCapture();
       const startedAt = Date.now();
@@ -612,7 +634,7 @@ describe('pluto-tool subprocess', () => {
         ['--actor', 'role:generator', 'create-task', '--owner=generator', '--title=Rejected draft', '--wait-timeout-ms=2000'],
         {
           PLUTO_RUN_API_URL: url,
-          PLUTO_RUN_TOKEN: token,
+          PLUTO_RUN_TOKEN: tokenForActor('role:generator'),
         },
         capture.io as unknown as Pick<typeof process, 'stdout' | 'stderr'>,
       );

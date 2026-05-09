@@ -25,8 +25,21 @@ import { makePlutoToolHandlers } from '../../src/tools/pluto-tool-handlers.js';
 const FIXED_ISO = '2026-05-08T00:00:00.000Z';
 const REPO_ROOT = fileURLToPath(new URL('../../../../', import.meta.url));
 const CLI_PATH = fileURLToPath(new URL('../../src/cli/pluto-tool.ts', import.meta.url));
+const TOKEN_BY_ACTOR = new Map([
+  ['role:lead', 'cli-wait-token-lead'],
+  ['role:generator', 'cli-wait-token-generator'],
+]);
 const LEAD: ActorRef = { kind: 'role', role: 'lead' };
 const GENERATOR: ActorRef = { kind: 'role', role: 'generator' };
+
+function tokenForActor(actorKey: 'role:lead' | 'role:generator'): string {
+  const token = TOKEN_BY_ACTOR.get(actorKey);
+  if (token == null) {
+    throw new Error(`Missing CLI wait token for ${actorKey}`);
+  }
+
+  return token;
+}
 
 function createKernel() {
   return new RunKernel({
@@ -135,6 +148,7 @@ async function withWaitApi(run: (context: {
   events: RunEvent[];
 }) => Promise<void>) {
   const events: RunEvent[] = [];
+  const leadToken = tokenForActor('role:lead');
   const handlers = makePlutoToolHandlers({
     kernel: createKernel(),
     runId: 'run-1',
@@ -158,7 +172,7 @@ async function withWaitApi(run: (context: {
   });
   const cursorByActorKey = new Map<string, number>();
   const api = await startPlutoLocalApi({
-    bearerToken: 'cli-wait-token',
+    tokenByActor: TOKEN_BY_ACTOR,
     handlers,
     leaseStore: makeTurnLeaseStore(LEAD),
     waitService: {
@@ -173,7 +187,7 @@ async function withWaitApi(run: (context: {
   });
 
   try {
-    await run({ url: api.url, token: 'cli-wait-token', registry, events });
+    await run({ url: api.url, token: leadToken, registry, events });
   } finally {
     await api.shutdown();
   }
