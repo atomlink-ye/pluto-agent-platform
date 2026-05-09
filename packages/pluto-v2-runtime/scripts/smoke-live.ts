@@ -12,10 +12,10 @@ import { checkSmokeAcceptanceForRunDir } from './smoke-acceptance.js';
 
 type ActorUsageTotals = {
   turns: number;
-  inputTokens: number;
-  outputTokens: number;
-  totalTokens: number;
-  costUsd: number;
+  inputTokens: number | null;
+  outputTokens: number | null;
+  totalTokens: number | null;
+  costUsd: number | null;
   provider: string | null;
   model: string | null;
   mode: string | null;
@@ -28,12 +28,26 @@ type ModelUsageTotals = {
   mode: string | null;
   thinking: string | null;
   turns: number;
-  inputTokens: number;
-  outputTokens: number;
-  totalTokens: number;
-  costUsd: number;
+  inputTokens: number | null;
+  outputTokens: number | null;
+  totalTokens: number | null;
+  costUsd: number | null;
   actors: string[];
 };
+
+function nullSafeSum(a: number | null | undefined, b: number | null | undefined): number | null {
+  if ((a === null || a === undefined) && (b === null || b === undefined)) {
+    return null;
+  }
+  return (a ?? 0) + (b ?? 0);
+}
+
+function totalTokensOf(input: number | null | undefined, output: number | null | undefined): number | null {
+  if (input === null || input === undefined || output === null || output === undefined) {
+    return null;
+  }
+  return input + output;
+}
 
 const MAX_TURNS = 20;
 const MAX_COST_USD = 0.5;
@@ -376,7 +390,7 @@ async function main(): Promise<void> {
       thinking: spec?.thinking ?? null,
       inputTokens: entry.inputTokens,
       outputTokens: entry.outputTokens,
-      totalTokens: entry.inputTokens + entry.outputTokens,
+      totalTokens: totalTokensOf(entry.inputTokens, entry.outputTokens),
       costUsd: entry.costUsd,
       waitExitCode: entry.waitExitCode,
     };
@@ -389,7 +403,7 @@ async function main(): Promise<void> {
         turns: usage.turns,
         inputTokens: usage.inputTokens,
         outputTokens: usage.outputTokens,
-        totalTokens: usage.inputTokens + usage.outputTokens,
+        totalTokens: totalTokensOf(usage.inputTokens, usage.outputTokens),
         costUsd: usage.costUsd,
         provider: spec?.provider ?? null,
         model: spec?.model ?? null,
@@ -411,17 +425,17 @@ async function main(): Promise<void> {
       mode: turn.mode,
       thinking: turn.thinking,
       turns: 0,
-      inputTokens: 0,
-      outputTokens: 0,
-      totalTokens: 0,
-      costUsd: 0,
+      inputTokens: null,
+      outputTokens: null,
+      totalTokens: null,
+      costUsd: null,
       actors: [],
     };
     current.turns += 1;
-    current.inputTokens += turn.inputTokens;
-    current.outputTokens += turn.outputTokens;
-    current.totalTokens += turn.totalTokens;
-    current.costUsd += turn.costUsd;
+    current.inputTokens = nullSafeSum(current.inputTokens, turn.inputTokens);
+    current.outputTokens = nullSafeSum(current.outputTokens, turn.outputTokens);
+    current.totalTokens = nullSafeSum(current.totalTokens, turn.totalTokens);
+    current.costUsd = nullSafeSum(current.costUsd, turn.costUsd);
     if (!current.actors.includes(turn.actorKey)) {
       current.actors.push(turn.actorKey);
     }
@@ -437,7 +451,7 @@ async function main(): Promise<void> {
     totalTurns: perTurn.length,
     totalInputTokens: result.usage.totalInputTokens,
     totalOutputTokens: result.usage.totalOutputTokens,
-    totalTokens: result.usage.totalInputTokens + result.usage.totalOutputTokens,
+    totalTokens: totalTokensOf(result.usage.totalInputTokens, result.usage.totalOutputTokens),
     totalCostUsd: result.usage.totalCostUsd,
     usageStatus: result.usage.usageStatus,
     reportedBy: result.usage.reportedBy,
