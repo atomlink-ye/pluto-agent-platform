@@ -888,6 +888,7 @@ async function runAgenticToolLoop(
         const prompt = buildAgenticToolPrompt({
           actor,
           role: actor.kind === 'role' ? actor.role : null,
+          runId: kernel.state.runId,
           promptView,
           playbook: authored.playbook,
           userTask: authored.userTask ?? null,

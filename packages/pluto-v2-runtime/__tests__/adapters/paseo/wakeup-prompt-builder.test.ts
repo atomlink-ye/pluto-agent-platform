@@ -9,11 +9,12 @@ import { PLUTO_TOOL_NAMES } from '../../../src/tools/pluto-tool-schemas.js';
 
 const LEAD: ActorRef = { kind: 'role', role: 'lead' };
 const GENERATOR: ActorRef = { kind: 'role', role: 'generator' };
+const RUN_ID = '55555555-5555-4555-8555-555555555555';
 const WRAPPER_PATH = '/tmp/pluto-run/agents/role:lead/pluto-tool';
 
 const BASE_PROMPT_VIEW: PromptView = {
   run: {
-    runId: '11111111-1111-4111-8111-111111111111',
+    runId: RUN_ID,
     scenarioRef: 'scenario/wakeup-prompt',
     runProfileRef: 'paseo-agentic-tool',
   },
@@ -100,6 +101,7 @@ function bootstrapPrompt(): string {
   return buildAgenticToolPrompt({
     actor: LEAD,
     role: 'lead',
+    runId: RUN_ID,
     promptView: BASE_PROMPT_VIEW,
     playbook: PLAYBOOK,
     userTask: BASE_PROMPT_VIEW.userTask,
@@ -186,6 +188,8 @@ describe('wakeup prompt builder', () => {
     expect(prompt).not.toContain('Available Pluto tools');
     expect(prompt).not.toContain('## How to call Pluto tools');
     expect(prompt).not.toContain('Never delegate understanding');
+    expect(prompt).not.toContain('## Role anchor');
+    expect(prompt).not.toContain(`You are the live lead actor for run ${RUN_ID}`);
     expect(prompt).not.toContain('pluto-tool create-task');
   });
 

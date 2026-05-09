@@ -7,6 +7,7 @@ import type { PromptView } from './prompt-view.js';
 export interface AgenticToolPromptInput {
   readonly actor: ActorRef;
   readonly role: string | null;
+  readonly runId: string;
   readonly promptView: PromptView;
   readonly playbook: LoadedPlaybook | null;
   readonly userTask: string | null;
@@ -263,6 +264,16 @@ function promptHeader(actor: ActorRef, role: string | null): string {
   return `You are the ${actorLabel(actor, role)} actor for a Pluto v2 tool-driven run.`;
 }
 
+function roleAnchorSection(actor: ActorRef, role: string | null, runId: string, wrapperPath: string): string {
+  return [
+    '## Role anchor',
+    '',
+    `You are the live ${actorLabel(actor, role)} actor for run ${runId}. Drive this run yourself by calling Pluto tool \`${wrapperPath}\` from your shell.`,
+    'Do NOT use external control planes (for example `paseo send`, `daytona exec`, or `opencode-orchestrator`) to pilot another actor for this run.',
+    'There is no other actor; you are the actor.',
+  ].join('\n');
+}
+
 function turnRuleSection(actor: ActorRef, wrapperPath: string): string {
   if (isLeadActor(actor)) {
     return [
@@ -350,6 +361,7 @@ export function buildAgenticToolPrompt(input: AgenticToolPromptInput): string {
   const playbookHeader = isLeadActor(input.actor) ? 'Playbook:' : `Playbook for ${actorLabel(input.actor, roleLabel)}:`;
   const fixedSections = [
     promptHeader(input.actor, roleLabel),
+    roleAnchorSection(input.actor, roleLabel, input.runId, input.wrapperPath),
     isLeadActor(input.actor) ? LEAD_FRAMING : '',
     userTaskSection,
     toolSection(input.toolNames),

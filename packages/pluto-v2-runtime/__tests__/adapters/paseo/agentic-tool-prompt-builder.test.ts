@@ -9,13 +9,16 @@ import { PLUTO_TOOL_NAMES } from '../../../src/tools/pluto-tool-schemas.js';
 
 const LEAD: ActorRef = { kind: 'role', role: 'lead' };
 const GENERATOR: ActorRef = { kind: 'role', role: 'generator' };
+const MANAGER: ActorRef = { kind: 'manager' };
+const SYSTEM: ActorRef = { kind: 'system' };
 const EXACT_MATCH_PHRASE = ['must', 'match', 'exactly'].join(' ');
 const PAYLOAD_MATCH_PHRASE = ['payload', 'must', 'match', 'exactly'].join(' ');
+const RUN_ID = '44444444-4444-4444-8444-444444444444';
 const WRAPPER_PATH = '/tmp/pluto-run/agents/role:lead/pluto-tool';
 
 const BASE_PROMPT_VIEW: PromptView = {
   run: {
-    runId: '11111111-1111-4111-8111-111111111111',
+    runId: RUN_ID,
     scenarioRef: 'scenario/agentic-tool-prompt',
     runProfileRef: 'paseo-agentic-tool',
   },
@@ -85,6 +88,7 @@ function buildPrompt(actor: ActorRef): string {
   return buildAgenticToolPrompt({
     actor,
     role: actor.kind === 'role' ? actor.role : null,
+    runId: RUN_ID,
     promptView: {
       ...BASE_PROMPT_VIEW,
       forActor: actor,
@@ -103,6 +107,25 @@ describe('buildAgenticToolPrompt', () => {
     expect(prompt).toContain('**Never delegate understanding.** You stay responsible for');
     expect(prompt).toContain('The PromptView is a snapshot');
     expect(prompt).toContain('User task:\nShip a safe first draft.');
+  });
+
+  it('anchors every bootstrap prompt to the live actor and run id', () => {
+    const prompts = [
+      { actor: LEAD, label: 'lead' },
+      { actor: GENERATOR, label: 'generator' },
+      { actor: MANAGER, label: 'manager' },
+      { actor: SYSTEM, label: 'system' },
+    ] as const;
+
+    for (const { actor, label } of prompts) {
+      const prompt = buildPrompt(actor);
+      const normalized = prompt.toLowerCase();
+
+      expect(normalized).toContain(`you are the live ${label} actor for run`);
+      expect(prompt).toContain(RUN_ID);
+      expect(prompt).toContain('Do NOT use external control planes');
+      expect(prompt).toContain('There is no other actor; you are the actor.');
+    }
   });
 
   it('omits the framing line and user task for sub-actors', () => {
