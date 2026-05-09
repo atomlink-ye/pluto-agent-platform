@@ -11,6 +11,7 @@ import { counterIdProvider, fixedClockProvider, type ActorRef, type RunEvent } f
 import { makePaseoAdapter } from '../../../src/adapters/paseo/paseo-adapter.js';
 import { runPaseo, type PaseoCliClient, type PaseoAgentSpec, type PaseoUsageEstimate } from '../../../src/adapters/paseo/run-paseo.js';
 import { loadAuthoredSpec, type LoadedAuthoredSpec } from '../../../src/loader/authored-spec-loader.js';
+import type { BridgeSelfCheckResult } from '../../../src/adapters/paseo/bridge-self-check.js';
 
 const FIXED_TIME = '2026-05-08T00:00:00.000Z';
 const TOOL_SCENARIO_PATH = fileURLToPath(
@@ -241,7 +242,11 @@ function makeMcpAwareMockClient(script: readonly ToolScriptEntry[], prompts: Pro
   return { client, spawnSpecs };
 }
 
-async function runAgenticTool(script: readonly ToolScriptEntry[], specOverrides?: Partial<LoadedAuthoredSpec>): Promise<AgenticToolExecution> {
+async function runAgenticTool(
+  script: readonly ToolScriptEntry[],
+  specOverrides?: Partial<LoadedAuthoredSpec>,
+  options?: { bridgeSelfCheck?: () => Promise<BridgeSelfCheckResult> },
+): Promise<AgenticToolExecution> {
   const prompts: PromptRecord[] = [];
   const spec = buildSpec(specOverrides);
   const mock = makeMcpAwareMockClient(script, prompts);
@@ -265,6 +270,7 @@ async function runAgenticTool(script: readonly ToolScriptEntry[], specOverrides?
           title: actorKey(actor),
           initialPrompt: `bootstrap for ${actorKey(actor)}`,
         }),
+        bridgeSelfCheck: options?.bridgeSelfCheck,
         workspaceCwd,
       },
     );
@@ -348,6 +354,59 @@ describe('agentic_tool Paseo loop', () => {
         expect(existsSync(spec.cwd ?? '')).toBe(true);
         expect(existsSync(join(spec.cwd ?? '', 'opencode.json'))).toBe(false);
       }
+    } finally {
+      await execution.cleanup();
+    }
+  });
+
+  it('fails immediately when the first bridge self-check cannot execute the wrapper', async () => {
+    const execution = await runAgenticTool([
+      {
+        actor: LEAD,
+        run: async ({ callTool }) => {
+          await callTool('pluto_create_task', {
+            title: 'should never run',
+            ownerActor: GENERATOR,
+            dependsOn: [],
+          });
+          return { transcriptText: 'unexpected\n' };
+        },
+      },
+    ], undefined, {
+      bridgeSelfCheck: async () => ({
+        ok: false,
+        reason: 'wrapper_missing',
+        stderr: 'spawnSync /tmp/pluto-tool ENOENT',
+        latencyMs: 1,
+      }),
+    });
+
+    try {
+      expect(execution.prompts).toEqual([]);
+      expect(execution.spawnSpecs).toEqual([]);
+      expect(execution.result.events.map((event) => event.kind)).toEqual([
+        'run_started',
+        'run_completed',
+      ]);
+      expect(execution.result.events.at(-1)).toMatchObject({
+        kind: 'run_completed',
+        payload: {
+          status: 'failed',
+          summary: 'bridge_unavailable: wrapper_missing',
+        },
+      });
+      expect(execution.result.runtimeTraces).toEqual([
+        {
+          kind: 'bridge_unavailable',
+          actor: 'role:lead',
+          attemptedAt: FIXED_TIME,
+          reason: 'wrapper_missing',
+          stderr: 'spawnSync /tmp/pluto-tool ENOENT',
+          latencyMs: 1,
+        },
+      ]);
+      expect(execution.result.views.task.tasks).toEqual({});
+      expect(execution.result.usage.perTurn).toHaveLength(0);
     } finally {
       await execution.cleanup();
     }

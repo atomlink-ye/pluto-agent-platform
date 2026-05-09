@@ -37,6 +37,7 @@ import { materializeActorBridge, resolveActorBridgeDependencyPaths } from './act
 import { buildAgenticToolPrompt, buildWakeupPrompt } from './agentic-tool-prompt-builder.js';
 import { createInitialAgenticLoopState } from './agentic-loop-state.js';
 import { leadActorFromSpec, pickNextAgenticActor, withKernelRejection } from './agentic-scheduler.js';
+import { runBridgeSelfCheck, type BridgeSelfCheckFailureReason } from './bridge-self-check.js';
 import { buildPromptView } from './prompt-view.js';
 import { planDelegatedTaskCloseout, type DelegatedTaskCloseoutPlan } from './task-closeout.js';
 import { computeWakeupDelta } from './wakeup-delta.js';
@@ -149,7 +150,16 @@ export type TaskCloseoutRejectedTraceEvent = {
   readonly reason: string;
 };
 
-export type RuntimeTraceEvent = WaitTraceEvent | TaskCloseoutRejectedTraceEvent;
+export type BridgeUnavailableTraceEvent = {
+  readonly kind: 'bridge_unavailable';
+  readonly actor: string;
+  readonly attemptedAt: string;
+  readonly reason: BridgeSelfCheckFailureReason;
+  readonly stderr?: string;
+  readonly latencyMs: number;
+};
+
+export type RuntimeTraceEvent = WaitTraceEvent | TaskCloseoutRejectedTraceEvent | BridgeUnavailableTraceEvent;
 
 class PaseoRuntimeError extends Error {
   readonly runtimeTraces: ReadonlyArray<RuntimeTraceEvent>;
@@ -164,6 +174,7 @@ class PaseoRuntimeError extends Error {
 type AgentInjection = {
   cwd: string;
   wrapperPath: string;
+  handoffJsonPath: string;
 };
 
 type AgentSessionState = {
@@ -545,7 +556,23 @@ async function prepareAgentInjection(args: {
   return {
     cwd: actorDir,
     wrapperPath: bridge.wrapperPath,
+    handoffJsonPath: bridge.handoffJsonPath,
   };
+}
+
+async function withSyntheticSelfCheckState<T>(args: {
+  cwd: string;
+  promptView: ReturnType<typeof buildPromptView>;
+  run: () => Promise<T>;
+}): Promise<T> {
+  const selfCheckStatePath = join(args.cwd, '.pluto', 'self-check-state.json');
+  await writeFile(selfCheckStatePath, JSON.stringify(args.promptView));
+
+  try {
+    return await args.run();
+  } finally {
+    await rm(selfCheckStatePath, { force: true });
+  }
 }
 
 async function runAgenticToolLoop(
@@ -556,6 +583,7 @@ async function runAgenticToolLoop(
     idProvider: IdProvider;
     clockProvider: ClockProvider;
     paseoAgentSpec: (actor: ActorRef, handoff?: PaseoAgentEnvHandoff) => PaseoAgentSpec;
+    bridgeSelfCheck?: typeof runBridgeSelfCheck;
     waitTimeoutSec: number;
     workspaceCwd?: string;
   },
@@ -572,13 +600,16 @@ async function runAgenticToolLoop(
   const waitCursorByActorKey = new Map<string, number>();
   const transcriptByActor = new Map<string, string>();
   const runtimeTraceBuffer: RuntimeTraceEvent[] = [];
+  const agentInjectionByActorKey = new Map<string, AgentInjection>();
   const pendingMutationByActorKey = new Map<string, Deferred<ObservedMutatingToolCall>>();
   const pendingArmByActorKey = new Map<string, Deferred<void>>();
+  const bridgeSelfCheckByActorKey = new Map<string, Awaited<ReturnType<typeof runBridgeSelfCheck>>>();
   const usage = createUsageAccumulator();
   let initiatingActor: ActorRef | null = null;
   const leaseStore = makeTurnLeaseStore(leadActor);
   const bearerToken = randomUUID();
   const workspaceCwd = options.workspaceCwd ?? process.cwd();
+  const bridgeSelfCheck = options.bridgeSelfCheck ?? runBridgeSelfCheck;
   const runRootDir = join(workspaceCwd, '.pluto', 'runs', kernel.state.runId);
 
   const promptViewForActor = (actor: ActorRef) => buildPromptView({
@@ -754,6 +785,59 @@ async function runAgenticToolLoop(
   });
 
   try {
+    for (const actorName of authored.declaredActors) {
+      const actor = authored.actors[actorName] as ActorRef;
+      if (actor.kind === 'manager') {
+        continue;
+      }
+
+      const key = actorKey(actor);
+      const handoff = {
+        apiUrl: localApi.url,
+        bearerToken,
+        actorKey: key,
+      };
+      const injection = await prepareAgentInjection({
+        runId: kernel.state.runId,
+        actor,
+        workspaceCwd,
+        handoff,
+      });
+      agentInjectionByActorKey.set(key, injection);
+      const selfCheck = await withSyntheticSelfCheckState({
+        cwd: injection.cwd,
+        promptView: promptViewForActor(actor),
+        run: () => bridgeSelfCheck({ wrapperPath: injection.wrapperPath }),
+      });
+      bridgeSelfCheckByActorKey.set(key, selfCheck);
+      if (!selfCheck.ok) {
+        pushRuntimeTrace({
+          kind: 'bridge_unavailable',
+          actor: key,
+          attemptedAt: options.clockProvider.nowIso(),
+          reason: selfCheck.reason ?? 'other',
+          ...(selfCheck.stderr == null ? {} : { stderr: selfCheck.stderr }),
+          latencyMs: selfCheck.latencyMs,
+        });
+        initiatingActor = { kind: 'manager' };
+        kernel.submit(
+          buildCompleteRunRequest(
+            kernel.state.runId,
+            {
+              status: 'failed',
+              summary: `bridge_unavailable: ${selfCheck.reason ?? 'other'}`,
+            },
+            options,
+          ),
+        );
+        return {
+          ...usage.finalize(),
+          initiatingActor,
+          runtimeTraces: runtimeTraceBuffer,
+        } satisfies AgenticToolUsageSummary;
+      }
+    }
+
     for (;;) {
       const budgetFailure = state.turnIndex >= state.maxTurns
         ? { status: 'failed' as const, summary: 'maxTurns exhausted' }
@@ -799,12 +883,10 @@ async function runAgenticToolLoop(
       let session = agentSessionByActorKey.get(key);
       const sessionBusy = session?.idlePromise != null;
       if (session == null) {
-        const injection = await prepareAgentInjection({
-          runId: kernel.state.runId,
-          actor,
-          workspaceCwd,
-          handoff,
-        });
+        const injection = agentInjectionByActorKey.get(key);
+        if (injection == null) {
+          throw new Error(`missing prepared bridge injection for ${key}`);
+        }
         const prompt = buildAgenticToolPrompt({
           actor,
           role: actor.kind === 'role' ? actor.role : null,
@@ -985,6 +1067,20 @@ async function runAgenticToolLoop(
         continue;
       }
 
+      const next = pickNextAgenticActor({
+        state: {
+          currentActor: actor,
+          delegationPointer: state.delegationPointer,
+          delegationTaskId: state.delegationTaskId,
+        },
+        acceptedEvent: observed.event,
+        directive: attemptedDirective,
+        leadActor,
+      });
+      if (waitRegistry.hasArmedWait(next.actor)) {
+        leaseStore.setCurrent(next.actor);
+      }
+
       const synthesizedCloseout = observed.plannedDelegatedTaskCloseout
         ?? planObservedDelegatedTaskCloseout({
           actor,
@@ -1028,21 +1124,14 @@ async function runAgenticToolLoop(
         waitRegistry.notify(observed.deferredWaitNotifyEvent, promptViewForActor);
       }
 
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+
       if (observed.toolName === 'pluto_complete_run' && observed.event.kind === 'run_completed') {
         initiatingActor = observed.actor;
         break;
       }
-
-      const next = pickNextAgenticActor({
-        state: {
-          currentActor: actor,
-          delegationPointer: state.delegationPointer,
-          delegationTaskId: state.delegationTaskId,
-        },
-        acceptedEvent: observed.event,
-        directive: attemptedDirective,
-        leadActor,
-      });
       state = {
         ...state,
         currentActor: next.actor,
@@ -1078,6 +1167,7 @@ export async function runPaseo<S>(
     idProvider: IdProvider;
     clockProvider: ClockProvider;
     paseoAgentSpec: (actor: ActorRef, handoff?: PaseoAgentEnvHandoff) => PaseoAgentSpec;
+    bridgeSelfCheck?: typeof runBridgeSelfCheck;
     correlationId?: string | null;
     maxSteps?: number;
     waitTimeoutSec?: number;
@@ -1116,12 +1206,13 @@ export async function runPaseo<S>(
     const loadedAuthored = ensureLoadedAuthoredSpec(authored, 'agentic_tool');
     const usage = await runAgenticToolLoop(loadedAuthored, kernel, {
       client: options.client,
-      idProvider: options.idProvider,
-      clockProvider: options.clockProvider,
-      paseoAgentSpec: options.paseoAgentSpec,
-      waitTimeoutSec: options.waitTimeoutSec ?? DEFAULT_WAIT_TIMEOUT_SEC,
-      workspaceCwd: options.workspaceCwd,
-    });
+        idProvider: options.idProvider,
+        clockProvider: options.clockProvider,
+        paseoAgentSpec: options.paseoAgentSpec,
+        bridgeSelfCheck: options.bridgeSelfCheck,
+        waitTimeoutSec: options.waitTimeoutSec ?? DEFAULT_WAIT_TIMEOUT_SEC,
+        workspaceCwd: options.workspaceCwd,
+      });
     const events = stripAcceptedRequestKey(kernel.eventLog.read(0, kernel.eventLog.head + 1));
     const views = replayAll(events);
     const evidencePacket = assembleEvidencePacket(views, events, kernel.state.runId, {

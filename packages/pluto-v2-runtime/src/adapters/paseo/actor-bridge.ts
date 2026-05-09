@@ -31,6 +31,37 @@ function handoffFieldReader(field: 'apiUrl' | 'bearerToken' | 'actorKey'): strin
   ].join(' ');
 }
 
+function fileStdoutScript(): string {
+  return 'process.stdout.write(require("fs").readFileSync(process.argv[1], "utf8"));';
+}
+
+function readStateFastPathScript(): string {
+  return [
+    'const fs = require("fs");',
+    'const handoff = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));',
+    'const rawApiUrl = String(handoff.apiUrl);',
+    'const baseUrl = rawApiUrl.endsWith("/") ? rawApiUrl.slice(0, -1) : rawApiUrl;',
+    'fetch(baseUrl + "/state", {',
+    '  method: "GET",',
+    '  headers: {',
+    '    authorization: "Bearer " + String(handoff.bearerToken),',
+    '    "Pluto-Run-Actor": String(handoff.actorKey),',
+    '  },',
+    '}).then(async (response) => {',
+    '  const body = await response.text();',
+    '  if (!response.ok) {',
+    '    process.stderr.write(body.length > 0 ? body : "pluto-tool read-state failed with " + response.status);',
+    '    process.exit(1);',
+    '  }',
+    '  process.stdout.write(body);',
+    '  process.exit(0);',
+    '}).catch((error) => {',
+    '  process.stderr.write(error instanceof Error ? error.message : String(error));',
+    '  process.exit(1);',
+    '});',
+  ].join(' ');
+}
+
 async function findRuntimePackageRoot(startDir: string, fs: FsModule): Promise<string> {
   let currentDir = startDir;
 
@@ -60,6 +91,28 @@ async function assertPathExists(path: string, fs: FsModule): Promise<void> {
     const detail = error instanceof Error ? error.message : String(error);
     throw new Error(`Required actor bridge dependency is missing at ${path}: ${detail}`);
   }
+}
+
+async function ensureCoreSourceDependencyLinks(runtimePackageRoot: string, fs: FsModule): Promise<void> {
+  const corePackageRoot = join(dirname(runtimePackageRoot), 'pluto-v2-core');
+  const runtimeZodPath = join(runtimePackageRoot, 'node_modules', 'zod');
+  const coreNodeModulesPath = join(corePackageRoot, 'node_modules');
+  const coreZodPath = join(coreNodeModulesPath, 'zod');
+
+  await assertPathExists(runtimeZodPath, fs);
+  await fs.mkdir(coreNodeModulesPath, { recursive: true });
+
+  try {
+    await fs.lstat(coreZodPath);
+    return;
+  } catch (error) {
+    const code = typeof error === 'object' && error != null && 'code' in error ? error.code : null;
+    if (code !== 'ENOENT') {
+      throw error;
+    }
+  }
+
+  await fs.symlink(runtimeZodPath, coreZodPath, 'dir');
 }
 
 export async function resolveActorBridgeDependencyPaths(fs: FsModule = nodeFs): Promise<ActorBridgeDependencyPaths> {
@@ -108,6 +161,7 @@ export async function materializeActorBridge(input: {
   const runtimePackageRoot = dirname(dirname(dirname(input.plutoToolSourcePath)));
   const runtimeTsconfigPath = join(runtimePackageRoot, 'tsconfig.json');
   await assertPathExists(runtimeTsconfigPath, fs);
+  await ensureCoreSourceDependencyLinks(runtimePackageRoot, fs);
   await fs.mkdir(metadataDir, { recursive: true });
   await fs.writeFile(handoffJsonPath, JSON.stringify({
     apiUrl: input.apiUrl,
@@ -122,9 +176,16 @@ export async function materializeActorBridge(input: {
     'set -euo pipefail',
     `export PATH=${shellQuote(`${nodeBinDir}:/usr/local/bin:/usr/bin:/bin`)}\${PATH:+:$PATH}`,
     'HANDOFF="$(dirname "$0")/.pluto/handoff.json"',
+    'SELF_CHECK_STATE="$(dirname "$0")/.pluto/self-check-state.json"',
     'if [ ! -f "$HANDOFF" ]; then',
     '  echo "pluto-tool: missing handoff at $HANDOFF" >&2',
     '  exit 64',
+    'fi',
+    'if [ "${1:-}" = "read-state" ]; then',
+    '  if [ -f "$SELF_CHECK_STATE" ]; then',
+    `    exec ${shellQuote(process.execPath)} -e ${shellQuote(fileStdoutScript())} "$SELF_CHECK_STATE"`,
+    '  fi',
+    `  exec ${shellQuote(process.execPath)} -e ${shellQuote(readStateFastPathScript())} "$HANDOFF"`,
     'fi',
     `export PLUTO_RUN_API_URL="$(${shellQuote(process.execPath)} -e ${shellQuote(handoffFieldReader('apiUrl'))} "$HANDOFF")"`,
     `export PLUTO_RUN_TOKEN="$(${shellQuote(process.execPath)} -e ${shellQuote(handoffFieldReader('bearerToken'))} "$HANDOFF")"`,
