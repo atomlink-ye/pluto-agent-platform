@@ -247,7 +247,10 @@ function toolSection(toolNames: ReadonlyArray<PlutoToolName>): string {
   ].join('\n');
 }
 
-function toolCallSection(runBinPath: string, wrapperPath: string, actorRef: string): string {
+function toolCallSection(actor: ActorRef, runBinPath: string, wrapperPath: string, actorRef: string): string {
+  const closeOutExample = isLeadActor(actor)
+    ? `  ${runBinPath} --actor ${actorRef} final-reconciliation --completed-tasks=<id>[,<id>...] --cited-messages=<id>[,<id>...] --summary="<one-sentence>"`
+    : `  ${runBinPath} --actor ${actorRef} complete-run --status=succeeded --summary="<one-sentence>"`;
   return [
     '## How to call Pluto tools',
     '',
@@ -262,7 +265,7 @@ function toolCallSection(runBinPath: string, wrapperPath: string, actorRef: stri
     `  ${runBinPath} --actor ${actorRef} send-mailbox --to=lead --kind=completion --body="Draft attached: ..."`,
     `  ${runBinPath} --actor ${actorRef} change-task-state --task-id=<id> --to=completed`,
     `  ${runBinPath} --actor ${actorRef} publish-artifact --kind=final --media-type=text/plain --byte-size=64 --body="..."`,
-    `  ${runBinPath} --actor ${actorRef} complete-run --status=succeeded --summary="<one-sentence>"`,
+    closeOutExample,
     `  ${runBinPath} --actor ${actorRef} wait --timeout-sec=300`,
     `  ${runBinPath} --actor ${actorRef} read-state`,
     `  ${runBinPath} --actor ${actorRef} read-artifact --artifact-id=<id>`,
@@ -427,7 +430,7 @@ export function buildAgenticToolPrompt(input: AgenticToolPromptInput): string {
     isLeadActor(input.actor) ? LEAD_FRAMING : '',
     userTaskSection,
     toolSection(input.toolNames),
-    toolCallSection(runBinPath, input.wrapperPath, actorRef),
+    toolCallSection(input.actor, runBinPath, input.wrapperPath, actorRef),
     compositeToolGuidance(input.actor, runBinPath, actorRef),
     turnRuleSection(input.actor, input.wrapperPath),
   ];

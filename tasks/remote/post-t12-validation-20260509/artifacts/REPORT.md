@@ -134,27 +134,54 @@ weak.
   (smoke:live arg conflict). Resolved by fixing commands.sh
   and re-running. Final attempt completed cleanly.
 
-## T13 candidate
+## T13-S1 attempt — prompt hardening
 
-**T13-S1 — final-reconciliation prompt hardening**
+T13-S1 was applied (commit `cdfaedfd`): the
+`compositeToolGuidance` section in
+`agentic-tool-prompt-builder.ts` was strengthened from
+"Prefer ..." to "When ready to terminate, call
+`final-reconciliation` ... Do NOT call `complete-run`
+directly". Same directive form for `worker-complete` /
+`evaluator-verdict`.
 
-- Change `agentic-tool-prompt-builder.ts:283` from
-  "Prefer ..." to a directive: "End the run by calling
-  `final-reconciliation`. Do NOT call `complete-run`
-  directly — the composite verb wraps it with the audit
-  gate."
-- Optionally drop the `complete-run --status=succeeded`
-  example from the lead's example list (line 265), or mark
-  it explicitly "Lead: do not use directly; use
-  final-reconciliation".
-- Same prompt strengthening for generator (`worker-complete`)
-  and evaluator (`evaluator-verdict`).
-- Re-run POST-T13 expecting 10/10.
+POST-T13 re-run (smoke:live exit 0, 262 s) confirmed:
+- Baseline still 6/6.
+- `evidence/final-reconciliation.json` STILL absent.
+- Lead still chose primitive `complete-run` over the composite.
 
-If T13-S1 prompt hardening is insufficient, T14 can add
-server-side enforcement (route reject `complete-run` from a
-lead actor with a clear error pointing to
-`final-reconciliation`).
+Diagnosis: `pluto-local-api.ts` always stamps
+`actor: { kind: 'manager' }` on every `complete_run`
+request envelope (`pluto-tool-handlers.ts:128`,
+`buildManagerOwnedCompleteRunRequest`), so kernel events
+read `actor=manager` regardless of whether the primitive or
+composite verb was used. The reliable signal is the runtime
+evidence file: a composite-verb close-out writes
+`<runDir>/evidence/final-reconciliation.json`; a primitive
+close-out does not. The lead's two attempts both produced no
+evidence file → confirmed primitive `complete-run` use.
+
+## True T14 candidate — server-side enforcement
+
+Prompt-only nudges have already failed twice. The structural
+fix is server-side enforcement at one of:
+
+- **Route-level**: `pluto-local-api.ts` rejects
+  `POST /v1/tools/complete-run` when the
+  `Pluto-Run-Actor` header is the lead, with a 403 directing
+  the actor to `pluto_final_reconciliation`. The composite
+  verb still routes through internally because it submits a
+  manager-owned request envelope.
+- **Composite-only path**: same idea but routed via the
+  handler layer.
+- **Audit-shadow**: leave the primitive available but
+  always-shadow-write a degraded
+  `evidence/final-reconciliation.json` whose
+  `audit.status: "absent"` reflects the missing structured
+  citations.
+
+This is a real architectural choice (forcing a single
+close-out path), worth its own slice plan. Out of scope for
+T12. Recommended for T14 / next iteration.
 
 ## Verdict
 
@@ -166,5 +193,7 @@ baseline-criteria: 6/6
 t12-additions: 2/4
 smoke-live-exit-code: 0
 audit-exit-code: 2 (absent)
-overall: PARTIAL — T13-S1 candidate identified
+overall: PARTIAL — implementation complete; audit-gate exercise blocked by primitive-vs-composite choice the lead model continues to make even with directive prompt
+T13-S1: applied (prompt hardening); did not move the model
+T14 candidate: server-side enforcement of composite close-out
 ```
