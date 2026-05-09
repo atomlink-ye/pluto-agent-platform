@@ -9,7 +9,14 @@ import { describe, expect, it, vi } from 'vitest';
 import { counterIdProvider, fixedClockProvider, type ActorRef, type RunEvent } from '@pluto/v2-core';
 
 import { makePaseoAdapter } from '../../../src/adapters/paseo/paseo-adapter.js';
-import { runPaseo, type PaseoCliClient, type PaseoAgentSpec, type PaseoUsageEstimate } from '../../../src/adapters/paseo/run-paseo.js';
+import {
+  runPaseo,
+  type PaseoCliClient,
+  type PaseoAgentSpec,
+  type PaseoUsageEstimate,
+  type RuntimeTraceEvent,
+  type WaitRegistryControl,
+} from '../../../src/adapters/paseo/run-paseo.js';
 import { loadAuthoredSpec, type LoadedAuthoredSpec } from '../../../src/loader/authored-spec-loader.js';
 import type { BridgeSelfCheckResult } from '../../../src/adapters/paseo/bridge-self-check.js';
 
@@ -68,6 +75,63 @@ function actorKey(actor: ActorRef): string {
 
   const exhaustiveActor: never = actor;
   throw new Error(`unsupported actor ${String(exhaustiveActor)}`);
+}
+
+function withTimeout<T>(promise: Promise<T>, label: string, timeoutMs = 1000): Promise<T> {
+  return Promise.race([
+    promise,
+    new Promise<T>((_resolve, reject) => {
+      setTimeout(() => reject(new Error(`${label} timed out`)), timeoutMs);
+    }),
+  ]);
+}
+
+function createDisconnectHarness(args: {
+  actor: ActorRef;
+  disconnects: number;
+  resolveOn: 'rearms' | 'exhausted';
+}) {
+  const targetActor = actorKey(args.actor);
+  let control: WaitRegistryControl | null = null;
+  let scheduledDisconnects = 0;
+  let resolveReady!: () => void;
+  const ready = new Promise<void>((resolve) => {
+    resolveReady = resolve;
+  });
+
+  const scheduleCancel = () => {
+    void Promise.resolve().then(() => {
+      if (control?.hasArmedWait(args.actor)) {
+        control.cancelWaitForActor(args.actor, 'client_idle_disconnect');
+      }
+    });
+  };
+
+  return {
+    onWaitRegistryReady(nextControl: WaitRegistryControl) {
+      control = nextControl;
+    },
+    onRuntimeTrace(trace: RuntimeTraceEvent) {
+      if (trace.kind === 'wait_armed' && trace.actor === targetActor && scheduledDisconnects < args.disconnects) {
+        scheduledDisconnects += 1;
+        scheduleCancel();
+        return;
+      }
+
+      if (trace.actor !== targetActor) {
+        return;
+      }
+
+      if (args.resolveOn === 'rearms' && trace.kind === 'wait_silent_rearm' && trace.attempt === args.disconnects) {
+        resolveReady();
+      }
+
+      if (args.resolveOn === 'exhausted' && trace.kind === 'wait_rearm_exhausted' && trace.attempts === args.disconnects) {
+        resolveReady();
+      }
+    },
+    ready,
+  };
 }
 
 function taskStates(tasks: Record<string, unknown>): string[] {
@@ -297,7 +361,12 @@ function makeMcpAwareMockClient(
 async function runAgenticTool(
   script: readonly ToolScriptEntry[],
   specOverrides?: Partial<LoadedAuthoredSpec>,
-  options?: { bridgeSelfCheck?: () => Promise<BridgeSelfCheckResult>; autoWaitMutations?: boolean },
+  options?: {
+    bridgeSelfCheck?: () => Promise<BridgeSelfCheckResult>;
+    autoWaitMutations?: boolean;
+    onRuntimeTrace?: (trace: RuntimeTraceEvent) => void;
+    onWaitRegistryReady?: (control: WaitRegistryControl) => void;
+  },
 ): Promise<AgenticToolExecution> {
   const prompts: PromptRecord[] = [];
   const spec = buildSpec(specOverrides);
@@ -324,6 +393,8 @@ async function runAgenticTool(
         }),
         bridgeSelfCheck: options?.bridgeSelfCheck,
         workspaceCwd,
+        onRuntimeTrace: options?.onRuntimeTrace,
+        onWaitRegistryReady: options?.onWaitRegistryReady,
       },
     );
 
@@ -626,6 +697,184 @@ describe('agentic_tool Paseo loop', () => {
       ]);
       expect(taskStates(execution.result.views.task.tasks)).toEqual(['completed']);
       expect(execution.result.runtimeTraces.filter((trace) => trace.kind.startsWith('wait_')).map((trace) => trace.kind)).toContain('wait_armed');
+    } finally {
+      await execution.cleanup();
+    }
+  });
+
+  it('silently rearms a lead wait after one client_idle_disconnect and resumes without read-state polling', async () => {
+    const disconnectHarness = createDisconnectHarness({
+      actor: LEAD,
+      disconnects: 1,
+      resolveOn: 'rearms',
+    });
+    const execution = await runAgenticTool([
+      {
+        actor: LEAD,
+        run: async ({ callTool }) => {
+          await callTool('pluto_create_task', {
+            title: 'Draft the change',
+            ownerActor: GENERATOR,
+            dependsOn: [],
+          });
+          const waited = await callTool('pluto_wait_for_event', { timeoutSec: 300 });
+          expect(waited.status).toBe(200);
+          expect(waited.body).toMatchObject({
+            outcome: 'event',
+            latestEvent: { kind: 'task_state_changed' },
+          });
+          return {
+            transcriptText: [
+              'pluto-tool create-task --owner=generator --title="Draft the change"',
+              'pluto-tool wait --timeout-sec=300',
+            ].join('\n'),
+          };
+        },
+      },
+      {
+        actor: GENERATOR,
+        run: async ({ callTool }) => {
+          await withTimeout(disconnectHarness.ready, 'single disconnect rearm');
+          await callTool('pluto_append_mailbox_message', {
+            toActor: LEAD,
+            kind: 'completion',
+            body: 'Handled after one disconnect.',
+          });
+          return { transcriptText: 'generator reported after rearm\n' };
+        },
+      },
+      {
+        actor: LEAD,
+        run: async ({ callTool, prompt }) => {
+          const delta = wakeupDeltaFromPrompt(prompt);
+          expect(prompt).not.toContain('client_idle_disconnect');
+          expect(prompt).not.toContain('wait_silent_rearm');
+          expect(delta).toMatchObject({
+            newMailbox: [
+              {
+                body: 'Handled after one disconnect.',
+              },
+            ],
+            updatedTasks: [
+              {
+                state: 'completed',
+              },
+            ],
+          });
+          await callTool('pluto_complete_run', {
+            status: 'succeeded',
+            summary: 'done',
+          });
+          return { transcriptText: 'lead closed after rearm\n' };
+        },
+      },
+    ], undefined, {
+      onRuntimeTrace: disconnectHarness.onRuntimeTrace,
+      onWaitRegistryReady: disconnectHarness.onWaitRegistryReady,
+    });
+
+    try {
+      expect(execution.prompts.map((entry) => entry.actorKey).slice(0, 3)).toEqual(['role:lead', 'role:generator', 'role:lead']);
+      expect(execution.toolCalls.filter((call) => call.actorKey === 'role:lead').map((call) => call.toolName)).toEqual(
+        expect.arrayContaining(['pluto_create_task', 'pluto_wait_for_event']),
+      );
+      expect(execution.toolCalls.filter((call) => call.actorKey === 'role:lead').map((call) => call.toolName)).not.toContain('pluto_read_state');
+      expect(execution.result.runtimeTraces).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          kind: 'wait_silent_rearm',
+          actor: 'role:lead',
+          attempt: 1,
+        }),
+        expect.objectContaining({
+          kind: 'wait_cancelled',
+          actor: 'role:lead',
+          reason: 'client_idle_disconnect',
+        }),
+      ]));
+    } finally {
+      await execution.cleanup();
+    }
+  });
+
+  it('silently rearms through three client_idle_disconnect cancellations before delivering the wake event', async () => {
+    const disconnectHarness = createDisconnectHarness({
+      actor: LEAD,
+      disconnects: 3,
+      resolveOn: 'rearms',
+    });
+    const execution = await runAgenticTool([
+      {
+        actor: LEAD,
+        run: async ({ callTool }) => {
+          await callTool('pluto_create_task', {
+            title: 'Draft the change',
+            ownerActor: GENERATOR,
+            dependsOn: [],
+          });
+          const waited = await callTool('pluto_wait_for_event', { timeoutSec: 300 });
+          expect(waited.status).toBe(200);
+          expect(waited.body).toMatchObject({
+            outcome: 'event',
+            latestEvent: { kind: 'task_state_changed' },
+          });
+          return {
+            transcriptText: [
+              'pluto-tool create-task --owner=generator --title="Draft the change"',
+              'pluto-tool wait --timeout-sec=300',
+            ].join('\n'),
+          };
+        },
+      },
+      {
+        actor: GENERATOR,
+        run: async ({ callTool }) => {
+          await withTimeout(disconnectHarness.ready, 'three disconnect rearms');
+          await callTool('pluto_append_mailbox_message', {
+            toActor: LEAD,
+            kind: 'completion',
+            body: 'Handled after three disconnects.',
+          });
+          return { transcriptText: 'generator reported after third rearm\n' };
+        },
+      },
+      {
+        actor: LEAD,
+        run: async ({ callTool, prompt }) => {
+          const delta = wakeupDeltaFromPrompt(prompt);
+          expect(prompt).not.toContain('client_idle_disconnect');
+          expect(delta).toMatchObject({
+            newMailbox: [
+              {
+                body: 'Handled after three disconnects.',
+              },
+            ],
+          });
+          await callTool('pluto_complete_run', {
+            status: 'succeeded',
+            summary: 'done',
+          });
+          return { transcriptText: 'lead closed after three rearms\n' };
+        },
+      },
+    ], undefined, {
+      onRuntimeTrace: disconnectHarness.onRuntimeTrace,
+      onWaitRegistryReady: disconnectHarness.onWaitRegistryReady,
+    });
+
+    try {
+      expect(execution.toolCalls.filter((call) => call.actorKey === 'role:lead').map((call) => call.toolName)).toEqual(
+        expect.arrayContaining(['pluto_create_task', 'pluto_wait_for_event']),
+      );
+      expect(execution.toolCalls.filter((call) => call.actorKey === 'role:lead').map((call) => call.toolName)).not.toContain('pluto_read_state');
+      expect(
+        execution.result.runtimeTraces.filter(
+          (trace) => trace.kind === 'wait_silent_rearm' && trace.actor === 'role:lead',
+        ),
+      ).toEqual([
+        expect.objectContaining({ attempt: 1 }),
+        expect.objectContaining({ attempt: 2 }),
+        expect.objectContaining({ attempt: 3 }),
+      ]);
     } finally {
       await execution.cleanup();
     }

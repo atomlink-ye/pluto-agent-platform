@@ -21,7 +21,12 @@ import {
 import { actorKey } from '../../../../pluto-v2-core/src/core/team-context.js';
 
 import { startPlutoLocalApi } from '../../api/pluto-local-api.js';
-import { makeWaitRegistry, type WaitTraceEvent } from '../../api/wait-registry.js';
+import {
+  makeWaitRegistry,
+  type WaitOutcome,
+  type WaitRegistry,
+  type WaitTraceEvent,
+} from '../../api/wait-registry.js';
 import { assembleEvidencePacket, type EvidencePacket } from '../../evidence/evidence-packet.js';
 import type { LoadedAuthoredSpec } from '../../loader/authored-spec-loader.js';
 import { startPlutoMcpServer, type PlutoToolHandlers } from '../../mcp/pluto-mcp-server.js';
@@ -185,11 +190,31 @@ export type TurnStateTransitionTraceEvent = {
   readonly timestamp: string;
 };
 
+export type WaitSilentRearmTraceEvent = {
+  readonly kind: 'wait_silent_rearm';
+  readonly actor: string;
+  readonly attempt: number;
+  readonly cursor: number;
+};
+
+export type WaitRearmExhaustedTraceEvent = {
+  readonly kind: 'wait_rearm_exhausted';
+  readonly actor: string;
+  readonly attempts: number;
+};
+
+export type WaitRegistryControl = {
+  cancelWaitForActor(actor: ActorRef, reason: string): void;
+  hasArmedWait(actor: ActorRef): boolean;
+};
+
 export type RuntimeTraceEvent =
   | WaitTraceEvent
   | TaskCloseoutRejectedTraceEvent
   | BridgeUnavailableTraceEvent
-  | TurnStateTransitionTraceEvent;
+  | TurnStateTransitionTraceEvent
+  | WaitSilentRearmTraceEvent
+  | WaitRearmExhaustedTraceEvent;
 
 class PaseoRuntimeError extends Error {
   readonly runtimeTraces: ReadonlyArray<RuntimeTraceEvent>;
@@ -269,6 +294,8 @@ const DEFAULT_MAX_STEPS = 1000;
 const DEFAULT_WAIT_TIMEOUT_SEC = 600;
 const TRANSCRIPT_TAIL_LINES = 200;
 const CLIENT_IDLE_DISCONNECT_REASON = 'client_idle_disconnect';
+const MAX_SILENT_REARM_ATTEMPTS = 5;
+const WAIT_REARM_EXHAUSTED_REASON = 'wait_rearm_exhausted';
 
 function toPublicRunEvent(event: RunEvent): RunEvent {
   const { acceptedRequestKey: _acceptedRequestKey, ...publicEvent } =
@@ -625,6 +652,8 @@ async function runAgenticToolLoop(
     bridgeSelfCheck?: typeof runBridgeSelfCheck;
     waitTimeoutSec: number;
     workspaceCwd?: string;
+    onRuntimeTrace?: (event: RuntimeTraceEvent) => void;
+    onWaitRegistryReady?: (control: WaitRegistryControl) => void;
   },
 ): Promise<AgenticToolUsageSummary> {
   const leadActor = leadActorFromSpec(authored);
@@ -644,6 +673,7 @@ async function runAgenticToolLoop(
   const pendingArmByActorKey = new Map<string, Deferred<void>>();
   const turnStateByActorKey = new Map<string, ActorTurnState>();
   const trackedActorByKey = new Map<string, ActorRef>();
+  const disconnectRearmCountByActorKey = new Map<string, number>();
   const usage = createUsageAccumulator();
   let initiatingActor: ActorRef | null = null;
   const leaseStore = makeTurnLeaseStore(leadActor);
@@ -696,9 +726,24 @@ async function runAgenticToolLoop(
       runtimeTraceBuffer.shift();
     }
 
+    options.onRuntimeTrace?.(event);
+
     if (event.kind === 'wait_armed') {
       pendingArmByActorKey.get(event.actor)?.resolve();
     }
+  };
+
+  const disconnectRearmCountFor = (actor: ActorRef): number =>
+    disconnectRearmCountByActorKey.get(actorKey(actor)) ?? 0;
+
+  const setDisconnectRearmCount = (actor: ActorRef, count: number) => {
+    const key = actorKey(actor);
+    if (count <= 0) {
+      disconnectRearmCountByActorKey.delete(key);
+      return;
+    }
+
+    disconnectRearmCountByActorKey.set(key, count);
   };
 
   const transitionTurnState = (
@@ -735,12 +780,75 @@ async function runAgenticToolLoop(
     getPromptViewForActor: promptViewForActor,
     onTrace: pushRuntimeTrace,
   });
+  const driverWaitRegistry: WaitRegistry = {
+    async arm(input): Promise<WaitOutcome> {
+      for (;;) {
+        const result = await waitRegistry.arm(input);
+        if (result.outcome !== 'cancelled' || result.reason !== CLIENT_IDLE_DISCONNECT_REASON) {
+          return result;
+        }
+
+        const key = actorKey(input.actor);
+        if (turnStateByActorKey.get(key) !== 'waiting') {
+          return result;
+        }
+
+        const nextAttempt = disconnectRearmCountFor(input.actor) + 1;
+        if (nextAttempt >= MAX_SILENT_REARM_ATTEMPTS) {
+          setDisconnectRearmCount(input.actor, nextAttempt);
+          pushRuntimeTrace({
+            kind: 'wait_rearm_exhausted',
+            actor: key,
+            attempts: nextAttempt,
+          });
+          return {
+            outcome: 'cancelled',
+            reason: WAIT_REARM_EXHAUSTED_REASON,
+          };
+        }
+
+        setDisconnectRearmCount(input.actor, nextAttempt);
+        pushRuntimeTrace({
+          kind: 'wait_silent_rearm',
+          actor: key,
+          attempt: nextAttempt,
+          cursor: input.fromSequence,
+        });
+      }
+    },
+
+    notify(event, getPromptViewForActor) {
+      waitRegistry.notify(event, getPromptViewForActor);
+    },
+
+    cancelAll(reason) {
+      waitRegistry.cancelAll(reason);
+    },
+
+    cancelForActor(actor, reason) {
+      waitRegistry.cancelForActor(actor, reason);
+    },
+
+    hasArmedWait(actor) {
+      return waitRegistry.hasArmedWait(actor);
+    },
+  };
   const waitShutdownController = new AbortController();
+
+  options.onWaitRegistryReady?.({
+    cancelWaitForActor(actor, reason) {
+      driverWaitRegistry.cancelForActor(actor, reason);
+    },
+    hasArmedWait(actor) {
+      return driverWaitRegistry.hasArmedWait(actor);
+    },
+  });
 
   const rememberDeliveredEvent = (actor: ActorRef, sequence: number) => {
     const key = actorKey(actor);
     deliveryCursorByActorKey.set(key, sequence);
     waitCursorByActorKey.set(key, sequence);
+    setDisconnectRearmCount(actor, 0);
     transitionTurnState(actor, 'active', 'wait_delivered');
   };
 
@@ -858,12 +966,12 @@ async function runAgenticToolLoop(
     bearerToken: mcpBearerToken,
     handlers,
     leaseStore,
-    waitService: {
-      registry: waitRegistry,
-      cursorForActor(actor) {
-        const key = actorKey(actor);
-        return waitCursorByActorKey.get(key) ?? deliveryCursorByActorKey.get(key) ?? -1;
-      },
+      waitService: {
+        registry: driverWaitRegistry,
+        cursorForActor(actor) {
+          const key = actorKey(actor);
+          return waitCursorByActorKey.get(key) ?? deliveryCursorByActorKey.get(key) ?? -1;
+        },
       onEventDelivered: rememberDeliveredEvent,
       shutdownSignal: waitShutdownController.signal,
       shutdownReason: 'run_shutdown',
@@ -874,12 +982,12 @@ async function runAgenticToolLoop(
     handlers,
     leaseStore,
     registeredActorKeys: new Set(authored.declaredActors.map((actorName: string) => actorKey(authored.actors[actorName] as ActorRef))),
-    waitService: {
-      registry: waitRegistry,
-      cursorForActor(actor) {
-        const key = actorKey(actor);
-        return waitCursorByActorKey.get(key) ?? deliveryCursorByActorKey.get(key) ?? -1;
-      },
+      waitService: {
+        registry: driverWaitRegistry,
+        cursorForActor(actor) {
+          const key = actorKey(actor);
+          return waitCursorByActorKey.get(key) ?? deliveryCursorByActorKey.get(key) ?? -1;
+        },
       onEventDelivered: rememberDeliveredEvent,
       disconnectReason: CLIENT_IDLE_DISCONNECT_REASON,
       shutdownSignal: waitShutdownController.signal,
@@ -1253,7 +1361,7 @@ async function runAgenticToolLoop(
     }
   } finally {
     waitShutdownController.abort('run_shutdown');
-    waitRegistry.cancelAll('run_shutdown');
+    driverWaitRegistry.cancelAll('run_shutdown');
     leaseStore.setCurrent(null);
     await localApi.shutdown();
     await server.shutdown();
@@ -1280,6 +1388,8 @@ export async function runPaseo<S>(
     maxSteps?: number;
     waitTimeoutSec?: number;
     workspaceCwd?: string;
+    onRuntimeTrace?: (event: RuntimeTraceEvent) => void;
+    onWaitRegistryReady?: (control: WaitRegistryControl) => void;
   },
 ): Promise<{
   events: ReadonlyArray<RunEvent>;
@@ -1314,18 +1424,27 @@ export async function runPaseo<S>(
     const loadedAuthored = ensureLoadedAuthoredSpec(authored, 'agentic_tool');
     const usage = await runAgenticToolLoop(loadedAuthored, kernel, {
       client: options.client,
-        idProvider: options.idProvider,
-        clockProvider: options.clockProvider,
-        paseoAgentSpec: options.paseoAgentSpec,
-        bridgeSelfCheck: options.bridgeSelfCheck,
-        waitTimeoutSec: options.waitTimeoutSec ?? DEFAULT_WAIT_TIMEOUT_SEC,
-        workspaceCwd: options.workspaceCwd,
-      });
+      idProvider: options.idProvider,
+      clockProvider: options.clockProvider,
+      paseoAgentSpec: options.paseoAgentSpec,
+      bridgeSelfCheck: options.bridgeSelfCheck,
+      waitTimeoutSec: options.waitTimeoutSec ?? DEFAULT_WAIT_TIMEOUT_SEC,
+      workspaceCwd: options.workspaceCwd,
+      onRuntimeTrace: options.onRuntimeTrace,
+      onWaitRegistryReady: options.onWaitRegistryReady,
+    });
     const events = stripAcceptedRequestKey(kernel.eventLog.read(0, kernel.eventLog.head + 1));
     const views = replayAll(events);
     const evidencePacket = assembleEvidencePacket(views, events, kernel.state.runId, {
       initiatingActor: usage.initiatingActor,
-      runtimeTraces: usage.runtimeTraces.filter((trace) => trace.kind !== 'turn_state_transition'),
+      runtimeTraces: usage.runtimeTraces.filter((trace) =>
+        trace.kind === 'bridge_unavailable'
+        || trace.kind === 'task_closeout_rejected'
+        || trace.kind === 'wait_armed'
+        || trace.kind === 'wait_unblocked'
+        || trace.kind === 'wait_timed_out'
+        || trace.kind === 'wait_cancelled',
+      ),
     });
 
     return {

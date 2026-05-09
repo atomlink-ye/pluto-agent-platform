@@ -13,7 +13,9 @@ import {
   type PaseoAgentSpec,
   type PaseoCliClient,
   type PaseoUsageEstimate,
+  type RuntimeTraceEvent,
   type TurnStateTransitionTraceEvent,
+  type WaitRegistryControl,
 } from '../../../src/adapters/paseo/run-paseo.js';
 import { loadAuthoredSpec, type LoadedAuthoredSpec } from '../../../src/loader/authored-spec-loader.js';
 
@@ -50,6 +52,63 @@ function actorKey(actor: ActorRef): string {
     case 'role':
       return `role:${actor.role}`;
   }
+}
+
+function withTimeout<T>(promise: Promise<T>, label: string, timeoutMs = 1000): Promise<T> {
+  return Promise.race([
+    promise,
+    new Promise<T>((_resolve, reject) => {
+      setTimeout(() => reject(new Error(`${label} timed out`)), timeoutMs);
+    }),
+  ]);
+}
+
+function createDisconnectHarness(args: {
+  actor: ActorRef;
+  disconnects: number;
+  resolveOn: 'rearms' | 'exhausted';
+}) {
+  const targetActor = actorKey(args.actor);
+  let control: WaitRegistryControl | null = null;
+  let scheduledDisconnects = 0;
+  let resolveReady!: () => void;
+  const ready = new Promise<void>((resolve) => {
+    resolveReady = resolve;
+  });
+
+  const scheduleCancel = () => {
+    void Promise.resolve().then(() => {
+      if (control?.hasArmedWait(args.actor)) {
+        control.cancelWaitForActor(args.actor, 'client_idle_disconnect');
+      }
+    });
+  };
+
+  return {
+    onWaitRegistryReady(nextControl: WaitRegistryControl) {
+      control = nextControl;
+    },
+    onRuntimeTrace(trace: RuntimeTraceEvent) {
+      if (trace.kind === 'wait_armed' && trace.actor === targetActor && scheduledDisconnects < args.disconnects) {
+        scheduledDisconnects += 1;
+        scheduleCancel();
+        return;
+      }
+
+      if (trace.actor !== targetActor) {
+        return;
+      }
+
+      if (args.resolveOn === 'rearms' && trace.kind === 'wait_silent_rearm' && trace.attempt === args.disconnects) {
+        resolveReady();
+      }
+
+      if (args.resolveOn === 'exhausted' && trace.kind === 'wait_rearm_exhausted' && trace.attempts === args.disconnects) {
+        resolveReady();
+      }
+    },
+    ready,
+  };
 }
 
 function buildSpec(): LoadedAuthoredSpec {
@@ -89,7 +148,7 @@ function isAutoWaitableMutation(toolName: string, body: unknown): body is { turn
     && (body as { turnDisposition?: unknown }).turnDisposition === 'waiting';
 }
 
-function makeAutoWaitClient(script: readonly ToolScriptEntry[]): PaseoCliClient {
+function makeAutoWaitClient(script: readonly ToolScriptEntry[], options?: { autoWaitMutations?: boolean }): PaseoCliClient {
   const grouped = new Map<string, ToolScriptEntry[]>();
   const cursors = new Map<string, number>();
   const promptByActor = new Map<string, string>();
@@ -116,6 +175,8 @@ function makeAutoWaitClient(script: readonly ToolScriptEntry[]): PaseoCliClient 
           return { method: 'POST' as const, path: '/tools/create-task', body: args };
         case 'pluto_append_mailbox_message':
           return { method: 'POST' as const, path: '/tools/append-mailbox-message', body: args };
+        case 'pluto_wait_for_event':
+          return { method: 'POST' as const, path: '/tools/wait-for-event', body: args };
         case 'pluto_complete_run':
           return { method: 'POST' as const, path: '/tools/complete-run', body: args };
         default:
@@ -135,7 +196,7 @@ function makeAutoWaitClient(script: readonly ToolScriptEntry[]): PaseoCliClient 
     const text = await response.text();
     const body = text.length === 0 ? null : JSON.parse(text);
 
-    if (response.status === 200 && isAutoWaitableMutation(toolName, body)) {
+    if (options?.autoWaitMutations !== false && response.status === 200 && isAutoWaitableMutation(toolName, body)) {
       const waitResponse = await fetch(`${url}/tools/wait-for-event`, {
         method: 'POST',
         headers: {
@@ -296,6 +357,87 @@ describe('agentic_tool turn-state tracing', () => {
         'role:planner',
       ]);
       expect(turnTransitions.length).toBeGreaterThanOrEqual(6);
+    } finally {
+      await rm(workspaceCwd, { recursive: true, force: true });
+    }
+  });
+
+  it('emits wait_rearm_exhausted after five client_idle_disconnect cancellations and surfaces the cancellation', async () => {
+    const workspaceCwd = await mkdtemp(join(tmpdir(), 'pluto-turn-state-'));
+    const disconnectHarness = createDisconnectHarness({
+      actor: LEAD,
+      disconnects: 5,
+      resolveOn: 'exhausted',
+    });
+    let exhaustedWait: ToolHttpResponse | null = null;
+
+    try {
+      const result = await runPaseo(
+        buildSpec(),
+        makePaseoAdapter({
+          idProvider: counterIdProvider(100),
+          clockProvider: fixedClockProvider(FIXED_TIME),
+        }),
+        {
+          client: makeAutoWaitClient([
+            {
+              actor: LEAD,
+              run: async ({ callTool }) => {
+                await callTool('pluto_create_task', {
+                  title: 'Draft the change',
+                  ownerActor: LEAD,
+                  dependsOn: [],
+                });
+                exhaustedWait = await callTool('pluto_wait_for_event', { timeoutSec: 300 });
+                expect(exhaustedWait.status).toBe(200);
+                expect(exhaustedWait.body).toMatchObject({
+                  outcome: 'cancelled',
+                  reason: 'wait_rearm_exhausted',
+                });
+                return { transcriptText: 'lead surfaced wait cancellation\n' };
+              },
+            },
+            {
+              actor: LEAD,
+              run: async ({ callTool }) => {
+                await callTool('pluto_complete_run', {
+                  status: 'cancelled',
+                  summary: 'wait rearm exhausted',
+                });
+                return { transcriptText: 'lead closed after wait cap\n' };
+              },
+            },
+          ], { autoWaitMutations: false }),
+          idProvider: counterIdProvider(1),
+          clockProvider: fixedClockProvider(FIXED_TIME),
+          paseoAgentSpec: (actor) => ({
+            provider: 'opencode',
+            model: 'openai/gpt-5.4',
+            mode: 'build',
+            title: actorKey(actor),
+            initialPrompt: `bootstrap for ${actorKey(actor)}`,
+          }),
+          workspaceCwd,
+          onRuntimeTrace: disconnectHarness.onRuntimeTrace,
+          onWaitRegistryReady: disconnectHarness.onWaitRegistryReady,
+        },
+      );
+
+      await withTimeout(disconnectHarness.ready, 'wait rearm exhaustion');
+
+      expect(result.runtimeTraces).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          kind: 'wait_rearm_exhausted',
+          actor: 'role:lead',
+          attempts: 5,
+        }),
+      ]));
+      expect(
+        result.runtimeTraces.filter(
+          (trace) => trace.kind === 'wait_cancelled' && trace.actor === 'role:lead' && trace.reason === 'client_idle_disconnect',
+        ),
+      ).toHaveLength(5);
+      expect(exhaustedWait).not.toBeNull();
     } finally {
       await rm(workspaceCwd, { recursive: true, force: true });
     }
