@@ -131,6 +131,131 @@ describe('buildUsageSummary', () => {
     expect(summary.perTurn.map((turn) => turn.totalTokens)).toEqual([20, null]);
   });
 
+  it('sets per-turn totalTokens to null when either side of the turn total is unavailable', () => {
+    const summary = buildUsageSummary({
+      authored,
+      evidencePacket,
+      usage: {
+        totalInputTokens: null,
+        totalOutputTokens: 8,
+        totalCostUsd: 0.1,
+        byActor: new Map(),
+        perTurn: [
+          {
+            turnIndex: 0,
+            actor: { kind: 'role', role: 'generator' },
+            inputTokens: null,
+            outputTokens: 8,
+            costUsd: 0.1,
+            waitExitCode: 0,
+          },
+        ],
+        usageStatus: 'available',
+      },
+      actorSpecByKey: new Map([
+        ['role:generator', { provider: 'opencode', model: 'openai/gpt-5.4-mini', mode: 'build' }],
+      ]),
+      evidencePacketPath: 'runs/run-1/evidence-packet.json',
+    });
+
+    expect(summary.perTurn[0]).toMatchObject({
+      inputTokens: null,
+      outputTokens: 8,
+      totalTokens: null,
+      costUsd: 0.1,
+    });
+  });
+
+  it('keeps byActor aggregates null when every turn for that actor has unavailable usage', () => {
+    const summary = buildUsageSummary({
+      authored,
+      evidencePacket,
+      usage: {
+        totalInputTokens: null,
+        totalOutputTokens: null,
+        totalCostUsd: null,
+        byActor: new Map(),
+        perTurn: [
+          {
+            turnIndex: 0,
+            actor: { kind: 'role', role: 'lead' },
+            inputTokens: null,
+            outputTokens: null,
+            costUsd: null,
+            waitExitCode: 0,
+          },
+          {
+            turnIndex: 1,
+            actor: { kind: 'role', role: 'lead' },
+            inputTokens: null,
+            outputTokens: null,
+            costUsd: null,
+            waitExitCode: 0,
+          },
+        ],
+        usageStatus: 'unavailable',
+      },
+      actorSpecByKey: new Map([
+        ['role:lead', { provider: 'opencode', model: 'openai/gpt-5.4-mini', mode: 'build' }],
+      ]),
+      evidencePacketPath: 'runs/run-1/evidence-packet.json',
+    });
+
+    expect(summary.byActor['role:lead']).toMatchObject({
+      turns: 2,
+      inputTokens: null,
+      outputTokens: null,
+      totalTokens: null,
+      costUsd: null,
+    });
+  });
+
+  it('keeps byModel aggregates null when every turn for that model has unavailable usage', () => {
+    const summary = buildUsageSummary({
+      authored,
+      evidencePacket,
+      usage: {
+        totalInputTokens: null,
+        totalOutputTokens: null,
+        totalCostUsd: null,
+        byActor: new Map(),
+        perTurn: [
+          {
+            turnIndex: 0,
+            actor: { kind: 'role', role: 'generator' },
+            inputTokens: null,
+            outputTokens: null,
+            costUsd: null,
+            waitExitCode: 0,
+          },
+          {
+            turnIndex: 1,
+            actor: { kind: 'role', role: 'evaluator' },
+            inputTokens: null,
+            outputTokens: null,
+            costUsd: null,
+            waitExitCode: 0,
+          },
+        ],
+        usageStatus: 'unavailable',
+      },
+      actorSpecByKey: new Map([
+        ['role:generator', { provider: 'opencode', model: 'openai/gpt-5.4-mini', mode: 'build' }],
+        ['role:evaluator', { provider: 'opencode', model: 'openai/gpt-5.4-mini', mode: 'build' }],
+      ]),
+      evidencePacketPath: 'runs/run-1/evidence-packet.json',
+    });
+
+    expect(summary.byModel['opencode:openai/gpt-5.4-mini']).toMatchObject({
+      turns: 2,
+      inputTokens: null,
+      outputTokens: null,
+      totalTokens: null,
+      costUsd: null,
+      actors: ['role:generator', 'role:evaluator'],
+    });
+  });
+
   it('keeps explicit zero totals numeric when usage was reported for every turn', () => {
     const summary = buildUsageSummary({
       authored,

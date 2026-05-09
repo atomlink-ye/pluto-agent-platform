@@ -96,34 +96,48 @@ type InternalAcceptedRequestKeyEvent = RunEvent & {
   acceptedRequestKey?: string | null;
 };
 
+type UsageMetric = number | null;
+
 type UsageByActor = {
   turns: number;
-  inputTokens: number;
-  outputTokens: number;
-  costUsd: number;
+  inputTokens: UsageMetric;
+  outputTokens: UsageMetric;
+  costUsd: UsageMetric;
 };
 
 type UsagePerTurn = {
   turnIndex: number;
   actor: ActorRef;
-  inputTokens: number | null;
-  outputTokens: number | null;
-  costUsd: number | null;
+  inputTokens: UsageMetric;
+  outputTokens: UsageMetric;
+  costUsd: UsageMetric;
   waitExitCode: number;
 };
 
 type RuntimeUsageStatus = 'available' | 'unavailable' | 'partial';
 
 type UsageSummary = {
-  totalInputTokens: number;
-  totalOutputTokens: number;
-  totalCostUsd: number;
+  totalInputTokens: UsageMetric;
+  totalOutputTokens: UsageMetric;
+  totalCostUsd: UsageMetric;
   usageStatus: RuntimeUsageStatus;
   reportedBy: 'paseo.usageEstimate';
   estimated: boolean;
   byActor: ReadonlyMap<string, UsageByActor>;
   perTurn: ReadonlyArray<UsagePerTurn>;
 };
+
+function normalizeUsageMetric(value: number | undefined): UsageMetric {
+  return typeof value === 'number' ? value : null;
+}
+
+function nullSafeSum(a: UsageMetric, b: UsageMetric): UsageMetric {
+  if (a === null && b === null) {
+    return null;
+  }
+
+  return (a ?? 0) + (b ?? 0);
+}
 
 type AgenticToolUsageSummary = UsageSummary & {
   initiatingActor: ActorRef | null;
@@ -332,9 +346,9 @@ function latestRunEvent(events: readonly RunEvent[]): RunEvent {
 function createUsageAccumulator() {
   const byActor = new Map<string, UsageByActor>();
   const perTurn: UsagePerTurn[] = [];
-  let totalInputTokens = 0;
-  let totalOutputTokens = 0;
-  let totalCostUsd = 0;
+  let totalInputTokens: UsageMetric = null;
+  let totalOutputTokens: UsageMetric = null;
+  let totalCostUsd: UsageMetric = null;
 
   const hasReportedUsage = (entry: UsagePerTurn): boolean =>
     entry.inputTokens != null || entry.outputTokens != null || entry.costUsd != null;
@@ -348,32 +362,32 @@ function createUsageAccumulator() {
       outputTokens?: number;
       costUsd?: number;
     }) {
-      const inputTokens = entry.inputTokens ?? 0;
-      const outputTokens = entry.outputTokens ?? 0;
-      const costUsd = entry.costUsd ?? 0;
+      const inputTokens = normalizeUsageMetric(entry.inputTokens);
+      const outputTokens = normalizeUsageMetric(entry.outputTokens);
+      const costUsd = normalizeUsageMetric(entry.costUsd);
       const key = actorKey(entry.actor);
       const actorTotals = byActor.get(key) ?? {
         turns: 0,
-        inputTokens: 0,
-        outputTokens: 0,
-        costUsd: 0,
+        inputTokens: null,
+        outputTokens: null,
+        costUsd: null,
       };
 
       actorTotals.turns += 1;
-      actorTotals.inputTokens += inputTokens;
-      actorTotals.outputTokens += outputTokens;
-      actorTotals.costUsd += costUsd;
+      actorTotals.inputTokens = nullSafeSum(actorTotals.inputTokens, inputTokens);
+      actorTotals.outputTokens = nullSafeSum(actorTotals.outputTokens, outputTokens);
+      actorTotals.costUsd = nullSafeSum(actorTotals.costUsd, costUsd);
       byActor.set(key, actorTotals);
 
-      totalInputTokens += inputTokens;
-      totalOutputTokens += outputTokens;
-      totalCostUsd += costUsd;
+      totalInputTokens = nullSafeSum(totalInputTokens, inputTokens);
+      totalOutputTokens = nullSafeSum(totalOutputTokens, outputTokens);
+      totalCostUsd = nullSafeSum(totalCostUsd, costUsd);
       perTurn.push({
         turnIndex: entry.turn,
         actor: entry.actor,
-        inputTokens: entry.inputTokens ?? null,
-        outputTokens: entry.outputTokens ?? null,
-        costUsd: entry.costUsd ?? null,
+        inputTokens,
+        outputTokens,
+        costUsd,
         waitExitCode: entry.waitExitCode,
       });
     },

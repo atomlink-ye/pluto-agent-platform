@@ -1,4 +1,5 @@
 import { spawnSync } from 'node:child_process';
+import { readFileSync } from 'node:fs';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -13,6 +14,7 @@ import { renderFinalReport } from '../../src/evidence/final-report-builder.js';
 const REPO_ROOT = fileURLToPath(new URL('../../../../', import.meta.url));
 const TSX_BIN = join(REPO_ROOT, 'node_modules', '.bin', 'tsx');
 const POST_T5_FIXTURE_DIR = join(REPO_ROOT, 'tests', 'fixtures', 'live-smoke', 'post-t5-poet-critic-haiku');
+const POST_T5_USAGE_SUMMARY_PATH = join(POST_T5_FIXTURE_DIR, 'usage-summary.json');
 
 const SYSTEM: ActorRef = { kind: 'system' };
 const MANAGER: ActorRef = { kind: 'manager' };
@@ -331,5 +333,57 @@ describe('smoke acceptance', () => {
     expect(result.status).toBe(0);
     expect(result.stderr).toBe('');
     expect(result.stdout.trim().endsWith('tests/fixtures/live-smoke/post-t5-poet-critic-haiku')).toBe(true);
+  });
+
+  it('keeps the captured POST-T5 unavailable usage fixture null-shaped at every aggregate level', () => {
+    const usageSummary = JSON.parse(readFileSync(POST_T5_USAGE_SUMMARY_PATH, 'utf8')) as {
+      usageStatus: string;
+      totalInputTokens: number | null;
+      totalOutputTokens: number | null;
+      totalTokens: number | null;
+      totalCostUsd: number | null;
+      byActor: Record<string, {
+        inputTokens: number | null;
+        outputTokens: number | null;
+        totalTokens: number | null;
+        costUsd: number | null;
+      }>;
+      byModel: Record<string, {
+        inputTokens: number | null;
+        outputTokens: number | null;
+        totalTokens: number | null;
+        costUsd: number | null;
+      }>;
+      perTurn: Array<{
+        inputTokens: number | null;
+        outputTokens: number | null;
+        totalTokens: number | null;
+        costUsd: number | null;
+      }>;
+    };
+
+    expect(usageSummary.usageStatus).toBe('unavailable');
+    expect(usageSummary.totalInputTokens).toBeNull();
+    expect(usageSummary.totalOutputTokens).toBeNull();
+    expect(usageSummary.totalTokens).toBeNull();
+    expect(usageSummary.totalCostUsd).toBeNull();
+    expect(usageSummary.byActor['role:lead']).toMatchObject({
+      inputTokens: null,
+      outputTokens: null,
+      totalTokens: null,
+      costUsd: null,
+    });
+    expect(usageSummary.byModel['opencode:openai/gpt-5.4-mini']).toMatchObject({
+      inputTokens: null,
+      outputTokens: null,
+      totalTokens: null,
+      costUsd: null,
+    });
+    expect(usageSummary.perTurn.every((turn) =>
+      turn.inputTokens === null
+      && turn.outputTokens === null
+      && turn.totalTokens === null
+      && turn.costUsd === null,
+    )).toBe(true);
   });
 });

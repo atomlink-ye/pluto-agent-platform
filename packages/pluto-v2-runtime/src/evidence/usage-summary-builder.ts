@@ -54,21 +54,21 @@ export type UsageSummaryActorSpec = {
 export type UsagePerTurn = {
   readonly turnIndex: number;
   readonly actor: ActorRef;
-  readonly inputTokens: number | null;
-  readonly outputTokens: number | null;
-  readonly costUsd: number | null;
+  readonly inputTokens: UsageMetric;
+  readonly outputTokens: UsageMetric;
+  readonly costUsd: UsageMetric;
   readonly waitExitCode: number;
 };
 
 export type UsageSummaryInput = {
-  readonly totalInputTokens: number;
-  readonly totalOutputTokens: number;
-  readonly totalCostUsd: number;
+  readonly totalInputTokens: UsageMetric;
+  readonly totalOutputTokens: UsageMetric;
+  readonly totalCostUsd: UsageMetric;
   readonly byActor: ReadonlyMap<string, {
     readonly turns: number;
-    readonly inputTokens: number;
-    readonly outputTokens: number;
-    readonly costUsd: number;
+    readonly inputTokens: UsageMetric;
+    readonly outputTokens: UsageMetric;
+    readonly costUsd: UsageMetric;
   }>;
   readonly perTurn: ReadonlyArray<UsagePerTurn>;
   readonly usageStatus?: UsageStatus;
@@ -134,16 +134,16 @@ function totalTokensOf(inputTokens: UsageMetric, outputTokens: UsageMetric): Usa
   return inputTokens == null || outputTokens == null ? null : inputTokens + outputTokens;
 }
 
+function nullSafeSum(a: UsageMetric, b: UsageMetric): UsageMetric {
+  if (a === null && b === null) {
+    return null;
+  }
+
+  return (a ?? 0) + (b ?? 0);
+}
+
 function sumMetric(values: ReadonlyArray<UsageMetric>): UsageMetric {
-  if (values.length === 0) {
-    return null;
-  }
-
-  if (values.some((value) => value == null)) {
-    return null;
-  }
-
-  return values.reduce<number>((total, value) => total + (value ?? 0), 0);
+  return values.reduce<UsageMetric>((total, value) => nullSafeSum(total, value), null);
 }
 
 function usageStatusOf(perTurn: ReadonlyArray<UsagePerTurn>): UsageStatus {
@@ -210,11 +210,13 @@ export function buildUsageSummary(args: {
   const byActor = Object.fromEntries(
     [...byActorAccumulator.entries()].map(([key, turns]) => {
       const spec = args.actorSpecByKey?.get(key);
+      const inputTokens = sumMetric(turns.map((turn) => turn.inputTokens));
+      const outputTokens = sumMetric(turns.map((turn) => turn.outputTokens));
       const normalized: ActorUsageTotals = {
         turns: turns.length,
-        inputTokens: sumMetric(turns.map((turn) => turn.inputTokens)),
-        outputTokens: sumMetric(turns.map((turn) => turn.outputTokens)),
-        totalTokens: sumMetric(turns.map((turn) => turn.totalTokens)),
+        inputTokens,
+        outputTokens,
+        totalTokens: totalTokensOf(inputTokens, outputTokens),
         costUsd: sumMetric(turns.map((turn) => turn.costUsd)),
         provider: spec?.provider ?? null,
         model: spec?.model ?? null,
@@ -236,25 +238,17 @@ export function buildUsageSummary(args: {
       mode: turn.mode,
       thinking: turn.thinking,
       turns: 0,
-      inputTokens: 0,
-      outputTokens: 0,
-      totalTokens: 0,
-      costUsd: 0,
+      inputTokens: null,
+      outputTokens: null,
+      totalTokens: null,
+      costUsd: null,
       actors: [],
     };
     current.turns += 1;
-    current.inputTokens = current.inputTokens == null || turn.inputTokens == null
-      ? null
-      : current.inputTokens + turn.inputTokens;
-    current.outputTokens = current.outputTokens == null || turn.outputTokens == null
-      ? null
-      : current.outputTokens + turn.outputTokens;
-    current.totalTokens = current.totalTokens == null || turn.totalTokens == null
-      ? null
-      : current.totalTokens + turn.totalTokens;
-    current.costUsd = current.costUsd == null || turn.costUsd == null
-      ? null
-      : current.costUsd + turn.costUsd;
+    current.inputTokens = nullSafeSum(current.inputTokens, turn.inputTokens);
+    current.outputTokens = nullSafeSum(current.outputTokens, turn.outputTokens);
+    current.totalTokens = totalTokensOf(current.inputTokens, current.outputTokens);
+    current.costUsd = nullSafeSum(current.costUsd, turn.costUsd);
     if (!current.actors.includes(turn.actorKey)) {
       current.actors.push(turn.actorKey);
     }

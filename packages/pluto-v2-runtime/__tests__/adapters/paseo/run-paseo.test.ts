@@ -4,6 +4,7 @@ import { counterIdProvider, fixedClockProvider, type ActorRef, type AuthoredSpec
 
 import type { KernelView } from '../../../src/runtime/kernel-view.js';
 import { runPaseo, type PaseoCliClient, type PaseoRuntimeAdapter, type PaseoUsageEstimate } from '../../../src/adapters/paseo/run-paseo.js';
+import { buildUsageSummary } from '../../../src/evidence/usage-summary-builder.js';
 
 type MockTurn = {
   actor: ActorRef;
@@ -50,6 +51,8 @@ function actorKeyForTest(actor: ActorRef): string {
     case 'role':
       return `role:${actor.role}`;
   }
+
+  return 'unknown';
 }
 
 function makeAdapter(options: {
@@ -317,6 +320,74 @@ describe('runPaseo', () => {
     expect(result.usage.usageStatus).toBe('partial');
     expect(result.usage.reportedBy).toBe('paseo.usageEstimate');
     expect(result.usage.estimated).toBe(true);
+  });
+
+  it('preserves unavailable usage as null across runtime and built aggregate views', async () => {
+    const client = makeMockClient([
+      {
+        actor: generatorActor,
+        transcriptText: 'missing usage\n',
+        usage: {},
+        waitExitCode: 0,
+      },
+    ]);
+    const adapter = makeAdapter({
+      pendingTurns: [{ actor: generatorActor, prompt: 'prompt-1' }],
+      stepFactory: (state) => ({
+        kind: 'done',
+        completion: { status: 'succeeded', summary: `turns:${state.turnIndex}` },
+        nextState: state,
+      }),
+    });
+
+    const result = await runWith({ client, adapter, maxSteps: 1 });
+    const usageSummary = buildUsageSummary({
+      authored,
+      evidencePacket: result.evidencePacket,
+      usage: result.usage,
+      actorSpecByKey: new Map([
+        ['role:generator', { provider: 'opencode', model: 'openai/gpt-5.4', mode: 'build' }],
+      ]),
+      evidencePacketPath: 'runs/run-1/evidence-packet.json',
+    });
+
+    expect(result.usage.totalInputTokens).toBeNull();
+    expect(result.usage.totalOutputTokens).toBeNull();
+    expect(result.usage.totalCostUsd).toBeNull();
+    expect(result.usage.byActor.get('role:generator')).toEqual({
+      turns: 1,
+      inputTokens: null,
+      outputTokens: null,
+      costUsd: null,
+    });
+    expect(result.usage.perTurn[0]).toEqual({
+      turnIndex: 0,
+      actor: generatorActor,
+      inputTokens: null,
+      outputTokens: null,
+      costUsd: null,
+      waitExitCode: 0,
+    });
+    expect(result.usage.usageStatus).toBe('unavailable');
+
+    expect(usageSummary.byActor['role:generator']).toMatchObject({
+      inputTokens: null,
+      outputTokens: null,
+      totalTokens: null,
+      costUsd: null,
+    });
+    expect(usageSummary.byModel['opencode:openai/gpt-5.4']).toMatchObject({
+      inputTokens: null,
+      outputTokens: null,
+      totalTokens: null,
+      costUsd: null,
+    });
+    expect(usageSummary.perTurn[0]).toMatchObject({
+      inputTokens: null,
+      outputTokens: null,
+      totalTokens: null,
+      costUsd: null,
+    });
   });
 
   it('does not count model phases against maxSteps', async () => {
