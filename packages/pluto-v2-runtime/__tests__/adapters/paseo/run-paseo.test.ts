@@ -20,7 +20,7 @@ type MockState = {
 type ClientScriptEntry = {
   actor: ActorRef;
   transcriptText: string;
-  usage: Required<PaseoUsageEstimate>;
+  usage: PaseoUsageEstimate;
   waitExitCode: number;
 };
 
@@ -254,7 +254,7 @@ describe('runPaseo', () => {
     ]);
   });
 
-  it('marks usage as unavailable when all per-turn usage values are zero', async () => {
+  it('keeps zero-valued usage reports available when the provider reported them explicitly', async () => {
     const client = makeMockClient([
       {
         actor: generatorActor,
@@ -277,9 +277,46 @@ describe('runPaseo', () => {
     expect(result.usage.totalInputTokens).toBe(0);
     expect(result.usage.totalOutputTokens).toBe(0);
     expect(result.usage.totalCostUsd).toBe(0);
-    expect(result.usage.usageStatus).toBe('unavailable');
+    expect(result.usage.usageStatus).toBe('available');
     expect(result.usage.reportedBy).toBe('paseo.usageEstimate');
-    expect(result.usage.estimated).toBe(false);
+    expect(result.usage.estimated).toBe(true);
+  });
+
+  it('marks usage as partial when only some turns report telemetry', async () => {
+    const client = makeMockClient([
+      {
+        actor: generatorActor,
+        transcriptText: 'reported usage\n',
+        usage: { inputTokens: 10, outputTokens: 4, costUsd: 0.01 },
+        waitExitCode: 0,
+      },
+      {
+        actor: generatorActor,
+        transcriptText: 'missing usage\n',
+        usage: {},
+        waitExitCode: 0,
+      },
+    ]);
+    const adapter = makeAdapter({
+      pendingTurns: [
+        { actor: generatorActor, prompt: 'prompt-1' },
+        { actor: generatorActor, prompt: 'prompt-2' },
+      ],
+      stepFactory: (state) => ({
+        kind: 'done',
+        completion: { status: 'succeeded', summary: `turns:${state.turnIndex}` },
+        nextState: state,
+      }),
+    });
+
+    const result = await runWith({ client, adapter, maxSteps: 1 });
+
+    expect(result.usage.totalInputTokens).toBe(10);
+    expect(result.usage.totalOutputTokens).toBe(4);
+    expect(result.usage.totalCostUsd).toBe(0.01);
+    expect(result.usage.usageStatus).toBe('partial');
+    expect(result.usage.reportedBy).toBe('paseo.usageEstimate');
+    expect(result.usage.estimated).toBe(true);
   });
 
   it('does not count model phases against maxSteps', async () => {

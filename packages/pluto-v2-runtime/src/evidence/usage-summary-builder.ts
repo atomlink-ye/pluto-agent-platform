@@ -71,7 +71,7 @@ export type UsageSummaryInput = {
     readonly costUsd: number;
   }>;
   readonly perTurn: ReadonlyArray<UsagePerTurn>;
-  readonly usageStatus?: string;
+  readonly usageStatus?: UsageStatus;
   readonly reportedBy?: string;
   readonly estimated?: boolean;
 };
@@ -127,7 +127,7 @@ function normalizeMetric(value: number | null | undefined): UsageMetric {
 }
 
 function hasReportedUsage(entry: Pick<UsagePerTurn, 'inputTokens' | 'outputTokens' | 'costUsd'>): boolean {
-  return (entry.inputTokens ?? 0) > 0 || (entry.outputTokens ?? 0) > 0 || (entry.costUsd ?? 0) > 0;
+  return entry.inputTokens != null || entry.outputTokens != null || entry.costUsd != null;
 }
 
 function totalTokensOf(inputTokens: UsageMetric, outputTokens: UsageMetric): UsageMetric {
@@ -154,6 +154,20 @@ function usageStatusOf(perTurn: ReadonlyArray<UsagePerTurn>): UsageStatus {
   }
 
   return reportedTurnCount === perTurn.length ? 'available' : 'partial';
+}
+
+function aggregateMetric(values: ReadonlyArray<UsageMetric>, usageStatus: UsageStatus): UsageMetric {
+  if (usageStatus === 'unavailable') {
+    return null;
+  }
+
+  const reportedTotal = values.reduce<number>((total, value) => total + (value ?? 0), 0);
+  if (usageStatus === 'partial') {
+    // Partial totals intentionally sum only the turns that reported usage.
+    return reportedTotal;
+  }
+
+  return values.some((value) => value == null) ? null : reportedTotal;
 }
 
 export function buildUsageSummary(args: {
@@ -185,7 +199,7 @@ export function buildUsageSummary(args: {
     };
   });
 
-  const usageStatus = usageStatusOf(args.usage.perTurn);
+  const usageStatus = args.usage.usageStatus ?? usageStatusOf(args.usage.perTurn);
   const byActorAccumulator = new Map<string, typeof perTurn>();
   for (const turn of perTurn) {
     const current = byActorAccumulator.get(turn.actorKey) ?? [];
@@ -247,8 +261,9 @@ export function buildUsageSummary(args: {
     byModelAccumulator.set(breakdownKey, current);
   }
 
-  const totalInputTokens = sumMetric(perTurn.map((turn) => turn.inputTokens));
-  const totalOutputTokens = sumMetric(perTurn.map((turn) => turn.outputTokens));
+  const totalInputTokens = aggregateMetric(perTurn.map((turn) => turn.inputTokens), usageStatus);
+  const totalOutputTokens = aggregateMetric(perTurn.map((turn) => turn.outputTokens), usageStatus);
+  const totalCostUsd = aggregateMetric(perTurn.map((turn) => turn.costUsd), usageStatus);
 
   return {
     runId: args.authored.runId,
@@ -260,7 +275,7 @@ export function buildUsageSummary(args: {
     totalInputTokens,
     totalOutputTokens,
     totalTokens: totalTokensOf(totalInputTokens, totalOutputTokens),
-    totalCostUsd: sumMetric(perTurn.map((turn) => turn.costUsd)),
+    totalCostUsd,
     usageStatus,
     reportedBy: 'paseo.usageEstimate',
     estimated: args.usage.estimated ?? usageStatus !== 'unavailable',

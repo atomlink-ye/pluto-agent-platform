@@ -49,4 +49,36 @@ describe('renderFinalReport', () => {
 
     expect(report).not.toContain('## Diagnostics');
   });
+
+  it('renders unavailable usage totals as unavailable instead of zero', () => {
+    const views = replayAll([]);
+    const report = renderFinalReport({
+      runId: 'run-1',
+      status: 'failed',
+      summary: 'No usage telemetry.',
+      initiatingActor: { kind: 'role', role: 'lead' },
+      evidence: views.evidence,
+      tasks: views.task,
+      mailbox: views.mailbox,
+      artifacts: [],
+      usageSummary: {
+        usageStatus: 'unavailable',
+        totalInputTokens: null,
+        totalOutputTokens: null,
+        totalTokens: null,
+        totalCostUsd: null,
+      },
+    });
+
+    expect(report).toContain('## Usage Summary');
+    expect(report).toContain('- Usage status: unavailable');
+    expect(report).toContain('- Input tokens: (unavailable)');
+    expect(report).toContain('- Output tokens: (unavailable)');
+    expect(report).toContain('- Total tokens: (unavailable)');
+    expect(report).toContain('- Cost (USD): (unavailable)');
+    expect(report).not.toContain('- Input tokens: 0');
+    expect(report).not.toContain('- Output tokens: 0');
+    expect(report).not.toContain('- Total tokens: 0');
+    expect(report).not.toContain('- Cost (USD): 0');
+  });
 });

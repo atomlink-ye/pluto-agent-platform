@@ -1,6 +1,7 @@
 import type { ActorRef, ReplayViews } from '@pluto/v2-core';
 
 import type { RuntimeDiagnostics, RuntimeWaitTrace } from './evidence-packet.js';
+import type { BuiltUsageSummary } from './usage-summary-builder.js';
 
 type ReportArtifact = {
   readonly artifactId: string;
@@ -13,6 +14,11 @@ type ReportTask = {
   readonly title: string;
   readonly state: string;
 };
+
+type ReportUsageSummary = Pick<
+  BuiltUsageSummary,
+  'usageStatus' | 'totalInputTokens' | 'totalOutputTokens' | 'totalTokens' | 'totalCostUsd'
+>;
 
 function actorKey(
   actor:
@@ -87,6 +93,23 @@ function appendDiagnostics(lines: string[], runtimeDiagnostics: RuntimeDiagnosti
   }
 }
 
+function formatUsageMetric(value: number | null): string {
+  return value == null ? '(unavailable)' : String(value);
+}
+
+function appendUsageSummary(lines: string[], usageSummary: ReportUsageSummary | undefined): void {
+  if (usageSummary == null) {
+    return;
+  }
+
+  lines.push('', '## Usage Summary');
+  lines.push(`- Usage status: ${usageSummary.usageStatus}`);
+  lines.push(`- Input tokens: ${formatUsageMetric(usageSummary.totalInputTokens)}`);
+  lines.push(`- Output tokens: ${formatUsageMetric(usageSummary.totalOutputTokens)}`);
+  lines.push(`- Total tokens: ${formatUsageMetric(usageSummary.totalTokens)}`);
+  lines.push(`- Cost (USD): ${formatUsageMetric(usageSummary.totalCostUsd)}`);
+}
+
 export function renderFinalReport(input: {
   readonly runId: string;
   readonly status: string;
@@ -96,6 +119,7 @@ export function renderFinalReport(input: {
   readonly tasks: ReplayViews['task'];
   readonly mailbox: ReplayViews['mailbox'];
   readonly artifacts: ReadonlyArray<ReportArtifact>;
+  readonly usageSummary?: ReportUsageSummary;
   readonly runtimeDiagnostics?: RuntimeDiagnostics;
 }): string {
   const lines = [
@@ -129,6 +153,7 @@ export function renderFinalReport(input: {
     lines.push(`- ${artifact.artifactId}: ${artifact.kind} ${artifact.mediaType} (${artifact.byteSize} bytes)`);
   }
 
+  appendUsageSummary(lines, input.usageSummary);
   appendDiagnostics(lines, input.runtimeDiagnostics);
 
   return `${lines.join('\n')}\n`;

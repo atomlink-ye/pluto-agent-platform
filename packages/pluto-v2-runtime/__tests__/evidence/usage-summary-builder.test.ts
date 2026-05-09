@@ -110,10 +110,10 @@ describe('buildUsageSummary', () => {
     });
 
     expect(summary.usageStatus).toBe('partial');
-    expect(summary.totalInputTokens).toBeNull();
-    expect(summary.totalOutputTokens).toBeNull();
-    expect(summary.totalTokens).toBeNull();
-    expect(summary.totalCostUsd).toBeNull();
+    expect(summary.totalInputTokens).toBe(12);
+    expect(summary.totalOutputTokens).toBe(8);
+    expect(summary.totalTokens).toBe(20);
+    expect(summary.totalCostUsd).toBe(0.1);
     expect(summary.byActor['role:generator']).toMatchObject({
       turns: 1,
       inputTokens: 12,
@@ -129,5 +129,45 @@ describe('buildUsageSummary', () => {
       costUsd: null,
     });
     expect(summary.perTurn.map((turn) => turn.totalTokens)).toEqual([20, null]);
+  });
+
+  it('keeps explicit zero totals numeric when usage was reported for every turn', () => {
+    const summary = buildUsageSummary({
+      authored,
+      evidencePacket,
+      usage: {
+        totalInputTokens: 0,
+        totalOutputTokens: 0,
+        totalCostUsd: 0,
+        byActor: new Map(),
+        perTurn: [
+          {
+            turnIndex: 0,
+            actor: { kind: 'role', role: 'lead' },
+            inputTokens: 0,
+            outputTokens: 0,
+            costUsd: 0,
+            waitExitCode: 0,
+          },
+        ],
+        usageStatus: 'available',
+      },
+      actorSpecByKey: new Map([
+        ['role:lead', { provider: 'opencode', model: 'openai/gpt-5.4-mini', mode: 'build' }],
+      ]),
+      evidencePacketPath: 'runs/run-1/evidence-packet.json',
+    });
+
+    expect(summary.usageStatus).toBe('available');
+    expect(summary.totalInputTokens).toBe(0);
+    expect(summary.totalOutputTokens).toBe(0);
+    expect(summary.totalTokens).toBe(0);
+    expect(summary.totalCostUsd).toBe(0);
+    expect(summary.perTurn[0]).toMatchObject({
+      inputTokens: 0,
+      outputTokens: 0,
+      totalTokens: 0,
+      costUsd: 0,
+    });
   });
 });
