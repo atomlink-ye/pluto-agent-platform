@@ -528,7 +528,7 @@ describe('pluto-tool subprocess', () => {
     });
   });
 
-  it('does not auto-wait for complete-run and returns terminal disposition', async () => {
+  it('rejects direct complete-run from the lead actor with lead_must_use_final_reconciliation', async () => {
     await withApi(async ({ url, token }) => {
       const capture = createIoCapture();
       const exitCode = await runCliInProcess(
@@ -541,10 +541,26 @@ describe('pluto-tool subprocess', () => {
       );
 
       const { stdout, stderr } = capture.read();
+      expect(exitCode).not.toBe(0);
+      expect(stdout + stderr).toContain('lead_must_use_final_reconciliation');
+    });
+  });
+
+  it('does not auto-wait for final-reconciliation and returns terminal disposition', async () => {
+    await withApi(async ({ url, token }) => {
+      const capture = createIoCapture();
+      const exitCode = await runCliInProcess(
+        ['--actor', 'role:lead', 'final-reconciliation', '--completed-tasks=t-1', '--cited-messages=m-1', '--summary=done'],
+        {
+          PLUTO_RUN_API_URL: url,
+          PLUTO_RUN_TOKEN: token,
+        },
+        capture.io as unknown as Pick<typeof process, 'stdout' | 'stderr'>,
+      );
+
+      const { stdout } = capture.read();
       expect(exitCode).toBe(0);
-      expect(stderr).toBe('');
       expect(JSON.parse(stdout)).toMatchObject({
-        accepted: true,
         turnDisposition: 'terminal',
       });
       expect(stdout).not.toContain('"wait"');

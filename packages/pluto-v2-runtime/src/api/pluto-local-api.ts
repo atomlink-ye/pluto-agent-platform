@@ -808,6 +808,20 @@ export async function startPlutoLocalApi(
       }
     }
 
+    if (
+      route.toolName === 'pluto_complete_run'
+      && parsedActor.ok
+      && isLeadActor(parsedActor.actor)
+    ) {
+      writeJson(response, 403, {
+        error: {
+          code: 'lead_must_use_final_reconciliation',
+          detail: 'The lead actor must terminate the run with `final-reconciliation` (the composite verb that wraps complete-run with the audit gate). Direct `complete-run` is rejected for the lead so that the run\'s evidence/final-reconciliation.json is always written.',
+        },
+      });
+      return;
+    }
+
     try {
       const sessionActor = parsedActor.ok ? parsedActor.actor : ({ kind: 'system' } satisfies ActorRef);
       const result = await runRoute({
