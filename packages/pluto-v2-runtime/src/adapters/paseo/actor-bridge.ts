@@ -62,28 +62,6 @@ async function assertPathExists(path: string, fs: FsModule): Promise<void> {
   }
 }
 
-async function ensurePlutoToolSourceDependencyLinks(runtimePackageRoot: string, fs: FsModule): Promise<void> {
-  const packagesRoot = dirname(runtimePackageRoot);
-  const corePackageRoot = join(packagesRoot, 'pluto-v2-core');
-  const coreNodeModulesDir = join(corePackageRoot, 'node_modules');
-  const linkedDependencyPath = join(coreNodeModulesDir, 'zod');
-  const sourceDependencyPath = join(runtimePackageRoot, 'node_modules', 'zod');
-
-  await assertPathExists(sourceDependencyPath, fs);
-  await fs.mkdir(coreNodeModulesDir, { recursive: true });
-  try {
-    await fs.lstat(linkedDependencyPath);
-    return;
-  } catch (error) {
-    if (!(error instanceof Error) || !('code' in error) || error.code !== 'ENOENT') {
-      const detail = error instanceof Error ? error.message : String(error);
-      throw new Error(`Unable to prepare Pluto tool source dependency link at ${linkedDependencyPath}: ${detail}`);
-    }
-  }
-
-  await fs.symlink(sourceDependencyPath, linkedDependencyPath, 'dir');
-}
-
 export async function resolveActorBridgeDependencyPaths(fs: FsModule = nodeFs): Promise<ActorBridgeDependencyPaths> {
   const moduleDir = dirname(fileURLToPath(import.meta.url));
   const runtimePackageRoot = await findRuntimePackageRoot(moduleDir, fs);
@@ -130,7 +108,6 @@ export async function materializeActorBridge(input: {
   const runtimePackageRoot = dirname(dirname(dirname(input.plutoToolSourcePath)));
   const runtimeTsconfigPath = join(runtimePackageRoot, 'tsconfig.json');
   await assertPathExists(runtimeTsconfigPath, fs);
-  await ensurePlutoToolSourceDependencyLinks(runtimePackageRoot, fs);
   await fs.mkdir(metadataDir, { recursive: true });
   await fs.writeFile(handoffJsonPath, JSON.stringify({
     apiUrl: input.apiUrl,
@@ -139,9 +116,11 @@ export async function materializeActorBridge(input: {
     schemaVersion: ACTOR_BRIDGE_SCHEMA_VERSION,
   }, null, 2));
 
+  const nodeBinDir = dirname(process.execPath);
   const wrapper = [
     '#!/bin/bash',
     'set -euo pipefail',
+    `export PATH=${shellQuote(`${nodeBinDir}:/usr/local/bin:/usr/bin:/bin`)}\${PATH:+:$PATH}`,
     'HANDOFF="$(dirname "$0")/.pluto/handoff.json"',
     'if [ ! -f "$HANDOFF" ]; then',
     '  echo "pluto-tool: missing handoff at $HANDOFF" >&2',
