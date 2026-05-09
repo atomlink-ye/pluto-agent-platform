@@ -3,6 +3,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from 'node:ht
 
 import { ACTOR_ROLE_VALUES, ActorRefSchema, type ActorRef } from '@pluto/v2-core';
 
+import { runCompositeTool, type CompositeToolName } from './composite-tools.js';
 import type { WaitRegistry } from './wait-registry.js';
 import type { PlutoToolHandlers } from '../mcp/pluto-mcp-server.js';
 import type { TurnLeaseStore } from '../mcp/turn-lease.js';
@@ -19,9 +20,15 @@ const MUTATING_TOOLS = new Set<PlutoToolName>([
   'pluto_complete_run',
 ]);
 
+const COMPOSITE_MUTATING_TOOLS = new Set<CompositeToolName>([
+  'pluto_worker_complete',
+  'pluto_evaluator_verdict',
+  'pluto_final_reconciliation',
+]);
+
 type LocalApiResponseKind = 'json' | 'artifact' | 'transcript';
 
-type LocalApiToolName = PlutoToolName | 'pluto_wait_for_event';
+type LocalApiToolName = PlutoToolName | CompositeToolName | 'pluto_wait_for_event';
 
 type TurnDisposition = 'waiting' | 'idle' | 'terminal';
 
@@ -184,7 +191,8 @@ function parseActorHeader(rawHeader: string | string[] | undefined):
 function routeRequiresActor(route: LocalApiRoute): boolean {
   return route.toolName === 'pluto_read_state'
     || route.toolName === 'pluto_wait_for_event'
-    || MUTATING_TOOLS.has(route.toolName);
+    || MUTATING_TOOLS.has(route.toolName as PlutoToolName)
+    || COMPOSITE_MUTATING_TOOLS.has(route.toolName as CompositeToolName);
 }
 
 function unknownActorResponse(claimedActor: string) {
@@ -200,11 +208,11 @@ function parseJsonText(text: string): unknown {
   return JSON.parse(text);
 }
 
-function turnDispositionFor(toolName: PlutoToolName): {
+function turnDispositionFor(toolName: PlutoToolName | CompositeToolName): {
   turnDisposition: TurnDisposition;
   nextWakeup?: NextWakeup;
 } {
-  if (toolName === 'pluto_complete_run') {
+  if (toolName === 'pluto_complete_run' || toolName === 'pluto_final_reconciliation') {
     return {
       turnDisposition: 'terminal',
     };
@@ -376,6 +384,24 @@ function routeFor(method: string, pathname: string, body: unknown): LocalApiRout
         args: body,
         responseKind: 'json',
       };
+    case 'POST /v2/composite/worker-complete':
+      return {
+        toolName: 'pluto_worker_complete',
+        args: body,
+        responseKind: 'json',
+      };
+    case 'POST /v2/composite/evaluator-verdict':
+      return {
+        toolName: 'pluto_evaluator_verdict',
+        args: body,
+        responseKind: 'json',
+      };
+    case 'POST /v2/composite/final-reconciliation':
+      return {
+        toolName: 'pluto_final_reconciliation',
+        args: body,
+        responseKind: 'json',
+      };
     case 'GET /v1/state':
       return {
         toolName: 'pluto_read_state',
@@ -514,7 +540,10 @@ async function runRoute(args: {
     }
   }
 
-  if (MUTATING_TOOLS.has(args.route.toolName) && !args.config.leaseStore.matches(args.session.currentActor)) {
+  const isMutatingTool = MUTATING_TOOLS.has(args.route.toolName as PlutoToolName)
+    || COMPOSITE_MUTATING_TOOLS.has(args.route.toolName as CompositeToolName);
+
+  if (isMutatingTool && !args.config.leaseStore.matches(args.session.currentActor)) {
     return {
       status: 409,
       body: {
@@ -529,7 +558,7 @@ async function runRoute(args: {
     };
   }
 
-  if (MUTATING_TOOLS.has(args.route.toolName) && !args.config.leaseStore.consumeMutation()) {
+  if (isMutatingTool && !args.config.leaseStore.consumeMutation()) {
     return {
       status: 409,
       body: {
@@ -544,7 +573,43 @@ async function runRoute(args: {
     };
   }
 
-  const result = await args.config.handlers[args.route.toolName](args.session, args.route.args);
+  if (COMPOSITE_MUTATING_TOOLS.has(args.route.toolName as CompositeToolName)) {
+    const result = await runCompositeTool({
+      toolName: args.route.toolName as CompositeToolName,
+      handlers: args.config.handlers,
+      session: args.session,
+      rawArgs: args.route.args,
+    });
+    if (!result.ok) {
+      return {
+        status: statusCodeForToolError(result),
+        body: {
+          error: result.error,
+        },
+        contentType: 'json',
+      };
+    }
+
+    const parsed = parseJsonText(textFromToolResult(result));
+    if (!isAcceptedMutationBody(parsed)) {
+      return {
+        status: 200,
+        body: parsed,
+        contentType: 'json',
+      };
+    }
+
+    return {
+      status: 200,
+      body: {
+        ...parsed,
+        ...turnDispositionFor(args.route.toolName as CompositeToolName),
+      },
+      contentType: 'json',
+    };
+  }
+
+  const result = await args.config.handlers[args.route.toolName as PlutoToolName](args.session, args.route.args);
   if (!result.ok) {
     return {
       status: statusCodeForToolError(result),
@@ -558,7 +623,7 @@ async function runRoute(args: {
   const text = textFromToolResult(result);
   switch (args.route.responseKind) {
     case 'json':
-      if (MUTATING_TOOLS.has(args.route.toolName)) {
+      if (MUTATING_TOOLS.has(args.route.toolName as PlutoToolName)) {
         const parsed = parseJsonText(text);
         if (!isAcceptedMutationBody(parsed)) {
           return {
@@ -618,7 +683,7 @@ export async function startPlutoLocalApi(
     const url = new URL(request.url ?? '/', 'http://127.0.0.1');
     const pathname = url.pathname.replace(/\/$/, '') || '/';
 
-    if (!pathname.startsWith('/v1/')) {
+    if (!pathname.startsWith('/v1/') && !pathname.startsWith('/v2/')) {
       response.writeHead(404).end('not found');
       return;
     }

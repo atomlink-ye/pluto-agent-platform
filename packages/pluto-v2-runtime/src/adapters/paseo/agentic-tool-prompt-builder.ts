@@ -275,6 +275,37 @@ function toolCallSection(runBinPath: string, wrapperPath: string, actorRef: stri
   ].join('\n');
 }
 
+function compositeToolGuidance(actor: ActorRef, runBinPath: string, actorRef: string): string {
+  if (isLeadActor(actor)) {
+    return [
+      '## Canonical composite verb',
+      '',
+      `Prefer \`${runBinPath} --actor ${actorRef} final-reconciliation --completed-tasks=<id>[,<id>...] --cited-messages=<id>[,<id>...] --summary="<one-sentence>"\` when the run is ready to terminate.`,
+      'This is the canonical lead close-out path. It calls the lower-level `complete-run` primitive internally and stores the structured reconciliation payload in the terminal summary.',
+    ].join('\n');
+  }
+
+  if (actor.kind === 'role' && actor.role === 'generator') {
+    return [
+      '## Canonical composite verb',
+      '',
+      `Prefer \`${runBinPath} --actor ${actorRef} worker-complete --task-id=<id> --summary="<one-sentence>" [--artifact=<id>...]\` when you finish your delegated task.`,
+      'This is the canonical worker report-back path. It marks the task completed and sends a structured completion mailbox message to the lead. The lower-level fallback is `append-mailbox-message kind=completion`.',
+    ].join('\n');
+  }
+
+  if (actor.kind === 'role' && actor.role === 'evaluator') {
+    return [
+      '## Canonical composite verb',
+      '',
+      `Prefer \`${runBinPath} --actor ${actorRef} evaluator-verdict --task-id=<id> --verdict=pass|needs-revision|fail --summary="<one-sentence>"\` when you deliver your review.`,
+      'This is the canonical evaluator report-back path. It sends a structured verdict mailbox message to the lead and closes the evaluator-owned task when the verdict is `pass`.',
+    ].join('\n');
+  }
+
+  return '';
+}
+
 function promptHeader(actor: ActorRef, role: string | null): string {
   if (isLeadActor(actor)) {
     return 'You are the lead actor for a Pluto v2 tool-driven run.';
@@ -390,6 +421,7 @@ export function buildAgenticToolPrompt(input: AgenticToolPromptInput): string {
     userTaskSection,
     toolSection(input.toolNames),
     toolCallSection(runBinPath, input.wrapperPath, actorRef),
+    compositeToolGuidance(input.actor, runBinPath, actorRef),
     turnRuleSection(input.actor, input.wrapperPath),
   ];
 

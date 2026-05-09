@@ -265,4 +265,17 @@ describe('buildAgenticToolPrompt', () => {
     expect(generatorPrompt).toContain(RUN_BIN_PATH);
     expect(generatorPrompt).toContain('--actor role:generator');
   });
+
+  it('mentions the canonical composite verbs for lead, generator, and evaluator bootstraps', () => {
+    const leadPrompt = buildPrompt(LEAD);
+    const generatorPrompt = buildPrompt(GENERATOR);
+    const evaluatorPrompt = buildPrompt(EVALUATOR);
+
+    expect(leadPrompt).toContain('final-reconciliation');
+    expect(leadPrompt).toContain('complete-run');
+    expect(generatorPrompt).toContain('worker-complete');
+    expect(generatorPrompt).toContain('append-mailbox-message kind=completion');
+    expect(evaluatorPrompt).toContain('evaluator-verdict');
+    expect(evaluatorPrompt).toContain('structured verdict mailbox message');
+  });
 });

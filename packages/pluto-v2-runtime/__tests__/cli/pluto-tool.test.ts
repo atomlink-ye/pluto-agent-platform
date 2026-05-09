@@ -342,6 +342,44 @@ describe('pluto-tool argv parsing', () => {
           body: { status: 'succeeded', summary: 'done' },
         });
 
+      await expect(parseCliArgs(['worker-complete', '--task-id=task-1', '--summary=done', '--artifact=artifact-1', '--artifact=artifact-2']))
+        .resolves.toMatchObject({
+          kind: 'command',
+          name: 'worker-complete',
+          path: '/v2/composite/worker-complete',
+          noWait: false,
+          body: {
+            taskId: 'task-1',
+            summary: 'done',
+            artifacts: ['artifact-1', 'artifact-2'],
+          },
+        });
+
+      await expect(parseCliArgs(['evaluator-verdict', '--task-id=task-1', '--verdict=needs-revision', '--summary=fix it']))
+        .resolves.toMatchObject({
+          kind: 'command',
+          name: 'evaluator-verdict',
+          path: '/v2/composite/evaluator-verdict',
+          noWait: false,
+          body: {
+            taskId: 'task-1',
+            verdict: 'needs-revision',
+            summary: 'fix it',
+          },
+        });
+
+      await expect(parseCliArgs(['final-reconciliation', '--completed-tasks=task-1,task-2', '--cited-messages=message-1,message-2', '--summary=done']))
+        .resolves.toMatchObject({
+          kind: 'command',
+          name: 'final-reconciliation',
+          path: '/v2/composite/final-reconciliation',
+          body: {
+            completedTasks: ['task-1', 'task-2'],
+            citedMessages: ['message-1', 'message-2'],
+            summary: 'done',
+          },
+        });
+
       await expect(parseCliArgs(['wait', '--timeout-sec=12']))
         .resolves.toMatchObject({
           kind: 'command',
@@ -472,6 +510,92 @@ describe('pluto-tool subprocess', () => {
       expect(stderr).toBe('');
       expect(JSON.parse(stdout)).toMatchObject({
         accepted: true,
+        turnDisposition: 'terminal',
+      });
+      expect(stdout).not.toContain('"wait"');
+    });
+  });
+
+  it('auto-waits for worker-complete by default and returns merged JSON', async () => {
+    await withWaitApi(async ({ url, token, handlers, kernel, waitRegistry, leaseStore }) => {
+      const created = await handlers.pluto_create_task({ currentActor: { kind: 'role', role: 'lead' }, isLead: true }, {
+        title: 'Implement',
+        ownerActor: { kind: 'role', role: 'generator' },
+        dependsOn: [],
+      });
+      if (!created.ok) {
+        throw new Error('Expected task creation to succeed');
+      }
+
+      const taskId = JSON.parse((created.data as { content: Array<{ text: string }> }).content.at(0)?.text ?? '{}').taskId as string;
+      leaseStore.setCurrent({ kind: 'role', role: 'generator' });
+      const capture = createIoCapture();
+      const releaseGenerator = new Promise<void>((resolve) => {
+        setTimeout(async () => {
+          await handlers.pluto_append_mailbox_message({ currentActor: { kind: 'role', role: 'lead' }, isLead: true }, {
+            toActor: { kind: 'role', role: 'generator' },
+            kind: 'task',
+            body: 'next task',
+          });
+          const event = kernel.eventLog.read(0, kernel.eventLog.head + 1).at(-1) as RunEvent;
+          waitRegistry.notify(event, (actor) => promptViewFor(actor));
+          resolve();
+        }, 20);
+      });
+
+      const exitCode = await runCliInProcess(
+        ['--actor', 'role:generator', 'worker-complete', `--task-id=${taskId}`, '--summary=done'],
+        {
+          PLUTO_RUN_API_URL: url,
+          PLUTO_RUN_TOKEN: token,
+        },
+        capture.io as unknown as Pick<typeof process, 'stdout' | 'stderr'>,
+      );
+
+      await releaseGenerator;
+
+      const { stdout, stderr } = capture.read();
+      expect(exitCode).toBe(0);
+      expect(stderr).toBe('');
+      expect(JSON.parse(stdout)).toMatchObject({
+        mutation: {
+          accepted: true,
+          composite: 'worker-complete',
+          turnDisposition: 'waiting',
+          nextWakeup: 'event',
+        },
+        wait: {
+          outcome: expect.stringMatching(/event|cancelled/),
+        },
+      });
+    });
+  });
+
+  it('does not auto-wait for final-reconciliation and returns terminal disposition', async () => {
+    await withApi(async ({ url, token }) => {
+      const capture = createIoCapture();
+      const exitCode = await runCliInProcess(
+        [
+          '--actor',
+          'role:lead',
+          'final-reconciliation',
+          '--completed-tasks=task-1,task-2',
+          '--cited-messages=message-1,message-2',
+          '--summary=done',
+        ],
+        {
+          PLUTO_RUN_API_URL: url,
+          PLUTO_RUN_TOKEN: token,
+        },
+        capture.io as unknown as Pick<typeof process, 'stdout' | 'stderr'>,
+      );
+
+      const { stdout, stderr } = capture.read();
+      expect(exitCode).toBe(0);
+      expect(stderr).toBe('');
+      expect(JSON.parse(stdout)).toMatchObject({
+        accepted: true,
+        composite: 'final-reconciliation',
         turnDisposition: 'terminal',
       });
       expect(stdout).not.toContain('"wait"');

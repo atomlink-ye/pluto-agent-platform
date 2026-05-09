@@ -24,6 +24,9 @@ type CommandName =
   | 'send-mailbox'
   | 'publish-artifact'
   | 'complete-run'
+  | 'worker-complete'
+  | 'evaluator-verdict'
+  | 'final-reconciliation'
   | 'wait'
   | 'read-state'
   | 'read-artifact'
@@ -98,6 +101,9 @@ const COMMANDS: ReadonlyArray<CommandName> = [
   'send-mailbox',
   'publish-artifact',
   'complete-run',
+  'worker-complete',
+  'evaluator-verdict',
+  'final-reconciliation',
   'wait',
   'read-state',
   'read-artifact',
@@ -113,6 +119,9 @@ const GLOBAL_HELP = [
   '  send-mailbox',
   '  publish-artifact',
   '  complete-run',
+  '  worker-complete',
+  '  evaluator-verdict',
+  '  final-reconciliation',
   '  wait',
   '  read-state',
   '  read-artifact',
@@ -132,6 +141,9 @@ const HELP_BY_COMMAND: Record<CommandName, string> = {
   'send-mailbox': 'Usage: pluto-tool --actor <key> send-mailbox --to=<role|manager> --kind=<kind> --body=<text|@path> [--no-wait] [--wait-timeout-ms=<n>] [--format=json|text]',
   'publish-artifact': 'Usage: pluto-tool --actor <key> publish-artifact --kind=<final|intermediate> --media-type=<mime> --byte-size=<n> [--body=<text|@path>] [--no-wait] [--wait-timeout-ms=<n>] [--format=json|text]',
   'complete-run': 'Usage: pluto-tool --actor <key> complete-run --status=<succeeded|failed|cancelled> --summary=<text> [--format=json|text]',
+  'worker-complete': 'Usage: pluto-tool --actor <key> worker-complete --task-id=<id> --summary=<text> [--artifact=<id>...] [--no-wait] [--wait-timeout-ms=<n>] [--format=json|text]',
+  'evaluator-verdict': 'Usage: pluto-tool --actor <key> evaluator-verdict --task-id=<id> --verdict=<pass|needs-revision|fail> --summary=<text> [--no-wait] [--wait-timeout-ms=<n>] [--format=json|text]',
+  'final-reconciliation': 'Usage: pluto-tool --actor <key> final-reconciliation --completed-tasks=<id>[,<id>...] --cited-messages=<id>[,<id>...] --summary=<text> [--format=json|text]',
   'wait': 'Usage: pluto-tool --actor <key> wait [--timeout-sec=<0-1200>] [--format=json|text]',
   'read-state': 'Usage: pluto-tool [--actor <key>] read-state [--format=json|text]',
   'read-artifact': 'Usage: pluto-tool [--actor <key>] read-artifact --artifact-id=<id> [--format=json|text]',
@@ -424,6 +436,15 @@ function parseWaitTimeoutMs(value: string, flagName: string): number {
   return parsePositiveInteger(value, flagName);
 }
 
+function parseCommaSeparatedIds(value: string, flagName: string): string[] {
+  const ids = value.split(',').map((entry) => entry.trim()).filter((entry) => entry.length > 0);
+  if (ids.length === 0) {
+    throw new Error(`${flagName} must include at least one id`);
+  }
+
+  return ids;
+}
+
 function resolveAutoWaitTimeoutMs(command: ParsedCommand, env: NodeJS.ProcessEnv): number {
   if (command.waitTimeoutMs != null) {
     return command.waitTimeoutMs;
@@ -442,7 +463,10 @@ function isMutatingCommand(command: ParsedCommand): boolean {
     || command.name === 'change-task-state'
     || command.name === 'send-mailbox'
     || command.name === 'publish-artifact'
-    || command.name === 'complete-run';
+    || command.name === 'complete-run'
+    || command.name === 'worker-complete'
+    || command.name === 'evaluator-verdict'
+    || command.name === 'final-reconciliation';
 }
 
 export async function parseCliArgs(argv: readonly string[]): Promise<ParsedCli> {
@@ -603,6 +627,77 @@ export async function parseCliArgs(argv: readonly string[]): Promise<ParsedCli> 
         body: { status, summary },
       };
     }
+    case 'worker-complete': {
+      const taskId = requireOne(flags, 'task-id', commandToken);
+      const summary = requireOne(flags, 'summary', commandToken);
+      const artifacts = takeMany(flags, 'artifact');
+      const noWait = takeBoolean(flags, 'no-wait');
+      const waitTimeoutMs = takeOne(flags, 'wait-timeout-ms');
+      assertKnownFlags(flags, commandToken);
+      return {
+        kind: 'command',
+        name: commandToken,
+        actor: requestedActor,
+        requiresActor: true,
+        format,
+        method: 'POST',
+        path: '/v2/composite/worker-complete',
+        noWait,
+        ...(waitTimeoutMs == null ? {} : { waitTimeoutMs: parseWaitTimeoutMs(waitTimeoutMs, '--wait-timeout-ms') }),
+        body: {
+          taskId,
+          summary,
+          artifacts,
+        },
+      };
+    }
+    case 'evaluator-verdict': {
+      const taskId = requireOne(flags, 'task-id', commandToken);
+      const verdict = requireOne(flags, 'verdict', commandToken);
+      if (!['pass', 'needs-revision', 'fail'].includes(verdict)) {
+        throw new Error('--verdict must be one of: pass, needs-revision, fail');
+      }
+      const summary = requireOne(flags, 'summary', commandToken);
+      const noWait = takeBoolean(flags, 'no-wait');
+      const waitTimeoutMs = takeOne(flags, 'wait-timeout-ms');
+      assertKnownFlags(flags, commandToken);
+      return {
+        kind: 'command',
+        name: commandToken,
+        actor: requestedActor,
+        requiresActor: true,
+        format,
+        method: 'POST',
+        path: '/v2/composite/evaluator-verdict',
+        noWait,
+        ...(waitTimeoutMs == null ? {} : { waitTimeoutMs: parseWaitTimeoutMs(waitTimeoutMs, '--wait-timeout-ms') }),
+        body: {
+          taskId,
+          verdict,
+          summary,
+        },
+      };
+    }
+    case 'final-reconciliation': {
+      const completedTasks = parseCommaSeparatedIds(requireOne(flags, 'completed-tasks', commandToken), '--completed-tasks');
+      const citedMessages = parseCommaSeparatedIds(requireOne(flags, 'cited-messages', commandToken), '--cited-messages');
+      const summary = requireOne(flags, 'summary', commandToken);
+      assertKnownFlags(flags, commandToken);
+      return {
+        kind: 'command',
+        name: commandToken,
+        actor: requestedActor,
+        requiresActor: true,
+        format,
+        method: 'POST',
+        path: '/v2/composite/final-reconciliation',
+        body: {
+          completedTasks,
+          citedMessages,
+          summary,
+        },
+      };
+    }
     case 'wait': {
       const timeoutSecRaw = takeOne(flags, 'timeout-sec');
       assertKnownFlags(flags, commandToken);
@@ -730,7 +825,7 @@ async function callApi(
   command: ParsedCommand,
   options?: { signal?: AbortSignal },
 ): Promise<ApiResult> {
-  const response = await fetch(`${env.apiUrl}${command.path}`, {
+  const response = await fetch(buildCommandUrl(env.apiUrl, command.path), {
     method: command.method,
     headers: {
       authorization: `Bearer ${env.token}`,
@@ -764,6 +859,15 @@ async function callApi(
   }
 
   return { data, contentType };
+}
+
+function buildCommandUrl(apiUrl: string, path: string): string {
+  if (!path.startsWith('/v2/')) {
+    return `${apiUrl}${path}`;
+  }
+
+  const rootUrl = apiUrl.endsWith('/v1') ? apiUrl.slice(0, -'/v1'.length) : apiUrl;
+  return `${rootUrl}${path}`;
 }
 
 function resolveActorForCommand(parsed: ParsedCommand, runtimeEnv: PlutoToolRuntimeEnv): string | undefined {
@@ -838,6 +942,12 @@ function textSummary(command: ParsedCommand, result: unknown): string {
         : `artifact publish rejected: ${String(record.reason ?? 'unknown')}`;
     case 'complete-run':
       return record.accepted === true ? 'run completed' : `run completion rejected: ${String(record.reason ?? 'unknown')}`;
+    case 'worker-complete':
+      return record.accepted === true ? 'worker completion reported' : `worker completion rejected: ${String(record.reason ?? 'unknown')}`;
+    case 'evaluator-verdict':
+      return record.accepted === true ? `evaluator verdict reported: ${String(record.verdict ?? 'unknown')}` : `evaluator verdict rejected: ${String(record.reason ?? 'unknown')}`;
+    case 'final-reconciliation':
+      return record.accepted === true ? 'final reconciliation completed' : `final reconciliation rejected: ${String(record.reason ?? 'unknown')}`;
     case 'wait':
       if (record.outcome === 'event') {
         return `event received: ${String((record.latestEvent as { kind?: string })?.kind ?? 'unknown')}`;
@@ -881,6 +991,7 @@ export async function runCli(
     const maybeAutoWaitResult = actor != null
       && isMutatingCommand(parsed)
       && parsed.name !== 'complete-run'
+      && parsed.name !== 'final-reconciliation'
       && parsed.noWait !== true
       && result.data != null
       && typeof result.data === 'object'
