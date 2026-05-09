@@ -11,6 +11,7 @@ export interface AgenticToolPromptInput {
   readonly playbook: LoadedPlaybook | null;
   readonly userTask: string | null;
   readonly toolNames: ReadonlyArray<PlutoToolName>;
+  readonly wrapperPath: string;
   readonly maxBytes?: number;
 }
 
@@ -228,28 +229,27 @@ function toolSection(toolNames: ReadonlyArray<PlutoToolName>): string {
   ].join('\n');
 }
 
-function toolCallSection(): string {
+function toolCallSection(wrapperPath: string): string {
   return [
     '## How to call Pluto tools',
     '',
-    'You have a CLI tool named `pluto-tool` available in your shell.',
-    'It is already configured for this run. Auth and actor identity',
-    'are bound from the shell environment, so you do not need to pass',
-    'tokens, headers, or URLs yourself.',
+    `Invoke the Pluto tool by running \`${wrapperPath}\` from your bash shell.`,
+    'The wrapper has the run context (URL/token/actor) baked in, so',
+    'you do not need to pass tokens, headers, actor ids, or API URLs yourself.',
     '',
     'Examples:',
     '',
-    '  pluto-tool create-task --owner=generator --title="Draft haiku v1"',
-    '  pluto-tool send-mailbox --to=lead --kind=completion --body="Draft attached: ..."',
-    '  pluto-tool change-task-state --task-id=<id> --to=completed',
-    '  pluto-tool publish-artifact --kind=final --media-type=text/plain --byte-size=64 --body="..."',
-    '  pluto-tool complete-run --status=succeeded --summary="<one-sentence>"',
-    '  pluto-tool wait --timeout-sec=300',
-    '  pluto-tool read-state',
-    '  pluto-tool read-artifact --artifact-id=<id>',
-    '  pluto-tool read-transcript --actor-key=role:generator',
+    `  ${wrapperPath} create-task --owner=generator --title="Draft haiku v1"`,
+    `  ${wrapperPath} send-mailbox --to=lead --kind=completion --body="Draft attached: ..."`,
+    `  ${wrapperPath} change-task-state --task-id=<id> --to=completed`,
+    `  ${wrapperPath} publish-artifact --kind=final --media-type=text/plain --byte-size=64 --body="..."`,
+    `  ${wrapperPath} complete-run --status=succeeded --summary="<one-sentence>"`,
+    `  ${wrapperPath} wait --timeout-sec=300`,
+    `  ${wrapperPath} read-state`,
+    `  ${wrapperPath} read-artifact --artifact-id=<id>`,
+    `  ${wrapperPath} read-transcript --actor-key=role:generator`,
     '',
-    'Run `pluto-tool --help` or `pluto-tool <subcommand> --help` for',
+    `Run \`${wrapperPath} --help\` or \`${wrapperPath} <subcommand> --help\` for`,
     'flag details. Output is JSON by default; pass --format=text for a',
     'short human summary.',
   ].join('\n');
@@ -263,13 +263,13 @@ function promptHeader(actor: ActorRef, role: string | null): string {
   return `You are the ${actorLabel(actor, role)} actor for a Pluto v2 tool-driven run.`;
 }
 
-function turnRuleSection(actor: ActorRef): string {
+function turnRuleSection(actor: ActorRef, wrapperPath: string): string {
   if (isLeadActor(actor)) {
     return [
       'Turn rule:',
       '- Read tools are available whenever you need more context.',
       '- End your turn with EXACTLY ONE mutating Pluto tool call.',
-      '- After that mutating call, prefer pluto-tool wait to suspend until the next relevant event.',
+      `- After that mutating call, prefer ${wrapperPath} wait to suspend until the next relevant event.`,
       '- Usually that means delegating, publishing a state change, or calling pluto_complete_run when the run is truly finished.',
     ].join('\n');
   }
@@ -278,7 +278,7 @@ function turnRuleSection(actor: ActorRef): string {
     'Turn rule:',
     '- Read tools are available whenever you need more context.',
     '- End your turn with EXACTLY ONE mutating Pluto tool call.',
-    '- After that mutating call, prefer pluto-tool wait to suspend until the next relevant event.',
+    `- After that mutating call, prefer ${wrapperPath} wait to suspend until the next relevant event.`,
     '- Usually that means pluto_change_task_state to a terminal state, or pluto_append_mailbox_message with kind completion to the lead.',
   ].join('\n');
 }
@@ -353,8 +353,8 @@ export function buildAgenticToolPrompt(input: AgenticToolPromptInput): string {
     isLeadActor(input.actor) ? LEAD_FRAMING : '',
     userTaskSection,
     toolSection(input.toolNames),
-    toolCallSection(),
-    turnRuleSection(input.actor),
+    toolCallSection(input.wrapperPath),
+    turnRuleSection(input.actor, input.wrapperPath),
   ];
 
   for (const promptViewJson of promptViewJsonCandidates) {

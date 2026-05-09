@@ -162,8 +162,8 @@ class PaseoRuntimeError extends Error {
 }
 
 type AgentInjection = {
-  cwd?: string;
-  wrapperPath?: string;
+  cwd: string;
+  wrapperPath: string;
 };
 
 type AgentSessionState = {
@@ -799,6 +799,12 @@ async function runAgenticToolLoop(
       let session = agentSessionByActorKey.get(key);
       const sessionBusy = session?.idlePromise != null;
       if (session == null) {
+        const injection = await prepareAgentInjection({
+          runId: kernel.state.runId,
+          actor,
+          workspaceCwd,
+          handoff,
+        });
         const prompt = buildAgenticToolPrompt({
           actor,
           role: actor.kind === 'role' ? actor.role : null,
@@ -806,12 +812,7 @@ async function runAgenticToolLoop(
           playbook: authored.playbook,
           userTask: authored.userTask ?? null,
           toolNames: PLUTO_TOOL_NAMES,
-        });
-        const injection = await prepareAgentInjection({
-          runId: kernel.state.runId,
-          actor,
-          workspaceCwd,
-          handoff,
+          wrapperPath: injection.wrapperPath,
         });
 
         const spawnedSession = await options.client.spawnAgent({

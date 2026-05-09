@@ -9,6 +9,7 @@ import { PLUTO_TOOL_NAMES } from '../../../src/tools/pluto-tool-schemas.js';
 
 const LEAD: ActorRef = { kind: 'role', role: 'lead' };
 const GENERATOR: ActorRef = { kind: 'role', role: 'generator' };
+const WRAPPER_PATH = '/tmp/pluto-run/agents/role:lead/pluto-tool';
 
 const BASE_PROMPT_VIEW: PromptView = {
   run: {
@@ -103,6 +104,7 @@ function bootstrapPrompt(): string {
     playbook: PLAYBOOK,
     userTask: BASE_PROMPT_VIEW.userTask,
     toolNames: PLUTO_TOOL_NAMES,
+    wrapperPath: WRAPPER_PATH,
   });
 }
 

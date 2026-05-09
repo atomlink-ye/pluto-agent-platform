@@ -11,6 +11,7 @@ const LEAD: ActorRef = { kind: 'role', role: 'lead' };
 const GENERATOR: ActorRef = { kind: 'role', role: 'generator' };
 const EXACT_MATCH_PHRASE = ['must', 'match', 'exactly'].join(' ');
 const PAYLOAD_MATCH_PHRASE = ['payload', 'must', 'match', 'exactly'].join(' ');
+const WRAPPER_PATH = '/tmp/pluto-run/agents/role:lead/pluto-tool';
 
 const BASE_PROMPT_VIEW: PromptView = {
   run: {
@@ -91,6 +92,7 @@ function buildPrompt(actor: ActorRef): string {
     playbook: PLAYBOOK,
     userTask: BASE_PROMPT_VIEW.userTask,
     toolNames: PLUTO_TOOL_NAMES,
+    wrapperPath: WRAPPER_PATH,
   });
 }
 
@@ -125,7 +127,7 @@ describe('buildAgenticToolPrompt', () => {
     }
   });
 
-  it('shows literal pluto-tool usage without leaking curl, mcporter, token, or URL details', () => {
+  it('shows wrapper-path tool usage without leaking curl, mcporter, token, or URL details', () => {
     const prompt = buildPrompt(LEAD);
 
     expect(prompt).toContain('Available Pluto tools:');
@@ -133,12 +135,14 @@ describe('buildAgenticToolPrompt', () => {
     expect(prompt).toContain('pluto_complete_run');
     expect(prompt).toContain('pluto_read_transcript');
     expect(prompt).toContain('## How to call Pluto tools');
-    expect(prompt).toContain('pluto-tool create-task --owner=generator --title="Draft haiku v1"');
-    expect(prompt).toContain('pluto-tool send-mailbox --to=lead --kind=completion --body="Draft attached: ..."');
-    expect(prompt).toContain('pluto-tool wait --timeout-sec=300');
-    expect(prompt).toContain('pluto-tool read-transcript --actor-key=role:generator');
+    expect(prompt).toContain(`Invoke the Pluto tool by running \`${WRAPPER_PATH}\` from your bash shell.`);
+    expect(prompt).toContain(`${WRAPPER_PATH} create-task --owner=generator --title="Draft haiku v1"`);
+    expect(prompt).toContain(`${WRAPPER_PATH} send-mailbox --to=lead --kind=completion --body="Draft attached: ..."`);
+    expect(prompt).toContain(`${WRAPPER_PATH} wait --timeout-sec=300`);
+    expect(prompt).toContain(`${WRAPPER_PATH} read-transcript --actor-key=role:generator`);
     expect(prompt).toContain('End your turn with EXACTLY ONE mutating Pluto tool call.');
-    expect(prompt).toContain('After that mutating call, prefer pluto-tool wait');
+    expect(prompt).toContain(`After that mutating call, prefer ${WRAPPER_PATH} wait`);
+    expect(prompt).not.toContain('available in your shell');
     expect(prompt).not.toContain('curl');
     expect(prompt).not.toContain('mcporter');
     expect(prompt).not.toContain('Bearer auth is preconfigured');

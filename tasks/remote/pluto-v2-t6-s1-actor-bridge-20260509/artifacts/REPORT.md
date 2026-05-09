@@ -50,3 +50,34 @@
 - `git push origin pluto/v2/t6-s1-actor-bridge`: failed
 - Failure mode: `fatal: could not read Username for 'https://github.com': No such device or address`
 - Local HEAD after the task commit sequence: `bb8180f` before this report update
+
+## Fix-up commit (prompt integration)
+
+- Objection summary: the actor bridge wrapper was materialized at `<actorCwd>/pluto-tool`, but the bootstrap prompt still claimed bare `pluto-tool` was available in shell, and `run-paseo.ts` built that prompt before `prepareAgentInjection()` produced the wrapper path.
+- Scope note: this folds the planned T6-S2 prompt work into T6-S1 because the bridge is not shippable without the prompt citing the real wrapper path.
+
+### Changes by file
+
+- `packages/pluto-v2-runtime/src/adapters/paseo/run-paseo.ts`
+  - Reordered first-spawn setup so `prepareAgentInjection()` runs before `buildAgenticToolPrompt()`.
+  - Passed the exact `injection.wrapperPath` into the bootstrap prompt builder.
+  - Tightened `AgentInjection` so `cwd` and `wrapperPath` are required on the returned object.
+- `packages/pluto-v2-runtime/src/adapters/paseo/agentic-tool-prompt-builder.ts`
+  - Added required `wrapperPath` plumbing on the bootstrap prompt input.
+  - Replaced fictional bare `pluto-tool` bootstrap invocation guidance with the exact absolute wrapper path returned by bridge materialization.
+  - Updated CLI examples and the post-mutation wait guidance to use that exact wrapper path.
+- `packages/pluto-v2-runtime/__tests__/adapters/paseo/agentic-tool-prompt-builder.test.ts`
+  - Added a `wrapperPath` fixture.
+  - Asserted the bootstrap prompt contains the wrapper path and no longer claims `pluto-tool` is available in shell.
+- `packages/pluto-v2-runtime/__tests__/adapters/paseo/wakeup-prompt-builder.test.ts`
+  - Threaded the new bootstrap-only `wrapperPath` input through the shared prompt-builder helper setup.
+
+### Final gates
+
+- `pnpm install`: pass
+- `pnpm --filter @pluto/v2-runtime typecheck`: pass (0 new errors)
+- `pnpm exec tsc -p tsconfig.json --noEmit`: pass (0 new errors)
+- `pnpm --filter @pluto/v2-runtime exec vitest run __tests__/adapters/paseo/actor-bridge.test.ts`: pass (3/3)
+- `pnpm --filter @pluto/v2-runtime test`: pass (184 passed / 186 total, 2 skipped)
+- `pnpm test`: pass (37 passed / 37 total)
+- Forbidden prompt phrase grep on touched scope (`must match exactly` / `payload must match exactly`): clean
