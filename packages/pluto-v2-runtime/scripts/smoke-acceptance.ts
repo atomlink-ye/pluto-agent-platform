@@ -1,0 +1,158 @@
+import { readdirSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
+
+import type { RunEvent } from '../../pluto-v2-core/src/index.ts';
+
+const ACCEPTED_MUTATION_EVENT_KINDS = new Set([
+  'task_created',
+  'task_state_changed',
+  'mailbox_message_appended',
+  'artifact_published',
+  'run_completed',
+]);
+const TERMINAL_TASK_STATES = new Set(['completed', 'cancelled', 'failed']);
+
+export type SmokeAcceptanceArtifacts = {
+  events: ReadonlyArray<RunEvent>;
+  transcripts: Readonly<Record<string, string>>;
+  finalReport: string;
+};
+
+export type SmokeAcceptanceResult = {
+  ok: boolean;
+  failures: string[];
+};
+
+function parseJsonLines<T>(text: string): T[] {
+  return text
+    .split('\n')
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0)
+    .map((line) => JSON.parse(line) as T);
+}
+
+function isRoleActor(actor: unknown): actor is { kind: 'role'; role: string } {
+  return typeof actor === 'object' && actor != null && 'kind' in actor && actor.kind === 'role' && 'role' in actor;
+}
+
+function acceptedTerminalRunEvent(events: ReadonlyArray<RunEvent>): Extract<RunEvent, { kind: 'run_completed' }> | null {
+  for (let index = events.length - 1; index >= 0; index -= 1) {
+    const event = events[index];
+    if (event?.kind === 'run_completed' && event.outcome === 'accepted') {
+      return event;
+    }
+  }
+
+  return null;
+}
+
+function delegatedTaskStates(events: ReadonlyArray<RunEvent>): Map<string, string> {
+  const states = new Map<string, string>();
+
+  for (const event of events) {
+    if (event.outcome !== 'accepted') {
+      continue;
+    }
+    if (event.kind === 'task_created') {
+      const ownerActor = event.payload.ownerActor;
+      if (isRoleActor(ownerActor) && ownerActor.role !== 'lead') {
+        states.set(event.payload.taskId, 'queued');
+      }
+      continue;
+    }
+    if (event.kind === 'task_state_changed' && states.has(event.payload.taskId)) {
+      states.set(event.payload.taskId, event.payload.to);
+    }
+  }
+
+  return states;
+}
+
+export function checkSmokeAcceptance(input: SmokeAcceptanceArtifacts & { expectFailure: boolean }): SmokeAcceptanceResult {
+  const failures: string[] = [];
+  const terminalRunEvent = acceptedTerminalRunEvent(input.events);
+  const expectedStatus = input.expectFailure ? 'failed' : 'succeeded';
+
+  if (terminalRunEvent == null || terminalRunEvent.payload.status !== expectedStatus) {
+    failures.push(input.expectFailure ? 'run did not fail as expected' : 'run did not succeed');
+  }
+
+  // Expected-failure mode exists for early bridge regressions where the run aborts
+  // before any delegation or sub-actor activity can happen. In that mode we only
+  // invert the terminal status check and intentionally relax the other criteria.
+  if (input.expectFailure) {
+    return { ok: failures.length === 0, failures };
+  }
+
+  const hasAcceptedTaskCreated = input.events.some((event) => event.kind === 'task_created' && event.outcome === 'accepted');
+  const hasAcceptedNonSystemNonManagerMutation = input.events.some((event) =>
+    event.outcome === 'accepted'
+    && ACCEPTED_MUTATION_EVENT_KINDS.has(event.kind)
+    && isRoleActor(event.actor),
+  );
+  if (!hasAcceptedTaskCreated && !hasAcceptedNonSystemNonManagerMutation) {
+    failures.push('missing accepted task_created or accepted non-system, non-manager mutation event');
+  }
+
+  const hasAcceptedSubActorMailbox = input.events.some((event) =>
+    event.kind === 'mailbox_message_appended'
+    && event.outcome === 'accepted'
+    && isRoleActor(event.actor)
+    && event.actor.role !== 'lead'
+    && event.payload.toActor.kind === 'role'
+    && event.payload.toActor.role === 'lead',
+  );
+  if (!hasAcceptedSubActorMailbox) {
+    failures.push('missing accepted mailbox_message_appended from a sub-actor back to lead');
+  }
+
+  const nonEmptyTranscriptActors = Object.entries(input.transcripts)
+    .filter(([, transcript]) => transcript.trim().length > 0)
+    .map(([actorKey]) => actorKey);
+  const hasLeadTranscript = nonEmptyTranscriptActors.includes('role:lead');
+  const hasSubActorTranscript = nonEmptyTranscriptActors.some((actorKey) => actorKey.startsWith('role:') && actorKey !== 'role:lead');
+  if (!hasLeadTranscript || !hasSubActorTranscript || nonEmptyTranscriptActors.length < 2) {
+    failures.push('fewer than 2 actors have non-empty transcripts');
+  }
+
+  const nonTerminalDelegatedTasks = [...delegatedTaskStates(input.events).entries()]
+    .filter(([, state]) => !TERMINAL_TASK_STATES.has(state))
+    .map(([taskId, state]) => `${taskId}=${state}`);
+  if (nonTerminalDelegatedTasks.length > 0) {
+    failures.push(`delegated task did not reach terminal state: ${nonTerminalDelegatedTasks.join(', ')}`);
+  }
+
+  return { ok: failures.length === 0, failures };
+}
+
+export function loadSmokeAcceptanceArtifacts(runDir: string): SmokeAcceptanceArtifacts {
+  const events = parseJsonLines<RunEvent>(readFileSync(join(runDir, 'events.jsonl'), 'utf8'));
+  const finalReport = readFileSync(join(runDir, 'final-report.md'), 'utf8');
+  const transcriptDir = join(runDir, 'paseo-transcripts');
+  const transcripts = Object.fromEntries(
+    readdirSync(transcriptDir)
+      .filter((fileName) => fileName.endsWith('.txt'))
+      .map((fileName) => [fileName.slice(0, -'.txt'.length), readFileSync(join(transcriptDir, fileName), 'utf8')]),
+  );
+
+  return {
+    events,
+    transcripts,
+    finalReport,
+  };
+}
+
+export function checkSmokeAcceptanceForRunDir(input: { runDir: string; expectFailure: boolean }): SmokeAcceptanceResult {
+  try {
+    return checkSmokeAcceptance({
+      ...loadSmokeAcceptanceArtifacts(input.runDir),
+      expectFailure: input.expectFailure,
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return {
+      ok: false,
+      failures: [`unable to read smoke artifacts: ${message}`],
+    };
+  }
+}

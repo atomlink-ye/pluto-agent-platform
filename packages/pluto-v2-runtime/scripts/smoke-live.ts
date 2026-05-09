@@ -6,23 +6,9 @@ import { join, relative, resolve } from 'node:path';
 import process from 'node:process';
 import { pathToFileURL } from 'node:url';
 
-import {
-  defaultClockProvider,
-  defaultIdProvider,
-  replayAll,
-  type ActorRef,
-  type AuthoredSpec,
-} from '../../pluto-v2-core/src/index.ts';
-
-import {
-  loadAuthoredSpec,
-  makePaseoAdapter,
-  makePaseoCliClient,
-  runPaseo,
-  type PaseoAgentSpec,
-  type PaseoCliClient,
-} from '../src/index.js';
-import { EvidencePacketShape } from '../src/evidence/evidence-packet.js';
+import type { ActorRef, AuthoredSpec, replayAll } from '../../pluto-v2-core/src/index.ts';
+import type { loadAuthoredSpec, PaseoAgentSpec, PaseoCliClient } from '../src/index.js';
+import { checkSmokeAcceptanceForRunDir } from './smoke-acceptance.js';
 
 type ActorUsageTotals = {
   turns: number;
@@ -136,7 +122,29 @@ function parseSpecArg(argv: readonly string[]): string | null {
   return null;
 }
 
-async function loadSmokeInput(repoRoot: string, argv: readonly string[]): Promise<SmokeInput> {
+function parseRunDirArg(argv: readonly string[]): string | null {
+  for (let index = 0; index < argv.length; index += 1) {
+    const arg = argv[index];
+    if (arg === '--run-dir') {
+      return argv[index + 1] ?? null;
+    }
+    if (arg.startsWith('--run-dir=')) {
+      return arg.slice('--run-dir='.length);
+    }
+  }
+
+  return null;
+}
+
+function hasFlag(argv: readonly string[], flag: string): boolean {
+  return argv.includes(flag);
+}
+
+async function loadSmokeInput(
+  repoRoot: string,
+  argv: readonly string[],
+  loadAuthoredSpecImpl: typeof loadAuthoredSpec,
+): Promise<SmokeInput> {
   const specArg = parseSpecArg(argv);
   if (specArg == null || specArg.trim().length === 0) {
     const runId = process.env.PLUTO_V2_SMOKE_RUN_ID?.trim() || randomUUID();
@@ -150,7 +158,7 @@ async function loadSmokeInput(repoRoot: string, argv: readonly string[]): Promis
   }
 
   const specPath = resolve(repoRoot, specArg);
-  const authored = loadAuthoredSpec(specPath);
+  const authored = loadAuthoredSpecImpl(specPath);
   const authoredSpecText = await readFile(specPath, 'utf8');
 
   return {
@@ -266,11 +274,38 @@ function makeTrackedClient(baseClient: PaseoCliClient, actorSpecByKey: Map<strin
 }
 
 async function main(): Promise<void> {
+  const argv = process.argv.slice(2);
   // Resolve repo root from the script's own location so `pnpm --filter ... exec`
   // (which runs cwd=package dir) still writes the fixture to the workspace root.
   const scriptDir = resolve(new URL('.', import.meta.url).pathname);
   const repoRoot = process.env.PLUTO_V2_REPO_ROOT?.trim() || resolve(scriptDir, '..', '..', '..');
-  const smokeInput = await loadSmokeInput(repoRoot, process.argv.slice(2));
+  const expectFailure = hasFlag(argv, '--expect-failure');
+  const specArg = parseSpecArg(argv);
+  const runDirArg = parseRunDirArg(argv);
+
+  if (specArg != null && runDirArg != null) {
+    throw new Error('smoke-live accepts either --spec or --run-dir, not both');
+  }
+
+  if (runDirArg != null) {
+    const runDir = resolve(repoRoot, runDirArg);
+    const acceptance = checkSmokeAcceptanceForRunDir({ runDir, expectFailure });
+    if (!acceptance.ok) {
+      for (const failure of acceptance.failures) {
+        process.stderr.write(`acceptance: ${failure}\n`);
+      }
+      process.exitCode = 1;
+      return;
+    }
+    process.stdout.write(`${relative(repoRoot, runDir)}\n`);
+    return;
+  }
+
+  const { defaultClockProvider, defaultIdProvider, replayAll } = await import('../../pluto-v2-core/src/index.ts');
+  const { loadAuthoredSpec, makePaseoAdapter, makePaseoCliClient, runPaseo } = await import('../src/index.js');
+  const { EvidencePacketShape } = await import('../src/evidence/evidence-packet.js');
+
+  const smokeInput = await loadSmokeInput(repoRoot, argv, loadAuthoredSpec);
   const authored = smokeInput.authored;
   const runId = authored.runId;
   const fixtureDir = join(repoRoot, 'tests/fixtures/live-smoke', runId);
@@ -456,6 +491,15 @@ async function main(): Promise<void> {
     const key = actorKey(actor);
     const transcript = tracked.transcriptByActorKey.get(key) ?? '';
     await writeFile(join(transcriptDir, `${key}.txt`), transcript, 'utf8');
+  }
+
+  const acceptance = checkSmokeAcceptanceForRunDir({ runDir: fixtureDir, expectFailure });
+  if (!acceptance.ok) {
+    for (const failure of acceptance.failures) {
+      process.stderr.write(`acceptance: ${failure}\n`);
+    }
+    process.exitCode = 1;
+    return;
   }
 
   process.stdout.write(`${relative(repoRoot, fixtureDir)}\n`);

@@ -1,0 +1,261 @@
+import { spawnSync } from 'node:child_process';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+import { SCHEMA_VERSION, type ActorRef, type RunEvent } from '@pluto/v2-core';
+import { afterEach, describe, expect, it } from 'vitest';
+
+import { checkSmokeAcceptanceForRunDir } from '../../scripts/smoke-acceptance.js';
+
+const REPO_ROOT = fileURLToPath(new URL('../../../../', import.meta.url));
+const TSX_BIN = join(REPO_ROOT, 'node_modules', '.bin', 'tsx');
+const POST_T5_FIXTURE_DIR = '/workspace/tests/fixtures/live-smoke/post-t5-poet-critic-haiku';
+
+const SYSTEM: ActorRef = { kind: 'system' };
+const MANAGER: ActorRef = { kind: 'manager' };
+const LEAD: ActorRef = { kind: 'role', role: 'lead' };
+const GENERATOR: ActorRef = { kind: 'role', role: 'generator' };
+
+const tempDirs: string[] = [];
+
+function baseEvent(sequence: number, actor: ActorRef) {
+  return {
+    eventId: `00000000-0000-4000-8000-${String(sequence + 1).padStart(12, '0')}`,
+    requestId: `00000000-0000-4000-8000-${String(sequence + 101).padStart(12, '0')}`,
+    runId: 'run-smoke-acceptance',
+    actor,
+    timestamp: `2026-05-09T00:00:${String(sequence).padStart(2, '0')}.000Z`,
+    sequence,
+    schemaVersion: SCHEMA_VERSION,
+  };
+}
+
+function runStarted(sequence: number): RunEvent {
+  return {
+    ...baseEvent(sequence, SYSTEM),
+    kind: 'run_started',
+    outcome: 'accepted',
+    payload: {
+      scenarioRef: 'scenario/smoke-acceptance',
+      runProfileRef: 'unit-test',
+      startedAt: '2026-05-09T00:00:00.000Z',
+    },
+  } as unknown as RunEvent;
+}
+
+function taskCreated(sequence: number, ownerActor: ActorRef = GENERATOR, taskId = 'task-1'): RunEvent {
+  return {
+    ...baseEvent(sequence, LEAD),
+    kind: 'task_created',
+    outcome: 'accepted',
+    payload: {
+      taskId,
+      title: 'Draft haiku',
+      ownerActor,
+      dependsOn: [],
+    },
+  } as unknown as RunEvent;
+}
+
+function mailboxAppended(sequence: number, fromActor: ActorRef = GENERATOR, toActor: ActorRef = LEAD): RunEvent {
+  return {
+    ...baseEvent(sequence, fromActor),
+    kind: 'mailbox_message_appended',
+    outcome: 'accepted',
+    payload: {
+      messageId: `message-${sequence}`,
+      fromActor,
+      toActor,
+      kind: 'completion',
+      body: 'Draft is ready.',
+    },
+  } as unknown as RunEvent;
+}
+
+function taskStateChanged(sequence: number, to: 'in_progress' | 'completed' | 'cancelled' | 'failed' = 'completed', taskId = 'task-1'): RunEvent {
+  return {
+    ...baseEvent(sequence, GENERATOR),
+    kind: 'task_state_changed',
+    outcome: 'accepted',
+    payload: {
+      taskId,
+      to,
+    },
+  } as unknown as RunEvent;
+}
+
+function runCompleted(sequence: number, status: 'succeeded' | 'failed' = 'succeeded'): RunEvent {
+  return {
+    ...baseEvent(sequence, MANAGER),
+    kind: 'run_completed',
+    outcome: 'accepted',
+    payload: {
+      status,
+      completedAt: '2026-05-09T00:00:59.000Z',
+      summary: status === 'succeeded' ? 'done' : 'bridge_unavailable: wrapper_missing',
+    },
+  } as unknown as RunEvent;
+}
+
+async function createRunDir(options?: {
+  events?: ReadonlyArray<RunEvent>;
+  transcripts?: Record<string, string>;
+  finalReport?: string;
+}): Promise<string> {
+  const runDir = await mkdtemp(join(tmpdir(), 'pluto-smoke-acceptance-'));
+  tempDirs.push(runDir);
+  const transcriptDir = join(runDir, 'paseo-transcripts');
+  await mkdir(transcriptDir, { recursive: true });
+
+  const events = options?.events ?? [
+    runStarted(0),
+    taskCreated(1),
+    mailboxAppended(2),
+    taskStateChanged(3, 'completed'),
+    runCompleted(4, 'succeeded'),
+  ];
+  const transcripts = options?.transcripts ?? {
+    'role:lead': 'lead transcript\n',
+    'role:generator': 'generator transcript\n',
+    manager: '',
+  };
+
+  await writeFile(join(runDir, 'events.jsonl'), `${events.map((event) => JSON.stringify(event)).join('\n')}\n`, 'utf8');
+  await writeFile(join(runDir, 'final-report.md'), options?.finalReport ?? '# Pluto v2 Paseo Live Smoke\n', 'utf8');
+  await Promise.all(
+    Object.entries(transcripts).map(([actorKey, transcript]) =>
+      writeFile(join(transcriptDir, `${actorKey}.txt`), transcript, 'utf8'),
+    ),
+  );
+
+  return runDir;
+}
+
+afterEach(async () => {
+  await Promise.all(tempDirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
+});
+
+describe('smoke acceptance', () => {
+  it('passes when all five criteria are satisfied', async () => {
+    const runDir = await createRunDir();
+
+    expect(checkSmokeAcceptanceForRunDir({ runDir, expectFailure: false })).toEqual({
+      ok: true,
+      failures: [],
+    });
+  });
+
+  it('fails when the run does not succeed in normal mode', async () => {
+    const runDir = await createRunDir({
+      events: [
+        runStarted(0),
+        taskCreated(1),
+        mailboxAppended(2),
+        taskStateChanged(3, 'completed'),
+        runCompleted(4, 'failed'),
+      ],
+    });
+
+    const result = checkSmokeAcceptanceForRunDir({ runDir, expectFailure: false });
+
+    expect(result.ok).toBe(false);
+    expect(result.failures).toContain('run did not succeed');
+  });
+
+  it('fails when fewer than two actors have non-empty transcripts', async () => {
+    const runDir = await createRunDir({
+      transcripts: {
+        'role:lead': 'lead transcript\n',
+        'role:generator': '',
+        manager: '',
+      },
+    });
+
+    const result = checkSmokeAcceptanceForRunDir({ runDir, expectFailure: false });
+
+    expect(result.ok).toBe(false);
+    expect(result.failures).toContain('fewer than 2 actors have non-empty transcripts');
+  });
+
+  it('fails when a delegated task never reaches a terminal state', async () => {
+    const runDir = await createRunDir({
+      events: [
+        runStarted(0),
+        taskCreated(1),
+        mailboxAppended(2),
+        runCompleted(3, 'succeeded'),
+      ],
+    });
+
+    const result = checkSmokeAcceptanceForRunDir({ runDir, expectFailure: false });
+
+    expect(result.ok).toBe(false);
+    expect(result.failures.some((failure) => failure.startsWith('delegated task did not reach terminal state'))).toBe(true);
+  });
+
+  it('fails when there is no accepted task creation or accepted role mutation', async () => {
+    const runDir = await createRunDir({
+      events: [runStarted(0), runCompleted(1, 'succeeded')],
+    });
+
+    const result = checkSmokeAcceptanceForRunDir({ runDir, expectFailure: false });
+
+    expect(result.ok).toBe(false);
+    expect(result.failures).toContain('missing accepted task_created or accepted non-system, non-manager mutation event');
+  });
+
+  it('fails when no sub-actor reports back to lead', async () => {
+    const runDir = await createRunDir({
+      events: [
+        runStarted(0),
+        taskCreated(1),
+        taskStateChanged(2, 'completed'),
+        runCompleted(3, 'succeeded'),
+      ],
+    });
+
+    const result = checkSmokeAcceptanceForRunDir({ runDir, expectFailure: false });
+
+    expect(result.ok).toBe(false);
+    expect(result.failures).toContain('missing accepted mailbox_message_appended from a sub-actor back to lead');
+  });
+
+  it('passes expected-failure mode when the run failed but the other criteria never happened', async () => {
+    const runDir = await createRunDir({
+      events: [runStarted(0), runCompleted(1, 'failed')],
+      transcripts: {
+        'role:lead': 'lead transcript\n',
+        'role:generator': '',
+        manager: '',
+      },
+      finalReport: '# Pluto v2 Paseo Live Smoke\n\n- Status: failed\n',
+    });
+
+    expect(checkSmokeAcceptanceForRunDir({ runDir, expectFailure: true })).toEqual({
+      ok: true,
+      failures: [],
+    });
+  });
+
+  it('treats the captured POST-T5 fixture as a diagnosed expected failure', () => {
+    const result = spawnSync(
+      TSX_BIN,
+      [
+        'packages/pluto-v2-runtime/scripts/smoke-live.ts',
+        '--run-dir',
+        POST_T5_FIXTURE_DIR,
+        '--expect-failure',
+      ],
+      {
+        cwd: REPO_ROOT,
+        encoding: 'utf8',
+      },
+    );
+
+    expect(result.status).toBe(0);
+    expect(result.stderr).toBe('');
+    expect(result.stdout.trim().endsWith('tests/fixtures/live-smoke/post-t5-poet-critic-haiku')).toBe(true);
+  });
+});
