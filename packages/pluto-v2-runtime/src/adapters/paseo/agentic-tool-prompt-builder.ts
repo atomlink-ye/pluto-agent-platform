@@ -338,7 +338,8 @@ function turnRuleSection(actor: ActorRef, wrapperPath: string): string {
       'Turn rule:',
       '- Read tools are available whenever you need more context.',
       '- End your turn with EXACTLY ONE mutating Pluto tool call.',
-      `- After that mutating call, prefer ${wrapperPath} wait to suspend until the next relevant event.`,
+      '- Mutating commands automatically wait for the next relevant event unless you pass --no-wait.',
+      `- Do not poll with ${wrapperPath} read-state between your own mutations; the runtime will resume you when an event for you arrives.`,
       '- Usually that means delegating, publishing a state change, or calling pluto_complete_run when the run is truly finished.',
     ].join('\n');
   }
@@ -347,7 +348,8 @@ function turnRuleSection(actor: ActorRef, wrapperPath: string): string {
     'Turn rule:',
     '- Read tools are available whenever you need more context.',
     '- End your turn with EXACTLY ONE mutating Pluto tool call.',
-    `- After that mutating call, prefer ${wrapperPath} wait to suspend until the next relevant event.`,
+    '- Mutating commands automatically wait for the next relevant event unless you pass --no-wait.',
+    `- Do not poll with ${wrapperPath} read-state between your own mutations; the runtime will resume you when an event for you arrives.`,
     '- Usually that means pluto_change_task_state to a terminal state, or pluto_append_mailbox_message with kind completion to the lead.',
   ].join('\n');
 }

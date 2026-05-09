@@ -5,8 +5,8 @@
 > - [T9-S1 — unified actor CLI + explicit `--actor` + server-side header-required check](../../../tasks/remote/pluto-v2-t9-s1-unified-cli-20260509/artifacts/REPORT.md) *(merged at `9e42f54`; token-actor cryptographic binding split to T9-S1b)*
 > - [T9-S2 — wait as turn lifecycle (auto-suspend after mutation)](../../../tasks/remote/pluto-v2-t9-s2-wait-as-lifecycle-20260509/artifacts/REPORT.md) *(merged at `b48fba0`)*
 > - [T9-S3 — TeamProtocol composite tools (worker-complete / evaluator-verdict / final-reconciliation)](../../../tasks/remote/pluto-v2-t9-s3-team-protocol-tools-20260509/artifacts/REPORT.md) *(merged at `62e00a0f`)*
-> - [T9-S4 — gate fast-path: typecheck split + TS project references + OOM discipline](../../../tasks/remote/pluto-v2-t9-s4-gate-fast-path-20260509/artifacts/REPORT.md) *(in flight)*
-> - T9-S1b — per-actor bearer-token binding *(deferred from S1; pending after S4)*
+> - [T9-S4 — gate fast-path: typecheck split + TS project references + OOM discipline](../../../tasks/remote/pluto-v2-t9-s4-gate-fast-path-20260509/artifacts/REPORT.md) *(merged at `829b64b7`; partial — diagnostic exit 1→0 via T9-S5 follow-up at `d877c903`; cold typecheck still residual-OOM in some sandbox conditions)*
+> - T9-S1b — per-actor bearer-token binding *(merged at `83a649a5`; runtime issues one bearer per actor, route validates `Authorization: Bearer` against the actor bound to that token, fails closed with `403 actor_mismatch` on cross-actor reuse)*
 >
 > **Predecessors:** [T6 actor bridge fix](../completed/v2-actor-bridge-fix.md) → [T7 craft fidelity + telemetry](../completed/v2-craft-fidelity-and-telemetry.md) → [T8 telemetry runtime aggregates](../completed/v2-telemetry-runtime-aggregates.md).
 >

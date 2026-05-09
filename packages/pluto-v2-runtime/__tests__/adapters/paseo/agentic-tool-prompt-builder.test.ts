@@ -247,7 +247,8 @@ describe('buildAgenticToolPrompt', () => {
     expect(prompt).toContain(`${RUN_BIN_PATH} --actor role:lead wait --timeout-sec=300`);
     expect(prompt).toContain(`${RUN_BIN_PATH} --actor role:lead read-transcript --actor-key=role:generator`);
     expect(prompt).toContain('End your turn with EXACTLY ONE mutating Pluto tool call.');
-    expect(prompt).toContain(`After that mutating call, prefer ${WRAPPER_PATH} wait`);
+    expect(prompt).toContain('Mutating commands automatically wait for the next relevant event unless you pass --no-wait.');
+    expect(prompt).toContain(`Do not poll with ${WRAPPER_PATH} read-state between your own mutations`);
     expect(prompt).not.toContain('available in your shell');
     expect(prompt).not.toContain('curl');
     expect(prompt).not.toContain('mcporter');

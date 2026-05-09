@@ -39,7 +39,9 @@ Legacy selectors and v1.6 runtime flags are no longer part of active usage on `m
 
 ## Authoring Playbooks
 
-For `agentic_tool` playbooks, actors should use `pluto-tool` as the runtime-facing control surface. The runtime injects `PLUTO_RUN_API_URL`, `PLUTO_RUN_TOKEN`, and `PLUTO_RUN_ACTOR` automatically, so playbook instructions should name the CLI rather than raw HTTP details.
+For `agentic_tool` playbooks, actors call Pluto through `pluto-tool`. The runtime materializes a single run-level binary at `<runDir>/bin/pluto-tool` and a per-actor wrapper that forwards to it; the wrapper is on the actor's `PATH`. Each actor must pass `--actor role:<role>` (or `--actor manager:<key>`) on every mutating call so the server can verify the actor's bound bearer token.
+
+Mutating commands auto-wait for the next relevant event by default. Pass `--no-wait` to opt out, or `--wait-timeout-ms=<ms>` to override the deadline. Do not poll with `read-state` between same-actor mutations.
 
 Example actor instructions:
 
@@ -47,16 +49,18 @@ Example actor instructions:
 # Lead actor
 
 1. Inspect the current run state.
-   `pluto-tool read-state --format=text`
-2. Delegate the implementation task.
-   `pluto-tool create-task --owner=generator --title="Draft the runtime change"`
-3. Wait for the next relevant event.
-   `pluto-tool wait --timeout-sec=300 --format=text`
-4. Close the run when the work is done.
-   `pluto-tool complete-run --status=succeeded --summary="Generator draft accepted."`
+   `pluto-tool --actor role:lead read-state --format=text`
+2. Delegate the implementation task (auto-waits for the next event).
+   `pluto-tool --actor role:lead create-task --owner=generator --title="Draft the runtime change"`
+3. Close the run when the work is done.
+   `pluto-tool --actor role:lead final-reconciliation --completed-tasks=<id>... --cited-messages=<id>... --summary="..."`
 ```
 
-Use `pluto-tool send-mailbox --to=lead --kind=completion --body="..."` for mailbox completion handoff from delegated actors.
+Composite verbs collapse common multi-step protocol patterns:
+
+- `pluto-tool --actor role:generator worker-complete --task-id=<id> --summary="..."` — worker → completed + completion mailbox to lead.
+- `pluto-tool --actor role:evaluator evaluator-verdict --task-id=<id> --verdict=pass --summary="..."` — evaluator → optional task close + final/task mailbox to lead.
+- `pluto-tool --actor role:lead final-reconciliation --completed-tasks=... --cited-messages=... --summary="..."` — lead → `complete_run` with structured citations.
 
 ## Validation Surface
 
