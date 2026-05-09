@@ -82,3 +82,31 @@ root-tests: 37/37
 push: failed
 stop-condition-hit: 2
 ```
+
+## Decisions made
+
+- **Composite project references on v2-core**: NOT shipped.
+  - Rationale: the split runtime tsconfigs were kept, but the follow-up composite/reference wiring was not carried forward because the sandbox never demonstrated a reliable cold improvement once the reference path was exercised.
+  - Evidence: the first fast-path runtime src check passed quickly (`3s`, exit `0`) after the split landed, then subsequent re-runs regressed to heap OOMs (`190s` to `205s`, exit `134`) once the runtime program had to traverse the full graph again. The working diagnosis was that the inherited `paths` mapping still let the runtime program walk into `@pluto/v2-core` source on cold runs, so project references were not buying the intended isolation.
+- **`tsc -b` build mode in scripts**: NOT used.
+  - Rationale: build mode only helps if the referenced src declarations can be emitted reliably. In this sandbox, the src emit/typecheck step itself was the failing step, so switching the scripts to `tsc -b` would have moved the failure earlier without removing the cold OOM risk.
+  - Evidence: the investigation path showed that a test config can only benefit from referencing src if the src declarations exist first, and the runtime src build/typecheck step was already the point that aborted with fatal heap OOMs.
+- **`paths` mapping for `@pluto/v2-core`**: kept inherited from the parent tsconfig.
+  - Rationale: overriding the runtime split configs to point at `../pluto-v2-core/dist/*.d.ts` would only be safe if cold v2-core builds were reliably available first. That prerequisite was not stable enough on this sandbox to justify shipping a second resolution mode.
+
+## Approaches considered and rejected
+
+- **Composite runtime src config plus `tsc -b` scripts**
+  - Rejected because the cold runtime src build still aborted with fatal heap OOM once build mode was exercised, so the change would not have satisfied the fast-path goal.
+- **Runtime test config referencing runtime src declarations**
+  - Rejected as a shipped configuration because it depends on the runtime src declaration emit succeeding first, and that emit step was the unstable part on this sandbox.
+- **Overriding runtime split-config `paths` to `v2-core/dist` declarations**
+  - Rejected because it would have coupled the runtime fast path to a reliable prior v2-core build output, which the sandbox investigation did not establish as a dependable cold-path invariant.
+- **Retrying typecheck with larger Node heaps or alternate `tsc` entrypoints**
+  - Rejected by policy and by evidence. The slice codified the single-attempt OOM discipline specifically to stop repeating unsuccessful `NODE_OPTIONS=--max-old-space-size` retries and wrapper-script variations.
+
+## Stop conditions hit
+
+- **#2: cold `typecheck:src` still OOMs after split**
+  - Evidence: `205s`, exit `134` (`FATAL ERROR: Reached heap limit Allocation failed - JavaScript heap out of memory`).
+  - Diagnostic artifact: not committed on this branch. The local investigation used a one-off verbose build-mode diagnostic outside the tracked task artifacts, so future fixups should not assume a committed `tsc-build-verbose-runtime-src.txt` is present here.
