@@ -48,7 +48,7 @@ New test count: 6
 
 ## Token-binding deferral (T9-S1b)
 
-Full token-to-actor binding was not implemented in this slice because `packages/pluto-v2-runtime/src/adapters/paseo/run-paseo.ts:629` still creates a single `bearerToken` per run and shares it across all actor handoffs.
+Full token-to-actor binding was not implemented in this slice because `packages/pluto-v2-runtime/src/adapters/paseo/run-paseo.ts:633` still creates a single `bearerToken` per run and shares it across all actor handoffs.
 
 The narrowed alternative shipped here is:
 
@@ -66,10 +66,10 @@ T9-S1b must do the following:
 ## Gates
 
 - `pnpm install`: passed
-- `pnpm --filter @pluto/v2-runtime typecheck`: failed due pre-existing workspace baseline outside this slice (`zod` export/typecheck failures in `packages/pluto-v2-core/**` and existing runtime files)
-- `pnpm exec tsc -p tsconfig.json --noEmit`: failed due the same pre-existing workspace baseline
-- `pnpm --filter @pluto/v2-runtime test`: passed, `226/228` tests green (`2` skipped)
-- `pnpm test`: failed on existing root CLI baseline, `27/37` tests green
+- `pnpm --filter @pluto/v2-runtime typecheck`: passed, `0` errors
+- `pnpm exec tsc -p tsconfig.json --noEmit`: passed, `0` errors
+- `pnpm --filter @pluto/v2-runtime test`: passed, `226/228` tests green (`2` skipped; +6 new vs. `220/222` baseline)
+- `pnpm test`: passed, `37/37` tests green
 
 ## Final state
 
