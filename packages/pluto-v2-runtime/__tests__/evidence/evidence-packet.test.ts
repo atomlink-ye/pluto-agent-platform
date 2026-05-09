@@ -114,6 +114,37 @@ describe('assembleEvidencePacket', () => {
     expect(packet.generatedAt).toBe('2026-05-07T00:00:00.000Z');
   });
 
+  it('threads runtime traces into runtime diagnostics', () => {
+    const events = [runStarted, taskCreated, artifactPublished, runCompleted];
+    const packet = assembleEvidencePacket(replayAll(events), events, 'run-1', {
+      runtimeTraces: [
+        {
+          kind: 'bridge_unavailable',
+          actor: 'role:lead',
+          reason: 'wrapper_missing',
+          latencyMs: 14,
+        },
+        {
+          kind: 'task_closeout_rejected',
+          actor: 'role:generator',
+          taskId: 'task-1',
+          reason: 'task already terminal',
+        },
+        {
+          kind: 'wait_timed_out',
+          actor: 'role:evaluator',
+          timeoutMs: 600000,
+        },
+      ],
+    });
+
+    expect(packet.runtimeDiagnostics).toEqual({
+      bridgeUnavailable: [{ actor: 'role:lead', reason: 'wrapper_missing', latencyMs: 14 }],
+      taskCloseoutRejected: [{ actor: 'role:generator', taskId: 'task-1', reason: 'task already terminal' }],
+      waitTraces: [{ kind: 'wait_timed_out', actor: 'role:evaluator', timeoutMs: 600000 }],
+    });
+  });
+
   it('throws when a citation references an event that is not present', () => {
     const packetViews = replayAll([runStarted, runCompleted]);
     packetViews.evidence.citations[0] = {

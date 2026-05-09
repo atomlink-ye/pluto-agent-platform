@@ -23,7 +23,6 @@ import { actorKey } from '../../../../pluto-v2-core/src/core/team-context.js';
 import { startPlutoLocalApi } from '../../api/pluto-local-api.js';
 import { makeWaitRegistry, type WaitTraceEvent } from '../../api/wait-registry.js';
 import { assembleEvidencePacket, type EvidencePacket } from '../../evidence/evidence-packet.js';
-import type { UsageStatus } from '../../evidence/usage-summary-builder.js';
 import type { LoadedAuthoredSpec } from '../../loader/authored-spec-loader.js';
 import { startPlutoMcpServer, type PlutoToolHandlers } from '../../mcp/pluto-mcp-server.js';
 import { makeTurnLeaseStore } from '../../mcp/turn-lease.js';
@@ -107,17 +106,19 @@ type UsageByActor = {
 type UsagePerTurn = {
   turnIndex: number;
   actor: ActorRef;
-  inputTokens: number;
-  outputTokens: number;
-  costUsd: number;
+  inputTokens: number | null;
+  outputTokens: number | null;
+  costUsd: number | null;
   waitExitCode: number;
 };
+
+type RuntimeUsageStatus = 'reported' | 'unavailable';
 
 type UsageSummary = {
   totalInputTokens: number;
   totalOutputTokens: number;
   totalCostUsd: number;
-  usageStatus: UsageStatus;
+  usageStatus: RuntimeUsageStatus;
   reportedBy: 'paseo.usageEstimate';
   estimated: boolean;
   byActor: ReadonlyMap<string, UsageByActor>;
@@ -366,16 +367,16 @@ function createUsageAccumulator() {
       perTurn.push({
         turnIndex: entry.turn,
         actor: entry.actor,
-        inputTokens,
-        outputTokens,
-        costUsd,
+        inputTokens: entry.inputTokens ?? null,
+        outputTokens: entry.outputTokens ?? null,
+        costUsd: entry.costUsd ?? null,
         waitExitCode: entry.waitExitCode,
       });
     },
 
     finalize(): UsageSummary {
-      const usageStatus: UsageStatus = perTurn.some((entry) =>
-        entry.inputTokens > 0 || entry.outputTokens > 0 || entry.costUsd > 0,
+      const usageStatus: RuntimeUsageStatus = perTurn.some((entry) =>
+        (entry.inputTokens ?? 0) > 0 || (entry.outputTokens ?? 0) > 0 || (entry.costUsd ?? 0) > 0,
       )
         ? 'reported'
         : 'unavailable';
@@ -1216,6 +1217,7 @@ export async function runPaseo<S>(
     const views = replayAll(events);
     const evidencePacket = assembleEvidencePacket(views, events, kernel.state.runId, {
       initiatingActor: usage.initiatingActor,
+      runtimeTraces: usage.runtimeTraces,
     });
 
     return {

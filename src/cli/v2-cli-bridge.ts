@@ -274,6 +274,7 @@ function buildFailedEvidencePacket(args: {
     tasks: {},
     mailboxMessages: [],
     artifacts: [],
+    runtimeDiagnostics: undefined,
   };
 }
 
@@ -327,6 +328,7 @@ async function writeRunArtifacts(args: {
       tasks: views.task,
       mailbox: views.mailbox,
       artifacts: args.result.evidencePacket.artifacts,
+      runtimeDiagnostics: args.result.evidencePacket.runtimeDiagnostics,
     }),
     'utf8',
   );
@@ -388,6 +390,7 @@ async function writeFailedRunArtifacts(args: {
       tasks: views.task,
       mailbox: views.mailbox,
       artifacts: evidencePacket.artifacts,
+      runtimeDiagnostics: evidencePacket.runtimeDiagnostics,
     }),
     'utf8',
   );
