@@ -2,9 +2,11 @@
 
 > [!NOTE]
 > **Per-slice reports** (in execution order):
-> - [T9-S1 — unified actor CLI + explicit `--actor` + server-side token-actor binding](../../../tasks/remote/pluto-v2-t9-s1-unified-cli-20260509/artifacts/REPORT.md) *(in flight)*
-> - [T9-S2 — wait as turn lifecycle (auto-suspend after mutation)](../../../tasks/remote/pluto-v2-t9-s2-wait-as-lifecycle-20260509/artifacts/REPORT.md) *(pending)*
-> - [T9-S3 — TeamProtocol composite tools (worker-complete / evaluator-verdict / final-reconciliation)](../../../tasks/remote/pluto-v2-t9-s3-team-protocol-tools-20260509/artifacts/REPORT.md) *(pending)*
+> - [T9-S1 — unified actor CLI + explicit `--actor` + server-side header-required check](../../../tasks/remote/pluto-v2-t9-s1-unified-cli-20260509/artifacts/REPORT.md) *(merged at `9e42f54`; token-actor cryptographic binding split to T9-S1b)*
+> - [T9-S2 — wait as turn lifecycle (auto-suspend after mutation)](../../../tasks/remote/pluto-v2-t9-s2-wait-as-lifecycle-20260509/artifacts/REPORT.md) *(merged at `b48fba0`)*
+> - [T9-S3 — TeamProtocol composite tools (worker-complete / evaluator-verdict / final-reconciliation)](../../../tasks/remote/pluto-v2-t9-s3-team-protocol-tools-20260509/artifacts/REPORT.md) *(merged at `62e00a0f`)*
+> - [T9-S4 — gate fast-path: typecheck split + TS project references + OOM discipline](../../../tasks/remote/pluto-v2-t9-s4-gate-fast-path-20260509/artifacts/REPORT.md) *(in flight)*
+> - T9-S1b — per-actor bearer-token binding *(deferred from S1; pending after S4)*
 >
 > **Predecessors:** [T6 actor bridge fix](../completed/v2-actor-bridge-fix.md) → [T7 craft fidelity + telemetry](../completed/v2-craft-fidelity-and-telemetry.md) → [T8 telemetry runtime aggregates](../completed/v2-telemetry-runtime-aggregates.md).
 >
@@ -186,6 +188,68 @@ without expanding the closed kernel `RunEvent` set.
 
 **Stop condition:** if any composite verb requires authority-matrix
 changes in v2-core, STOP — kernel byte-immutable rule wins.
+
+### T9-S4 — Gate fast-path: typecheck split + TS project references
+
+**Inserted between S3 and S1b after S1/S2/S3 each spent significant
+time on sandbox cgroup OOM-killer events during
+`pnpm --filter @pluto/v2-runtime typecheck`. Tooling slice; no
+behavioral change.**
+
+**Goal:** make the runtime typecheck fast and reliable on the
+sandbox so subsequent slices stop fumbling on retries.
+
+**Approach:**
+
+- Split runtime typecheck into `tsconfig.src.json` (src only) and
+  `tsconfig.test.json` (tests only, references the src project).
+  `typecheck:src` becomes the fast-path gate.
+- Make `@pluto/v2-core` a composite TS project; runtime references
+  it via project references with `incremental: true`. Avoids
+  recompiling core source on every runtime typecheck.
+- Codify single-attempt OOM fallback in `commands.sh`: on exit
+  137 ("Killed" / cgroup OOM-killer), record once, do NOT retry
+  with `NODE_OPTIONS=--max-old-space-size` (raises Node heap
+  ceiling closer to cgroup limit, making OOM happen sooner). Do
+  NOT invoke `./node_modules/.bin/tsc` (it's a bash wrapper).
+
+**Deliverables:**
+- `tsconfig.src.json` + `tsconfig.test.json` for v2-runtime.
+- `composite: true` on v2-core's tsconfig.
+- `package.json` typecheck scripts (`typecheck:src`, `typecheck:test`,
+  composed `typecheck`).
+- `.gitignore` covers `*.tsbuildinfo`.
+- Updated `commands.sh` template with the new gate template + OOM-discipline comment.
+- Updated `docs/notes/t9-context-packet.md` reflecting new commands.
+
+**Cost:** ~150-250 LOC (mostly tsconfig + package.json + commands.sh).
+ZERO source `.ts` changes.
+
+**Stop condition:** if `composite: true` cascades to require source
+import changes in > 5 files, fall back to "src/test typecheck split
+only; defer project references to T10."
+
+### T9-S1b — Per-actor bearer-token binding
+
+**Deferred from T9-S1.** Implements the cryptographic token-actor
+binding that S1 narrowed away (run-paseo.ts:633 currently issues
+ONE bearerToken per run; S1b makes it per actor).
+
+**Goal:** server fail-closed when the bearer token does not match
+the actor named in `Pluto-Run-Actor` header.
+
+**Approach:**
+- Per-actor token issuance in `run-paseo.ts`.
+- Token registry keyed by actor.
+- Mutating route validates `Authorization: Bearer <token>` is
+  bound to the actor named in `Pluto-Run-Actor`. Mismatch → 403
+  `actor_mismatch`.
+
+**Cost:** ~200-400 LOC.
+
+**Stop condition:** if the per-actor token issuance breaks the
+existing handoff.json contract in a way that cascades to > 3
+predecessor source files, narrow scope.
 
 ## Risk register
 
