@@ -12,6 +12,7 @@
 
 > **Status:** drafted 2026-05-09 from POST-T8 PASS verdict + GPT Pro design review.
 > **Authority:** this file is canonical for T9.
+> **Context packet** (read first when implementing any T9 slice): [`docs/notes/t9-context-packet.md`](../../notes/t9-context-packet.md) — repo map, forbidden zones, gate policy, known noise.
 
 ## Why T9 exists
 
