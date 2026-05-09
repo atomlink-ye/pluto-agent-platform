@@ -34,3 +34,9 @@ Implemented the T9-S3 TeamProtocol composite tool slice on `pluto/v2/t9-s3-team-
 - Local API exposes `/v2/composite/*` routes.
 - Bootstrap prompts mention the canonical composite verbs for lead, generator, and evaluator.
 - API and CLI tests cover the translation behavior and turn disposition handling.
+
+## Review fixup (review round 2)
+
+- Objection 1: expanded the lead bootstrap prompt to explain evaluator verdict mailbox encoding. The lead prompt now states that evaluator verdict messages can arrive as mailbox kind `final` for `pass`, or mailbox kind `task` for `needs-revision` and `fail`, and that the lead must inspect `body.verdict` rather than infer outcome from mailbox kind alone. The evaluator prompt now also warns that the lead reads the verdict from `body.verdict`.
+- Objection 2: kept the strict unknown-task behavior for `evaluator-verdict` and added a regression test that documents the current contract: an unknown `taskId` returns HTTP 400 / `PLUTO_TOOL_BAD_ARGS`, and no mailbox message is appended on rejection.
+- Gate note: runtime package typecheck is blocked in this sandbox by the cgroup OOM-killer (`pnpm --filter @pluto/v2-runtime typecheck` exits 137 / `Killed`). This is treated as a pre-existing harness limit rather than a T9-S3 regression; T9-S4 is expected to address it via tsconfig splitting and project references. The requested root `pnpm exec tsc -p tsconfig.json --noEmit` attempt was also captured and aborted under sandbox memory pressure before emitting type errors. Runtime tests and root tests passed for this fixup.

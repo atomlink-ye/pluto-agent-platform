@@ -282,6 +282,8 @@ function compositeToolGuidance(actor: ActorRef, runBinPath: string, actorRef: st
       '',
       `Prefer \`${runBinPath} --actor ${actorRef} final-reconciliation --completed-tasks=<id>[,<id>...] --cited-messages=<id>[,<id>...] --summary="<one-sentence>"\` when the run is ready to terminate.`,
       'This is the canonical lead close-out path. It calls the lower-level `complete-run` primitive internally and stores the structured reconciliation payload in the terminal summary.',
+      'Evaluator verdict mailbox messages may arrive with kind `final` for `pass`, or kind `task` for `needs-revision` and `fail`.',
+      'Always inspect `body.verdict` to determine the outcome. Do not infer evaluator verdict outcome from mailbox `kind` alone.',
     ].join('\n');
   }
 
@@ -300,6 +302,7 @@ function compositeToolGuidance(actor: ActorRef, runBinPath: string, actorRef: st
       '',
       `Prefer \`${runBinPath} --actor ${actorRef} evaluator-verdict --task-id=<id> --verdict=pass|needs-revision|fail --summary="<one-sentence>"\` when you deliver your review.`,
       'This is the canonical evaluator report-back path. It sends a structured verdict mailbox message to the lead and closes the evaluator-owned task when the verdict is `pass`.',
+      'The lead must inspect `body.verdict` when it reads your verdict mailbox message. Mailbox `kind` alone does not distinguish `needs-revision` from `fail`.',
     ].join('\n');
   }
 

@@ -277,5 +277,7 @@ describe('buildAgenticToolPrompt', () => {
     expect(generatorPrompt).toContain('append-mailbox-message kind=completion');
     expect(evaluatorPrompt).toContain('evaluator-verdict');
     expect(evaluatorPrompt).toContain('structured verdict mailbox message');
+    expect(leadPrompt).toContain('Evaluator verdict mailbox messages may arrive with kind `final` for `pass`, or kind `task` for `needs-revision` and `fail`.');
+    expect(leadPrompt).toContain('Always inspect `body.verdict` to determine the outcome. Do not infer evaluator verdict outcome from mailbox `kind` alone.');
   });
 });

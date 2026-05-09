@@ -358,6 +358,30 @@ describe('composite tools', () => {
     });
   });
 
+  it('rejects evaluator-verdict for an unknown task without appending mailbox output', async () => {
+    await withApi(async ({ rootUrl, kernel, leaseStore }) => {
+      leaseStore.setCurrent(EVALUATOR);
+      const response = await requestApi({
+        rootUrl,
+        actor: 'role:evaluator',
+        path: '/v2/composite/evaluator-verdict',
+        body: {
+          taskId: 'missing-task',
+          verdict: 'pass',
+          summary: 'looks good',
+        },
+      });
+
+      expect(response.status).toBe(400);
+      expect(response.body).toMatchObject({
+        error: {
+          code: 'PLUTO_TOOL_BAD_ARGS',
+        },
+      });
+      expect(kernel.eventLog.read()).toEqual([]);
+    });
+  });
+
   it('final-reconciliation wraps complete-run with structured summary args', async () => {
     await withApi(async ({ rootUrl, kernel, leaseStore }) => {
       leaseStore.setCurrent(LEAD);
