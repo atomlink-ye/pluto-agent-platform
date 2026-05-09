@@ -280,8 +280,8 @@ function compositeToolGuidance(actor: ActorRef, runBinPath: string, actorRef: st
     return [
       '## Canonical composite verb',
       '',
-      `Prefer \`${runBinPath} --actor ${actorRef} final-reconciliation --completed-tasks=<id>[,<id>...] --cited-messages=<id>[,<id>...] --summary="<one-sentence>"\` when the run is ready to terminate.`,
-      'This is the canonical lead close-out path. It calls the lower-level `complete-run` primitive internally and stores the structured reconciliation payload in the terminal summary.',
+      `When the run is ready to terminate, call \`${runBinPath} --actor ${actorRef} final-reconciliation --completed-tasks=<id>[,<id>...] --cited-messages=<id>[,<id>...] --summary="<one-sentence>" [--cited-artifacts=<ref>...] [--unresolved-issues=<text>...]\`.`,
+      'This is the canonical lead close-out path and the ONLY way to satisfy the audit gate. Do NOT call `complete-run` directly — the composite verb wraps `complete-run` and writes the structured reconciliation evidence (`<runDir>/evidence/final-reconciliation.json`) that downstream tooling (`pnpm pluto:runs audit`) consumes.',
       'When you pass `--summary`, it must quote the generator\'s last accepted completion output VERBATIM in any place where you reference it.',
       'Do not rewrite, paraphrase, improve, or "polish" that output - copy the generator\'s completion bullets exactly as written in your mailbox.',
       'Evaluator verdict mailbox messages may arrive with kind `final` for `pass`, or kind `task` for `needs-revision` and `fail`.',
@@ -293,8 +293,8 @@ function compositeToolGuidance(actor: ActorRef, runBinPath: string, actorRef: st
     return [
       '## Canonical composite verb',
       '',
-      `Prefer \`${runBinPath} --actor ${actorRef} worker-complete --task-id=<id> --summary="<one-sentence>" [--artifact=<id>...]\` when you finish your delegated task.`,
-      'This is the canonical worker report-back path. It marks the task completed and sends a structured completion mailbox message to the lead. The lower-level fallback is `append-mailbox-message kind=completion`.',
+      `When you finish your delegated task, call \`${runBinPath} --actor ${actorRef} worker-complete --task-id=<id> --summary="<one-sentence>" [--artifact=<id>...]\`.`,
+      'This is the canonical worker report-back path. It marks the task completed and sends a structured completion mailbox message to the lead in one coherent step. Do not call `change-task-state` and `append-mailbox-message kind=completion` separately — use the composite.',
     ].join('\n');
   }
 
@@ -302,8 +302,8 @@ function compositeToolGuidance(actor: ActorRef, runBinPath: string, actorRef: st
     return [
       '## Canonical composite verb',
       '',
-      `Prefer \`${runBinPath} --actor ${actorRef} evaluator-verdict --task-id=<id> --verdict=pass|needs-revision|fail --summary="<one-sentence>"\` when you deliver your review.`,
-      'This is the canonical evaluator report-back path. It sends a structured verdict mailbox message to the lead and closes the evaluator-owned task when the verdict is `pass`.',
+      `When you deliver your review, call \`${runBinPath} --actor ${actorRef} evaluator-verdict --task-id=<id> --verdict=pass|needs-revision|fail --summary="<one-sentence>"\`.`,
+      'This is the canonical evaluator report-back path. It sends a structured verdict mailbox message to the lead and closes the evaluator-owned task when the verdict is `pass`. Do not split the verdict into separate `change-task-state` and `append-mailbox-message` calls — use the composite.',
       'The lead must inspect `body.verdict` when it reads your verdict mailbox message. Mailbox `kind` alone does not distinguish `needs-revision` from `fail`.',
     ].join('\n');
   }
