@@ -8,8 +8,10 @@
     "pluto-tool": "./dist/src/cli/pluto-tool.js"
   },
   "scripts": {
-    "typecheck": "tsc -p tsconfig.json --noEmit",
-    "build": "tsc -p tsconfig.json",
+    "typecheck:src": "tsc -p tsconfig.src.json --noEmit",
+    "typecheck:test": "tsc -p tsconfig.test.json --noEmit",
+    "typecheck": "pnpm run typecheck:src && pnpm run typecheck:test",
+    "build": "tsc -p tsconfig.src.json",
     "test": "vitest run",
     "smoke:mcp-injection": "tsx scripts/smoke-mcp-injection.ts",
     "smoke:wait-feasibility": "tsx scripts/smoke-wait-feasibility.ts"

@@ -34,3 +34,5 @@ artifacts/
 coverage/
 .vitest-cache/
 evals/reports/*.json
+**/.tsbuildinfo
+**/dist/.tsbuildinfo*

@@ -79,9 +79,13 @@ Per-slice REPORTs at:
   is in fixtures and not in `src/` or `__tests__/`.
 - `pnpm-lock.yaml` is sometimes modified after
   `pnpm install --force`. Don't commit it.
-- TypeScript `tsc` may exhaust the default ~4GB Node heap on
-  this workspace. Retry with
-  `NODE_OPTIONS="--max-old-space-size=8192"`.
+- Runtime typecheck fast path is
+  `pnpm --filter @pluto/v2-runtime typecheck:src`. If a
+  typecheck exits 137 (`Killed` / sandbox cgroup OOM-killer) or
+  aborts with a fatal Node heap OOM, record it once, treat it as
+  a harness limit, and continue with other gates. Do not retry with
+  `NODE_OPTIONS="--max-old-space-size=8192"`, and do not invoke
+  `node_modules/.bin/tsc` directly.
 
 ## Build / install quirks
 
@@ -99,6 +103,10 @@ Per-slice REPORTs at:
 
 - **Full runtime suite**: `pnpm --filter @pluto/v2-runtime test`
   (vitest, ~228+ tests, 2 skipped baseline)
+- **Runtime typecheck fast path**:
+  `pnpm --filter @pluto/v2-runtime typecheck:src`
+- **Runtime typecheck full split**:
+  `pnpm --filter @pluto/v2-runtime typecheck:test`
 - **Full root suite**: `pnpm test` (vitest at repo root, ~37 tests)
 - **Single file**:
   `pnpm --filter @pluto/v2-runtime exec vitest run __tests__/<path>`
