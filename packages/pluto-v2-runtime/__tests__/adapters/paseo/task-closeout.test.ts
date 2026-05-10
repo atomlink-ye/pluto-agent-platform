@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 
 import { describe, expect, it, vi } from 'vitest';
 
-import { RunKernel, counterIdProvider, fixedClockProvider, type ActorRef, type RunEvent, type RunState } from '@pluto/v2-core';
+import { AUTHORITY_MATRIX, RunKernel, counterIdProvider, fixedClockProvider, type ActorRef, type RunEvent, type RunState } from '@pluto/v2-core';
 
 import type { AgenticMutation } from '../../../src/adapters/paseo/agentic-mutation.js';
 import { makePaseoAdapter } from '../../../src/adapters/paseo/paseo-adapter.js';
@@ -317,6 +317,7 @@ function runStateWithTask(taskState: RunState['tasks'][string]['state']): RunSta
     },
     acceptedRequestKeys: new Set<string>(),
     declaredActors: new Set(['manager', 'role:lead', 'role:generator']),
+    policy: AUTHORITY_MATRIX,
   };
 }
 
@@ -391,7 +392,7 @@ describe('task close-out synthesis in the Paseo driver', () => {
     const execution = await runAgenticTool([
       {
         actor: LEAD,
-        run: async ({ callTool }) => {
+        run: async ({ callTool, prompt }) => {
           await callTool('pluto_create_task', {
             title: 'Implement',
             ownerActor: GENERATOR,
@@ -402,7 +403,7 @@ describe('task close-out synthesis in the Paseo driver', () => {
       },
       {
         actor: GENERATOR,
-        run: async ({ callTool }) => {
+        run: async ({ callTool, prompt }) => {
           await callTool('pluto_append_mailbox_message', {
             toActor: LEAD,
             kind: 'completion',
@@ -452,7 +453,7 @@ describe('task close-out synthesis in the Paseo driver', () => {
     const execution = await runAgenticTool([
       {
         actor: LEAD,
-        run: async ({ callTool }) => {
+        run: async ({ callTool, prompt }) => {
           await callTool('pluto_create_task', {
             title: 'Implement',
             ownerActor: GENERATOR,
@@ -499,7 +500,7 @@ describe('task close-out synthesis in the Paseo driver', () => {
     const execution = await runAgenticTool([
       {
         actor: LEAD,
-        run: async ({ callTool }) => {
+        run: async ({ callTool, prompt }) => {
           await callTool('pluto_create_task', {
             title: 'Implement',
             ownerActor: GENERATOR,

@@ -436,7 +436,7 @@ describe('agentic_tool Paseo loop', () => {
     const execution = await runAgenticTool([
       {
         actor: LEAD,
-        run: async ({ callTool }) => {
+        run: async ({ callTool, prompt }) => {
           await callTool('pluto_create_task', {
             title: 'Draft the change',
             ownerActor: GENERATOR,
@@ -447,7 +447,7 @@ describe('agentic_tool Paseo loop', () => {
       },
       {
         actor: GENERATOR,
-        run: async ({ callTool }) => {
+        run: async ({ callTool, prompt }) => {
           await callTool('pluto_append_mailbox_message', {
             toActor: LEAD,
             kind: 'completion',
@@ -503,7 +503,7 @@ describe('agentic_tool Paseo loop', () => {
     const execution = await runAgenticTool([
       {
         actor: LEAD,
-        run: async ({ callTool }) => {
+        run: async ({ callTool, prompt }) => {
           await callTool('pluto_create_task', {
             title: 'should never run',
             ownerActor: GENERATOR,
@@ -554,7 +554,7 @@ describe('agentic_tool Paseo loop', () => {
     const execution = await runAgenticTool([
       {
         actor: LEAD,
-        run: async ({ callTool }) => {
+        run: async ({ callTool, prompt }) => {
           await callTool('pluto_create_task', {
             title: 'Implement',
             ownerActor: GENERATOR,
@@ -600,7 +600,7 @@ describe('agentic_tool Paseo loop', () => {
     const execution = await runAgenticTool([
       {
         actor: LEAD,
-        run: async ({ callTool }) => {
+        run: async ({ callTool, prompt }) => {
           await callTool('pluto_append_mailbox_message', {
             toActor: GENERATOR,
             kind: 'task',
@@ -611,7 +611,7 @@ describe('agentic_tool Paseo loop', () => {
       },
       {
         actor: GENERATOR,
-        run: async ({ callTool }) => {
+        run: async ({ callTool, prompt }) => {
           await callTool('pluto_append_mailbox_message', {
             toActor: LEAD,
             kind: 'completion',
@@ -641,7 +641,7 @@ describe('agentic_tool Paseo loop', () => {
     const execution = await runAgenticTool([
       {
         actor: LEAD,
-        run: async ({ callTool }) => {
+        run: async ({ callTool, prompt }) => {
           await callTool('pluto_create_task', {
             title: 'Draft the change',
             ownerActor: GENERATOR,
@@ -884,7 +884,7 @@ describe('agentic_tool Paseo loop', () => {
     const execution = await runAgenticTool([
       {
         actor: LEAD,
-        run: async ({ callTool }) => {
+        run: async ({ callTool, prompt }) => {
           const delegated = await callTool('pluto_create_task', {
             title: 'Draft the change',
             ownerActor: GENERATOR,
