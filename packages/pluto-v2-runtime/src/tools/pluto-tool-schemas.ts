@@ -97,8 +97,11 @@ type JsonSchema = {
   readonly anyOf?: readonly JsonSchema[];
   readonly items?: JsonSchema;
   readonly format?: string;
+  readonly pattern?: string;
   readonly minimum?: number;
 };
+
+const ACTOR_ROLE_PATTERN = '^[a-z][a-z0-9_-]*$';
 
 export interface PlutoToolDescriptor {
   readonly name: PlutoToolName;
@@ -129,7 +132,8 @@ const ACTOR_REF_JSON_SCHEMA: JsonSchema = {
         },
         role: {
           type: 'string',
-          enum: ACTOR_ROLE_VALUES,
+          pattern: ACTOR_ROLE_PATTERN,
+          description: `Built-in defaults: ${ACTOR_ROLE_VALUES.join(' | ')}. Custom authored roles are also accepted when the run policy declares them.`,
         },
       },
       required: ['kind', 'role'],

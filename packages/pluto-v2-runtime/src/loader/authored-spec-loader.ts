@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { extname } from 'node:path';
 
-import { AuthoredSpecSchema, type AuthoredSpec } from '@pluto/v2-core';
+import { AuthoredSpecSchema, actorKey, type ActorRef, type AuthoredSpec } from '@pluto/v2-core';
 import yaml from 'js-yaml';
 
 import { resolvePlaybookSync } from './playbook-resolver.js';
@@ -167,8 +167,30 @@ export function parseAuthoredSpec(content: string, filePath = '<inline>'): Loade
   const runtimeMode = runtimeModeFromParsedSpec(parsedSpec);
   const authored = AuthoredSpecSchema.parse(normalizeParsedSpecForCore(parsedSpec));
   assertManagerDeclaredForCompleteRun(authored);
+  assertUniqueActorKeys(authored);
   assertAgenticLoaderRequirements(authored, filePath, runtimeMode);
   return toLoadedAuthoredSpec(authored, filePath, runtimeMode);
+}
+
+function assertUniqueActorKeys(authored: AuthoredSpec): void {
+  const seenByKey = new Map<string, string>();
+
+  for (const actorName of authored.declaredActors) {
+    const actor = authored.actors[actorName] as ActorRef | undefined;
+    if (actor == null) {
+      continue;
+    }
+
+    const key = actorKey(actor);
+    const firstActorName = seenByKey.get(key);
+    if (firstActorName != null) {
+      throw new Error(
+        `duplicate_actor_key: declaredActors "${firstActorName}" and "${actorName}" both resolve to actorKey "${key}"`,
+      );
+    }
+
+    seenByKey.set(key, actorName);
+  }
 }
 
 function assertOrchestrationModeAllowed(parsed: unknown, filePath: string): void {

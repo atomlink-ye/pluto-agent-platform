@@ -19,6 +19,7 @@ const FIXED_ISO = '2026-05-08T00:00:00.000Z';
 const TOKEN_BY_ACTOR = new Map([
   ['role:lead', 'pluto-test-token-lead'],
   ['role:generator', 'pluto-test-token-generator'],
+  ['role:researcher', 'pluto-test-token-researcher'],
 ]);
 
 function tokenForActor(actorKey = 'role:lead'): string {
@@ -40,6 +41,7 @@ function createKernel() {
         { kind: 'manager' },
         { kind: 'role', role: 'lead' },
         { kind: 'role', role: 'generator' },
+        { kind: 'role', role: 'researcher' },
       ],
       initialTasks: [],
       policy: CANONICAL_AUTHORITY_POLICY,
@@ -155,6 +157,30 @@ describe('pluto local api actor header enforcement', () => {
         taskId: expect.any(String),
         turnDisposition: 'waiting',
         nextWakeup: 'event',
+      });
+    } finally {
+      await api.shutdown();
+    }
+  });
+
+  it('accepts a custom role shorthand in Pluto-Run-Actor and binds it to the matching token', async () => {
+    const api = await startPlutoLocalApi({
+      tokenByActor: TOKEN_BY_ACTOR,
+      registeredActorKeys: new Set(['role:researcher']),
+      handlers: createHandlers(),
+      leaseStore: makeTurnLeaseStore({ kind: 'role', role: 'researcher' }),
+    });
+
+    try {
+      const response = await requestApi({
+        url: api.url,
+        actor: 'researcher',
+        token: tokenForActor('role:researcher'),
+      });
+      expect(response.status).toBe(200);
+      expect(response.body).toMatchObject({
+        accepted: false,
+        reason: 'actor_not_authorized',
       });
     } finally {
       await api.shutdown();

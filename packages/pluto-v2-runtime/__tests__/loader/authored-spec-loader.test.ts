@@ -244,6 +244,33 @@ describe('loadAuthoredSpec', () => {
     expect(authored.playbook).toMatchObject({ ref: 'playbooks/team-lead.md' });
   });
 
+  it('fails fast when two declared actors resolve to the same actorKey', () => {
+    const filePath = writeAgenticSpec([
+      'declaredActors:',
+      '  - lead',
+      '  - manager',
+      '  - researcher_alpha',
+      '  - researcher_beta',
+      'actors:',
+      '  lead:',
+      '    kind: role',
+      '    role: lead',
+      '  manager:',
+      '    kind: manager',
+      '  researcher_alpha:',
+      '    kind: role',
+      '    role: researcher',
+      '  researcher_beta:',
+      '    kind: role',
+      '    role: researcher',
+    ]);
+
+    expect(() => loadAuthoredSpec(filePath)).toThrow(/duplicate_actor_key/i);
+    expect(() => loadAuthoredSpec(filePath)).toThrow(/researcher_alpha/);
+    expect(() => loadAuthoredSpec(filePath)).toThrow(/researcher_beta/);
+    expect(() => loadAuthoredSpec(filePath)).toThrow(/role:researcher/);
+  });
+
   it('rejects the legacy agentic mode literal (T4-S4 strict bar: only deterministic | agentic_tool)', () => {
     const filePath = writeAgenticSpec([
       'declaredActors:',

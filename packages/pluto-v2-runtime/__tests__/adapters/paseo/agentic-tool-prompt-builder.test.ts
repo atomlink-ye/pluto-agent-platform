@@ -10,6 +10,7 @@ import { PLUTO_TOOL_NAMES } from '../../../src/tools/pluto-tool-schemas.js';
 const LEAD: ActorRef = { kind: 'role', role: 'lead' };
 const GENERATOR: ActorRef = { kind: 'role', role: 'generator' };
 const EVALUATOR: ActorRef = { kind: 'role', role: 'evaluator' };
+const RESEARCHER: ActorRef = { kind: 'role', role: 'researcher' };
 const MANAGER: ActorRef = { kind: 'manager' };
 const SYSTEM: ActorRef = { kind: 'system' };
 const EXACT_MATCH_PHRASE = ['must', 'match', 'exactly'].join(' ');
@@ -84,6 +85,9 @@ const PLAYBOOK: LoadedPlaybook = {
     '',
     '## evaluator',
     'Review the draft for defects and gaps.',
+    '',
+    '## researcher',
+    'Investigate the draft and report the evidence back to the lead.',
   ].join('\n'),
 };
 
@@ -280,6 +284,17 @@ describe('buildAgenticToolPrompt', () => {
     expect(evaluatorPrompt).toContain('structured verdict mailbox message');
     expect(leadPrompt).toContain('Evaluator verdict mailbox messages may arrive with kind `final` for `pass`, or kind `task` for `needs-revision` and `fail`.');
     expect(leadPrompt).toContain('Always inspect `body.verdict` to determine the outcome. Do not infer evaluator verdict outcome from mailbox `kind` alone.');
+  });
+
+  it('gives custom non-lead roles a structural close-out path instead of an empty branch', () => {
+    const prompt = buildPrompt(RESEARCHER);
+
+    expect(prompt).toContain('## researcher\nInvestigate the draft and report the evidence back to the lead.');
+    expect(prompt).toContain('This is the default close-out path for custom non-lead roles.');
+    expect(prompt).toContain('worker-complete');
+    expect(prompt).toContain('evaluator-verdict');
+    expect(prompt).toContain('Do not split close-out across separate `change-task-state` and `append-mailbox-message` calls');
+    expect(prompt).not.toContain('## evaluator\nReview the draft for defects and gaps.');
   });
 
   it('requires verbatim generator wording in the lead final-reconciliation section', () => {

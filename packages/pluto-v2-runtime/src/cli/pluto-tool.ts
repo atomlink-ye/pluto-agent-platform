@@ -4,6 +4,7 @@ import process from 'node:process';
 import { pathToFileURL } from 'node:url';
 
 import {
+  ActorRoleSchema,
   ACTOR_ROLE_VALUES,
   ARTIFACT_PUBLISHED_KIND_VALUES,
   MAILBOX_MESSAGE_KIND_VALUES,
@@ -113,6 +114,8 @@ const COMMANDS: ReadonlyArray<CommandName> = [
 const GLOBAL_HELP = [
   'Usage: pluto-tool [--actor <key>] <command> [flags]',
   '',
+  `Built-in role defaults: ${ACTOR_ROLE_VALUES.join(' | ')}. Custom authored roles are also accepted when the run policy declares them.`,
+  '',
   'Commands:',
   '  create-task',
   '  change-task-state',
@@ -128,7 +131,7 @@ const GLOBAL_HELP = [
   '  read-transcript',
   '',
   'Flags:',
-  '  --actor <key>       Explicit actor key (required for mutating commands)',
+  '  --actor <key>       Explicit actor key (manager, system, or role:<role>; custom roles allowed)',
   '  --no-wait           Skip the default post-mutation wait',
   '  --wait-timeout-ms   Auto-wait timeout for mutating commands (default: 120000)',
   '  --format=json|text  Output format (default: json)',
@@ -136,9 +139,9 @@ const GLOBAL_HELP = [
 ].join('\n');
 
 const HELP_BY_COMMAND: Record<CommandName, string> = {
-  'create-task': 'Usage: pluto-tool --actor <key> create-task --owner=<role|manager> --title=<text> [--depends-on=<id>...] [--no-wait] [--wait-timeout-ms=<n>] [--format=json|text]',
+  'create-task': 'Usage: pluto-tool --actor <key> create-task --owner=<role|manager> --title=<text> [--depends-on=<id>...] [--no-wait] [--wait-timeout-ms=<n>] [--format=json|text]\nBuilt-in defaults: lead | planner | generator | evaluator. Custom authored roles are also accepted.',
   'change-task-state': 'Usage: pluto-tool --actor <key> change-task-state --task-id=<id> --to=<state> [--no-wait] [--wait-timeout-ms=<n>] [--format=json|text]',
-  'send-mailbox': 'Usage: pluto-tool --actor <key> send-mailbox --to=<role|manager> --kind=<kind> --body=<text|@path> [--no-wait] [--wait-timeout-ms=<n>] [--format=json|text]',
+  'send-mailbox': 'Usage: pluto-tool --actor <key> send-mailbox --to=<role|manager> --kind=<kind> --body=<text|@path> [--no-wait] [--wait-timeout-ms=<n>] [--format=json|text]\nBuilt-in defaults: lead | planner | generator | evaluator. Custom authored roles are also accepted.',
   'publish-artifact': 'Usage: pluto-tool --actor <key> publish-artifact --kind=<final|intermediate> --media-type=<mime> --byte-size=<n> [--body=<text|@path>] [--no-wait] [--wait-timeout-ms=<n>] [--format=json|text]',
   'complete-run': 'Usage: pluto-tool --actor <key> complete-run --status=<succeeded|failed|cancelled> --summary=<text> [--format=json|text]',
   'worker-complete': 'Usage: pluto-tool --actor <key> worker-complete --task-id=<id> --summary=<text> [--artifact=<id>...] [--no-wait] [--wait-timeout-ms=<n>] [--format=json|text]',
@@ -155,13 +158,13 @@ function isCommandName(value: string): value is CommandName {
 }
 
 function roleActor(role: string): ActorRef | null {
-  if (!(ACTOR_ROLE_VALUES as readonly string[]).includes(role)) {
+  if (!ActorRoleSchema.safeParse(role).success) {
     return null;
   }
 
   return {
     kind: 'role',
-    role: role as (typeof ACTOR_ROLE_VALUES)[number],
+    role,
   };
 }
 
@@ -195,7 +198,9 @@ function parseActorFlag(value: string, flagName: string): ActorRef {
     }
   }
 
-  throw new Error(`${flagName} must be one of: manager, ${ACTOR_ROLE_VALUES.join(', ')}`);
+  throw new Error(
+    `${flagName} must be manager or a valid role string. Built-in defaults: ${ACTOR_ROLE_VALUES.join(', ')}`,
+  );
 }
 
 function parseSessionActorKey(value: string, flagName: string): string {

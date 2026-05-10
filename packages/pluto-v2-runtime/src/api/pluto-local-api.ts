@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 
-import { ACTOR_ROLE_VALUES, ActorRefSchema, type ActorRef } from '@pluto/v2-core';
+import { ActorRefSchema, ActorRoleSchema, type ActorRef } from '@pluto/v2-core';
 
 import { runCompositeTool, type CompositeToolName } from './composite-tools.js';
 import type { WaitRegistry } from './wait-registry.js';
@@ -127,10 +127,10 @@ function actorFromShorthand(value: string): ActorRef | null {
   }
 
   const role = normalized.startsWith('role:') ? normalized.slice('role:'.length) : normalized;
-  if ((ACTOR_ROLE_VALUES as readonly string[]).includes(role)) {
+  if (ActorRoleSchema.safeParse(role).success) {
     return {
       kind: 'role',
-      role: role as (typeof ACTOR_ROLE_VALUES)[number],
+      role,
     };
   }
 

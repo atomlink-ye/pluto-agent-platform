@@ -70,9 +70,9 @@ function buildAgenticSpec(): LoadedAuthoredSpec {
     ...loaded,
     actors: {
       ...loaded.actors,
-      planner: { kind: 'role' as const, role: 'planner' as const },
+      researcher: { kind: 'role' as const, role: 'researcher' },
     },
-    declaredActors: [...loaded.declaredActors, 'planner'],
+    declaredActors: [...loaded.declaredActors, 'researcher'],
     orchestration: {
       ...loaded.orchestration,
     },
@@ -619,17 +619,17 @@ describe('runPaseo', () => {
       const leadHandoff = JSON.parse(await readFile(join(runAgentsDir, 'role:lead', '.pluto', 'handoff.json'), 'utf8')) as { bearerToken: string; actorKey: string };
       const generatorHandoff = JSON.parse(await readFile(join(runAgentsDir, 'role:generator', '.pluto', 'handoff.json'), 'utf8')) as { bearerToken: string; actorKey: string };
       const evaluatorHandoff = JSON.parse(await readFile(join(runAgentsDir, 'role:evaluator', '.pluto', 'handoff.json'), 'utf8')) as { bearerToken: string; actorKey: string };
-      const plannerHandoff = JSON.parse(await readFile(join(runAgentsDir, 'role:planner', '.pluto', 'handoff.json'), 'utf8')) as { bearerToken: string; actorKey: string };
+      const researcherHandoff = JSON.parse(await readFile(join(runAgentsDir, 'role:researcher', '.pluto', 'handoff.json'), 'utf8')) as { bearerToken: string; actorKey: string };
 
       expect(leadHandoff.actorKey).toBe('role:lead');
       expect(generatorHandoff.actorKey).toBe('role:generator');
       expect(evaluatorHandoff.actorKey).toBe('role:evaluator');
-      expect(plannerHandoff.actorKey).toBe('role:planner');
+      expect(researcherHandoff.actorKey).toBe('role:researcher');
       expect(new Set([
         leadHandoff.bearerToken,
         generatorHandoff.bearerToken,
         evaluatorHandoff.bearerToken,
-        plannerHandoff.bearerToken,
+        researcherHandoff.bearerToken,
       ]).size).toBe(4);
       expect(spawnSpecs[0]?.env?.PLUTO_RUN_TOKEN).toBe(leadHandoff.bearerToken);
       expect(spawnSpecs[0]?.env?.PLUTO_RUN_ACTOR).toBe('role:lead');

@@ -5,7 +5,7 @@ import process from 'node:process';
 import { pathToFileURL } from 'node:url';
 
 import {
-  ACTOR_ROLE_VALUES,
+  ActorRoleSchema,
   CANONICAL_AUTHORITY_POLICY,
   ArtifactPublishedPayloadSchema,
   MailboxProjectionMessageSchema,
@@ -196,9 +196,7 @@ function toClosedActorRef(
     return actor;
   }
 
-  return (ACTOR_ROLE_VALUES as readonly string[]).includes(actor.role)
-    ? actor as ActorRef
-    : null;
+  return ActorRoleSchema.safeParse(actor.role).success ? actor as ActorRef : null;
 }
 
 function cloneAuthorityPolicy(): TeamContext['policy'] {

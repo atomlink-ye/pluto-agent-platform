@@ -250,7 +250,9 @@ function toolSection(toolNames: ReadonlyArray<PlutoToolName>): string {
 function toolCallSection(actor: ActorRef, runBinPath: string, wrapperPath: string, actorRef: string): string {
   const closeOutExample = isLeadActor(actor)
     ? `  ${runBinPath} --actor ${actorRef} final-reconciliation --completed-tasks=<id>[,<id>...] --cited-messages=<id>[,<id>...] --summary="<one-sentence>"`
-    : `  ${runBinPath} --actor ${actorRef} complete-run --status=succeeded --summary="<one-sentence>"`;
+    : actor.kind === 'role' && actor.role === 'evaluator'
+      ? `  ${runBinPath} --actor ${actorRef} evaluator-verdict --task-id=<id> --verdict=pass|needs-revision|fail --summary="<one-sentence>"`
+      : `  ${runBinPath} --actor ${actorRef} worker-complete --task-id=<id> --summary="<one-sentence>"`;
   return [
     '## How to call Pluto tools',
     '',
@@ -311,6 +313,17 @@ function compositeToolGuidance(actor: ActorRef, runBinPath: string, actorRef: st
     ].join('\n');
   }
 
+  if (actor.kind === 'role') {
+    return [
+      '## Canonical composite verb',
+      '',
+      `When you finish your delegated task, call \`${runBinPath} --actor ${actorRef} worker-complete --task-id=<id> --summary="<one-sentence>" [--artifact=<id>...]\`.`,
+      'This is the default close-out path for custom non-lead roles. It marks the task completed and sends a structured completion mailbox message to the lead in one coherent step.',
+      `If your authored policy explicitly authorizes evaluator-style review close-out for your role, call \`${runBinPath} --actor ${actorRef} evaluator-verdict --task-id=<id> --verdict=pass|needs-revision|fail --summary="<one-sentence>"\` instead.`,
+      'Do not split close-out across separate `change-task-state` and `append-mailbox-message` calls unless the run explicitly requires a non-standard flow.',
+    ].join('\n');
+  }
+
   return '';
 }
 
@@ -353,7 +366,7 @@ function turnRuleSection(actor: ActorRef, wrapperPath: string): string {
     '- End your turn with EXACTLY ONE mutating Pluto tool call.',
     '- Mutating commands automatically wait for the next relevant event unless you pass --no-wait.',
     `- Do not poll with ${wrapperPath} read-state between your own mutations; the runtime will resume you when an event for you arrives.`,
-    '- Usually that means pluto_change_task_state to a terminal state, or pluto_append_mailbox_message with kind completion to the lead.',
+    '- Usually that means the composite close-out path for your role: `worker-complete` for most delegated tasks, or `evaluator-verdict` when you are sending a review verdict.',
   ].join('\n');
 }
 
