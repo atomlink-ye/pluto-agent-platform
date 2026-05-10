@@ -6,6 +6,8 @@ Added a new `poet-critic-open-role` `agentic_tool` fixture plus loader coverage 
 
 Updated `README.md`, `docs/harness.md`, and `docs/mvp-alpha.md` so the public docs describe the open-role MVP honestly: custom non-lead roles are open, `lead` and `manager` stay required, one actor still maps to one `role:<role>` identity, and the T15+ deferrals remain explicit.
 
+Follow-up fixup: restored `tests/fixtures/live-smoke/agentic-tool-live-runid.txt` to the canonical `hello-team-agentic-tool-mock` pointer so the existing invariant oracle keeps validating the canonical live-smoke fixture.
+
 ## Files changed
 
 - `packages/pluto-v2-runtime/test-fixtures/scenarios/poet-critic-open-role/scenario.yaml`
@@ -14,7 +16,6 @@ Updated `README.md`, `docs/harness.md`, and `docs/mvp-alpha.md` so the public do
 - `README.md`
 - `docs/harness.md`
 - `docs/mvp-alpha.md`
-- `tests/fixtures/live-smoke/agentic-tool-live-runid.txt`
 - `tests/fixtures/live-smoke/run-poet-critic-open-role/`
 
 ## Decisions made
@@ -29,6 +30,7 @@ Updated `README.md`, `docs/harness.md`, and `docs/mvp-alpha.md` so the public do
 - Custom-role authorization stays within the current shipped core matcher surface. The fixture uses explicit `role` matchers for `poet` and `critic`, while the runtime still routes worker/review close-out structurally through `worker-complete` and `evaluator-verdict`.
 - Tests added: one loader test that loads the new fixture, compiles the normalized agentic shape, asserts `poet`/`critic` policy entries, and verifies positive `change_task_state` plus negative `complete_run` authorization.
 - Smoke target chosen: the new `poet-critic-open-role` fixture. Result: PASS, captured at `tests/fixtures/live-smoke/run-poet-critic-open-role/`.
+- Canonical oracle decision: the new open-role capture remains additive under `tests/fixtures/live-smoke/run-poet-critic-open-role/`, but `tests/fixtures/live-smoke/agentic-tool-live-runid.txt` now stays pointed at the canonical `hello-team-agentic-tool-mock` fixture.
 - Plan move decision: deferred. Per the slice prompt, `docs/plans/active/v2-open-role-mvp.md` was not moved in this slice.
 
 ## Approaches considered and rejected
@@ -47,12 +49,13 @@ Updated `README.md`, `docs/harness.md`, and `docs/mvp-alpha.md` so the public do
 | typecheck core | `artifacts/gate-typecheck-core.txt` | 2026-05-10T15:30:06+00:00 | 3s | 0 |
 | typecheck runtime | `artifacts/gate-typecheck-runtime.txt` | 2026-05-10T15:30:09+00:00 | 19s | 0 |
 | test core | `artifacts/gate-core-tests.txt` | 2026-05-10T15:30:33+00:00 | 5s | 0 |
-| test runtime | `artifacts/gate-runtime-tests.txt` | 2026-05-10T15:30:42+00:00 | 16s | 0 |
+| test runtime | `artifacts/gate-runtime-tests.txt` | 2026-05-10T15:48:28+00:00 | 14s | 0 |
 | smoke live | `artifacts/gate-smoke-live.txt` | 2026-05-10T15:31:02+00:00 | 366s | 0 |
 
 Additional targeted validation before the full gates:
 
 - `timeout 1200 pnpm --filter @pluto/v2-runtime exec vitest run __tests__/loader/authored-spec-loader.test.ts`
+- `timeout 600 pnpm --filter @pluto/v2-runtime exec vitest run __tests__/fixtures/agentic-tool-live-invariants.test.ts`
 
 ## Stop conditions hit
 
@@ -60,7 +63,7 @@ Additional targeted validation before the full gates:
 
 ## Verdict
 
-- Implementation commit: 75ef9135e097dd962bafdc4e5dcb7d7cd768ac4c
+- Implementation commit: 505160a7c13c57bc5e57c0c78b55331ff2199570
 - Report commit: pending
 - Branch: pluto/v2/open-role-mvp-s5-fixture-docs
 - Acceptance: PASS
