@@ -84,23 +84,38 @@ The iteration is bounded as an MVP: it ships open custom roles with structural a
   - Targeted gate suite green; full suite + smoke:live (R8 final-only).
 - **Cost**: M.
 
-### T14-S4 — Adapter contract suite + open-role fixture + doc sync
+### T14-S4 — Adapter contract suite (Fake + Paseo)
 
-- **Goal**: Add a shared `describeRuntimeAdapterContract` covering Fake and Paseo against the same invariants. Add one open-role scenario fixture (custom roles, e.g. `poet`/`critic`) that exercises the chain end-to-end. Sync `README.md` and `docs/harness.md` to the new shape and explicit MVP limits.
+- **Goal**: Add a shared `describeRuntimeAdapterContract` helper covering Fake and Paseo adapters against the same lifecycle/transport invariants: init, request/done sequencing, state progression, max-turn / error behavior, termination. This slice is independent of the role-schema chain (S1/S2/S3) — it touches the adapter interface and adapter-test surface only, not `pluto-v2-core` and not the role schema. **It runs in parallel with S1, S2, and S3.**
 - **Files in scope** (expected):
-  - `packages/pluto-v2-runtime/src/runtime/runtime-adapter.ts`
-  - `packages/pluto-v2-runtime/__tests__/adapters/` (new shared contract helper)
-  - `packages/pluto-v2-runtime/__tests__/adapters/fake/fake-adapter.test.ts`
-  - `packages/pluto-v2-runtime/__tests__/adapters/paseo/paseo-adapter.test.ts`
+  - `packages/pluto-v2-runtime/src/runtime/runtime-adapter.ts` (read; extend only if a contract gap is real)
+  - `packages/pluto-v2-runtime/__tests__/adapters/contract/` (new shared `describeRuntimeAdapterContract` helper)
+  - `packages/pluto-v2-runtime/__tests__/adapters/fake/fake-adapter.contract.test.ts`
+  - `packages/pluto-v2-runtime/__tests__/adapters/paseo/paseo-adapter.contract.test.ts`
+- **Risk**: Low — additive. Helper must not overfit to one adapter; both must satisfy the same invariants.
+- **Acceptance bar**:
+  - A shared `describeRuntimeAdapterContract(adapterName, factory)` helper exercises Fake and Paseo against the same suite.
+  - Both adapters pass the contract for: init, request/done sequencing, state progression, max-turn / error classification, termination.
+  - No imports from `pluto-v2-core/src/*` (use public surface only); no construction of full kernel `RunState`; no dependency on `ActorRole` shape.
+  - Targeted gate suite green; full suite at slice end. **No `smoke:live` in this slice.**
+- **Cost**: M.
+
+### T14-S5 — Open-role scenario fixture + README/docs sync
+
+- **Goal**: Prove the full chain end-to-end with one custom-role scenario fixture (custom roles, e.g. `poet`/`critic`) and sync `README.md`, `docs/harness.md`, and `docs/mvp-alpha.md` to the shipped MVP shape with explicit T14 limits and the deferred T15+ list.
+- **Depends on**: S1, S2, S3 merged. Optionally on S4 (the open-role fixture should also pass any applicable adapter-contract assertions).
+- **Files in scope** (expected):
   - `packages/pluto-v2-runtime/test-fixtures/scenarios/` (new open-role fixture)
+  - `tests/fixtures/live-smoke/` (live-smoke fixture if needed for POST-T14)
   - `README.md`
   - `docs/harness.md`
   - `docs/mvp-alpha.md`
-- **Risk**: Low — additive. The contract helper must not overfit to one adapter.
+- **Risk**: Medium — this slice runs the iteration's final `smoke:live` (R8 trigger).
 - **Acceptance bar**:
-  - Fake and Paseo both pass the shared contract on `init`, request/done sequencing, state progression, and termination.
-  - Open-role fixture compiles, runs through the supported path, and produces a valid evidence packet with audit pass.
-  - Docs describe the shipped MVP honestly: open custom non-lead roles, fixed `lead`/`manager`, one-actor-per-role limit until T15+.
+  - Custom-role fixture compiles, runs through the supported path, produces a valid evidence packet, audit returns `pass`.
+  - Symphony fixture remains 10/10 unchanged.
+  - Docs describe the shipped MVP honestly: open custom non-lead roles, fixed `lead`/`manager`, one-actor-per-role limit, deferred T15+ items.
+  - One final `pnpm smoke:live` per R8.
 - **Cost**: M.
 
 ## 4. Out of scope (deferred to T15+)
@@ -121,7 +136,8 @@ The iteration is bounded as an MVP: it ships open custom roles with structural a
 | 4 | Same-role actors collapse on `role:<role>` and corrupt auth/transcript state | High | S3 adds explicit duplicate-`actorKey` fail-fast guard; full `actor:<id>` migration deferred. |
 | 5 | Prompt builder leaves custom roles with empty close-out branch | Medium | S3 routes custom non-lead roles to structural guidance via the existing primitive/composite path. |
 | 6 | Adapter contract helper overfits to one adapter | Medium | Keep contract narrow: init, request/done, state progression, termination. |
-| 7 | Iteration grows beyond 4 slices | Medium | If a new slice is needed, finish T14-S1..S4 first and dispatch as T14-S5; do not bundle. |
+| 7 | Iteration grows beyond 5 slices | Medium | If a new slice is needed, finish T14-S1..S5 first and dispatch as T14-S6; do not bundle. |
+| 8 | Parallel S1 ‖ S4 produces merge conflict on main | Low | S4 touches no file overlapping S1; rebase S4 onto the new main after S1 lands. Verify with `git rebase main` before final push. |
 
 ## 6. POST-T14 acceptance bar
 
@@ -147,6 +163,22 @@ Additive on top of POST-T12's 10/10 (which T14 must keep at 10/10):
 - Merge fast-forward into `main` only after review is clean.
 - POST-T14 validation runs the Symphony fixture **and** the new open-role fixture before declaring close.
 
-## 8. Stop conditions
+## 8. Parallelism
 
-Close T14 only when POST-T14 hits all 9 criteria. If iteration finds a real gap that cannot be absorbed in T14 without exceeding 5 slices, dispatch as T15 — do not bundle into T14. Reference `feedback_iterate_until_clean_loop.md`.
+S4 (adapter contract suite) runs in parallel with the role-schema chain (S1 → S2 → S3). The chain stays serial because:
+
+- S1 (single-source policy) lands the policy reroute that S2 relies on.
+- S2 (open role schema) lands the branded-string `ActorRole` that S3 wires.
+- S3 (runtime wiring + collision guard) lands the end-to-end chain that S5 proves.
+
+Concretely:
+- T = 0: dispatch S1 + S4 concurrently on the same warm sandbox, different worktrees.
+- After S1 merges: dispatch S2.
+- After S2 merges: dispatch S3.
+- After S3 + S4 both merged: dispatch S5.
+
+S4's branch rebases on the new main after each upstream slice merges; the conflict surface is empirically empty (S4 touches `__tests__/adapters/contract/` and the adapter interface; S1/S2/S3 don't touch those paths).
+
+## 9. Stop conditions
+
+Close T14 only when POST-T14 hits all criteria. If iteration finds a real gap that cannot be absorbed in T14 without exceeding 5 slices, dispatch as T15 — do not bundle into T14. Reference `feedback_iterate_until_clean_loop.md`.
