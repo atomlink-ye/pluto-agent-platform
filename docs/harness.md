@@ -34,6 +34,8 @@ pnpm pluto:runs audit <runId> [--run-dir=<path>] [--format=json]
 
 T14 opens `ActorRole` to validated authored strings (`^[a-z][a-z0-9_-]*$`) while keeping `lead` and `manager` as required system roles for `agentic_tool`. Authored policy is the single runtime authorization source-of-truth, so custom roles resolve end-to-end through load, prompt slicing, token binding, and route enforcement. Because role actors still key as `role:<role>`, duplicate declarations that collapse to the same `actorKey` fail fast at load.
 
+Explicitly deferred to T15+: `actor:<id>` identity for multi-same-role workers in one run; lead-profile generalization beyond the literal `lead`; a user-authored capability or policy DSL; actor-id-based playbook section slicing; and any new composite verbs beyond `worker-complete`, `evaluator-verdict`, and `final-reconciliation`.
+
 1. `runPaseo()` loads the authored spec and starts one Pluto control server for the lifetime of the run.
 2. The runtime materializes a single run-level binary at `<runDir>/bin/pluto-tool` and one per-actor wrapper that forwards to it; the wrapper's directory is on the actor's `PATH`.
 3. The runtime issues a per-actor bearer token; the wrapper carries it via stored handoff metadata. Server-side validation requires every mutating call to present `Pluto-Run-Actor: <actor>` AND a bearer whose bound actor matches; cross-actor reuse fails closed with `403 actor_mismatch`.

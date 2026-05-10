@@ -71,6 +71,8 @@ Composite verbs collapse common multi-step protocol patterns:
 
 Open custom roles are supported in v2 when the role string matches the authored format and the spec's policy authorizes that role for the needed intents. `lead` and `manager` remain required for `agentic_tool` runs, and duplicate role identities that collapse to the same `actorKey` fail fast at load.
 
+Deferred to T15+: `actor:<id>` identity (multiple workers with the same role in one run), lead-profile generalization beyond the literal `lead` actor, a user-authored capability/policy DSL, actor-id-based playbook slicing, and any new composite verbs beyond `worker-complete`, `evaluator-verdict`, and `final-reconciliation`.
+
 ## Validation Surface
 
 Root validation now centers on:
