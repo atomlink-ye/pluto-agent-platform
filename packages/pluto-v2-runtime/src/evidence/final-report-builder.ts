@@ -1,4 +1,5 @@
-import type { ActorRef, ReplayViews } from '@pluto/v2-core';
+import type { ActorRef } from '@pluto/v2-core/actor-ref';
+import type { ReplayViews } from '@pluto/v2-core/projections/replay';
 
 import type { RuntimeDiagnostics, RuntimeWaitTrace } from './evidence-packet.js';
 import type { BuiltUsageSummary } from './usage-summary-builder.js';

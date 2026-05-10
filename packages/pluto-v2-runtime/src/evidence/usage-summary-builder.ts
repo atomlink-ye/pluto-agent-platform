@@ -1,4 +1,5 @@
-import type { ActorRef, AuthoredSpec } from '@pluto/v2-core';
+import type { ActorRef } from '@pluto/v2-core/actor-ref';
+import type { AuthoredSpec } from '@pluto/v2-core/core/team-context';
 
 import type { EvidencePacket } from './evidence-packet.js';
 

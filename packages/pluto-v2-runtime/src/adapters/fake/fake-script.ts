@@ -1,14 +1,16 @@
 import {
   ActorRefSchema,
+} from '@pluto/v2-core/actor-ref';
+import { FakeScriptStepSchema, type FakeScriptStep } from '@pluto/v2-core/core/team-context';
+import type { ClockProvider, IdProvider } from '@pluto/v2-core/core/providers';
+import {
   CompleteRunRequestPayloadSchema,
-  FakeScriptStepSchema,
   ProtocolRequestSchema,
-  SCHEMA_VERSION,
-  type ClockProvider,
-  type FakeScriptStep,
-  type IdProvider,
   type ProtocolRequest,
-} from '@pluto/v2-core';
+} from '@pluto/v2-core/protocol-request';
+import {
+  SCHEMA_VERSION,
+} from '@pluto/v2-core/versioning';
 
 import type { KernelView } from '../../runtime/kernel-view.js';
 

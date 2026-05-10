@@ -1,4 +1,5 @@
-import type { AuthoredSpec, ClockProvider, IdProvider } from '@pluto/v2-core';
+import type { ClockProvider, IdProvider } from '@pluto/v2-core/core/providers';
+import type { AuthoredSpec } from '@pluto/v2-core/core/team-context';
 
 import { runScenario, type RunScenarioOptions } from '../../runtime/runner.js';
 import { makeFakeAdapter } from './fake-adapter.js';

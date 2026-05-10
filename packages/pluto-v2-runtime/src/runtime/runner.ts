@@ -1,19 +1,16 @@
 import {
-  SCHEMA_VERSION,
-  RunKernel,
-  compile as compileTeamContext,
-  initialState,
-  replayAll,
   type AuthoredSpec,
-  type ClockProvider,
-  type EvidenceProjectionView,
-  type IdProvider,
-  type MailboxProjectionView,
-  type ProtocolRequest,
-  type RunEvent,
-  type TaskProjectionView,
   type TeamContext,
-} from '@pluto/v2-core';
+} from '@pluto/v2-core/core/team-context';
+import type { ClockProvider, IdProvider } from '@pluto/v2-core/core/providers';
+import { RunKernel } from '@pluto/v2-core/core/run-kernel';
+import { initialState } from '@pluto/v2-core/core/run-state';
+import { compile as compileTeamContext } from '@pluto/v2-core/core/spec-compiler';
+import type { EvidenceProjectionView, MailboxProjectionView, TaskProjectionView } from '@pluto/v2-core/projections';
+import { replayAll } from '@pluto/v2-core/projections/replay';
+import type { ProtocolRequest } from '@pluto/v2-core/protocol-request';
+import type { RunEvent } from '@pluto/v2-core/run-event';
+import { SCHEMA_VERSION } from '@pluto/v2-core/versioning';
 
 import { assembleEvidencePacket, type EvidencePacket } from '../evidence/evidence-packet.js';
 

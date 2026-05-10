@@ -1,15 +1,20 @@
 import type {
   ActorRef,
+} from '@pluto/v2-core/actor-ref';
+import type { RunKernel } from '@pluto/v2-core/core/run-kernel';
+import type {
   AppendMailboxMessageRequest,
   CompleteRunRequest,
   CreateTaskRequest,
   ProtocolRequest,
   PublishArtifactRequest,
+} from '@pluto/v2-core/protocol-request';
+import type {
   RunEvent,
-  RunKernel,
+} from '@pluto/v2-core/run-event';
+import type {
   SupportedSchemaVersion,
-} from '@pluto/v2-core';
-import { z } from 'zod';
+} from '@pluto/v2-core/versioning';
 
 import {
   PlutoAppendMailboxMessageArgsSchema,
@@ -20,6 +25,7 @@ import {
   PlutoReadArtifactArgsSchema,
   PlutoReadStateArgsSchema,
   PlutoReadTranscriptArgsSchema,
+  type PlutoCompleteRunArgs,
   type PlutoToolName,
 } from './pluto-tool-schemas.js';
 
@@ -58,8 +64,11 @@ export type PlutoToolResult =
     };
 
 type PlutoToolHandler = (session: PlutoToolSession, rawArgs: unknown) => Promise<PlutoToolResult>;
+type SchemaIssue = { path: Array<string | number>; message: string };
+type ParseResult<T> = { success: true; data: T } | { success: false; error: { issues: SchemaIssue[] } };
+type ToolArgsSchema<T> = { safeParse(rawArgs: unknown): ParseResult<T> };
 
-function summarizeSchemaError(error: z.ZodError): string {
+function summarizeSchemaError(error: { issues: SchemaIssue[] }): string {
   return error.issues
     .map((issue) => `${issue.path.length === 0 ? '<root>' : issue.path.join('.')}: ${issue.message}`)
     .join('; ');
@@ -89,8 +98,8 @@ function errorResult(code: string, message: string, details?: unknown): PlutoToo
   };
 }
 
-function parseArgs<TSchema extends z.ZodTypeAny>(schema: TSchema, rawArgs: unknown):
-  | { ok: true; data: z.infer<TSchema> }
+function parseArgs<TArgs>(schema: ToolArgsSchema<TArgs>, rawArgs: unknown):
+  | { ok: true; data: TArgs }
   | { ok: false; result: PlutoToolResult } {
   const parsed = schema.safeParse(rawArgs);
   if (!parsed.success) {
@@ -122,7 +131,7 @@ function buildRequestEnvelope(
 
 function buildManagerOwnedCompleteRunRequest(
   deps: PlutoToolHandlerDeps,
-  payload: z.infer<typeof PlutoCompleteRunArgsSchema>,
+  payload: PlutoCompleteRunArgs,
 ): CompleteRunRequest {
   return {
     ...buildRequestEnvelope(deps, { kind: 'manager' }),

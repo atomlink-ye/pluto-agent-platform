@@ -2,16 +2,20 @@ import { z } from 'zod';
 
 import {
   ActorRefSchema,
-  ArtifactPublishedPayloadSchema,
+  type ActorRef,
+} from '@pluto/v2-core/actor-ref';
+import {
   MailboxProjectionMessageSchema,
+  TaskProjectionViewStateSchema,
+} from '@pluto/v2-core/projections';
+import type { ReplayViews } from '@pluto/v2-core/projections/replay';
+import {
+  ArtifactPublishedPayloadSchema,
   RunCompletedStatusSchema,
   RunEventKindSchema,
-  SCHEMA_VERSION,
-  TaskProjectionViewStateSchema,
-  type ActorRef,
-  type ReplayViews,
   type RunEvent,
-} from '@pluto/v2-core';
+} from '@pluto/v2-core/run-event';
+import { SCHEMA_VERSION } from '@pluto/v2-core/versioning';
 
 const RuntimeBridgeUnavailableSchema = z.object({
   actor: z.string(),

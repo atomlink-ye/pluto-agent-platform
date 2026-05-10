@@ -7,8 +7,15 @@ export default defineConfig({
     testTimeout: 15_000,
   },
   resolve: {
-    alias: {
-      '@pluto/v2-core': new URL('../pluto-v2-core/src/index.ts', import.meta.url).pathname,
-    },
+    alias: [
+      {
+        find: /^@pluto\/v2-core\/(.+)$/,
+        replacement: `${new URL('../pluto-v2-core/src/', import.meta.url).pathname}$1.ts`,
+      },
+      {
+        find: '@pluto/v2-core',
+        replacement: new URL('../pluto-v2-core/src/index.ts', import.meta.url).pathname,
+      },
+    ],
   },
 });

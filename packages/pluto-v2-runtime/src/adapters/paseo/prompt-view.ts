@@ -1,4 +1,6 @@
-import { replayAll, type ActorRef, type RunEvent } from '@pluto/v2-core';
+import type { ActorRef } from '@pluto/v2-core/actor-ref';
+import { replayAll } from '@pluto/v2-core/projections/replay';
+import type { RunEvent } from '@pluto/v2-core/run-event';
 
 import { assembleEvidencePacket } from '../../evidence/evidence-packet.js';
 import type { LoadedAuthoredSpec } from '../../loader/authored-spec-loader.js';

@@ -1,4 +1,4 @@
-import type { ProtocolRequest } from '@pluto/v2-core';
+import type { ProtocolRequest } from '@pluto/v2-core/protocol-request';
 
 type MutatingIntent = Extract<
   ProtocolRequest['intent'],

@@ -1,7 +1,8 @@
 import { readFileSync } from 'node:fs';
 import { extname } from 'node:path';
 
-import { AuthoredSpecSchema, actorKey, type ActorRef, type AuthoredSpec } from '@pluto/v2-core';
+import type { ActorRef } from '@pluto/v2-core/actor-ref';
+import { AuthoredSpecSchema, actorKey, type AuthoredSpec } from '@pluto/v2-core/core/team-context';
 import yaml from 'js-yaml';
 
 import { resolvePlaybookSync } from './playbook-resolver.js';

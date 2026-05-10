@@ -1,4 +1,6 @@
-import type { ActorRef, RunEvent, RunState, TaskState } from '@pluto/v2-core';
+import type { ActorRef } from '@pluto/v2-core/actor-ref';
+import type { RunState } from '@pluto/v2-core/core/run-state';
+import type { RunEvent, TaskState } from '@pluto/v2-core/run-event';
 
 import type { AgenticMutation } from './agentic-mutation.js';
 import { sameActor } from './agentic-scheduler.js';

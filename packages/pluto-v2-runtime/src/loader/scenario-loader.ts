@@ -1,4 +1,4 @@
-import type { AuthoredSpec } from '@pluto/v2-core';
+import type { AuthoredSpec } from '@pluto/v2-core/core/team-context';
 
 import { loadAuthoredSpec } from './authored-spec-loader.js';
 

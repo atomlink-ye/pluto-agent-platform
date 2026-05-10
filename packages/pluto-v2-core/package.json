@@ -4,7 +4,68 @@
   "exports": {
     ".": {
       "types": "./dist/src/index.d.ts",
+      "import": "./dist/src/index.js",
       "default": "./dist/src/index.js"
+    },
+    "./actor-ref": {
+      "types": "./dist/src/actor-ref.d.ts",
+      "import": "./dist/src/actor-ref.js",
+      "default": "./dist/src/actor-ref.js"
+    },
+    "./run-event": {
+      "types": "./dist/src/run-event.d.ts",
+      "import": "./dist/src/run-event.js",
+      "default": "./dist/src/run-event.js"
+    },
+    "./protocol-request": {
+      "types": "./dist/src/protocol-request.d.ts",
+      "import": "./dist/src/protocol-request.js",
+      "default": "./dist/src/protocol-request.js"
+    },
+    "./versioning": {
+      "types": "./dist/src/versioning.d.ts",
+      "import": "./dist/src/versioning.js",
+      "default": "./dist/src/versioning.js"
+    },
+    "./core/team-context": {
+      "types": "./dist/src/core/team-context.d.ts",
+      "import": "./dist/src/core/team-context.js",
+      "default": "./dist/src/core/team-context.js"
+    },
+    "./core/providers": {
+      "types": "./dist/src/core/providers.d.ts",
+      "import": "./dist/src/core/providers.js",
+      "default": "./dist/src/core/providers.js"
+    },
+    "./core/run-kernel": {
+      "types": "./dist/src/core/run-kernel.d.ts",
+      "import": "./dist/src/core/run-kernel.js",
+      "default": "./dist/src/core/run-kernel.js"
+    },
+    "./core/run-state": {
+      "types": "./dist/src/core/run-state.d.ts",
+      "import": "./dist/src/core/run-state.js",
+      "default": "./dist/src/core/run-state.js"
+    },
+    "./core/run-state-reducer": {
+      "types": "./dist/src/core/run-state-reducer.d.ts",
+      "import": "./dist/src/core/run-state-reducer.js",
+      "default": "./dist/src/core/run-state-reducer.js"
+    },
+    "./core/spec-compiler": {
+      "types": "./dist/src/core/spec-compiler.d.ts",
+      "import": "./dist/src/core/spec-compiler.js",
+      "default": "./dist/src/core/spec-compiler.js"
+    },
+    "./projections": {
+      "types": "./dist/src/projections.d.ts",
+      "import": "./dist/src/projections.js",
+      "default": "./dist/src/projections.js"
+    },
+    "./projections/replay": {
+      "types": "./dist/src/projections/replay.d.ts",
+      "import": "./dist/src/projections/replay.js",
+      "default": "./dist/src/projections/replay.js"
     }
   },
   "scripts": {

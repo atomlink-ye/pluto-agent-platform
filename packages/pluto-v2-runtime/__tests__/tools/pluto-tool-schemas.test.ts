@@ -33,11 +33,10 @@ describe('pluto tool schemas', () => {
     expect(TOOL_SCHEMA_SOURCE).not.toMatch(/\b\w+RequestPayloadSchema\.(?:pick|omit|extend)\(/);
   });
 
-  it('loads zod through createRequire.resolve without parent-directory walking', () => {
+  it('loads zod through createRequire without parent-directory walking or static imports', () => {
     expect(TOOL_SCHEMA_SOURCE).toMatch(/createRequire\(import\.meta\.url\)/);
-    expect(TOOL_SCHEMA_SOURCE).toMatch(/\.resolve\(['"]zod['"]\)/);
-    expect(TOOL_SCHEMA_SOURCE).toMatch(/join\(zodPackageDir,\s*['"]v3['"],\s*['"]index\.cjs['"]\)/);
-    expect(TOOL_SCHEMA_SOURCE).not.toMatch(/existsSync|for \(let depth = 0;/);
+    expect(TOOL_SCHEMA_SOURCE).toMatch(/require\(['"]zod['"]\)/);
+    expect(TOOL_SCHEMA_SOURCE).not.toMatch(/existsSync|for \(let depth = 0;|\.resolve\(['"]zod['"]\)/);
   });
 
   // Keep behavior coverage behind the no-core check so a future regression fails with the guard

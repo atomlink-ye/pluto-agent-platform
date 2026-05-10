@@ -1,4 +1,6 @@
-import type { ActorRef, AuthoredSpec, RunEvent } from '@pluto/v2-core';
+import type { ActorRef } from '@pluto/v2-core/actor-ref';
+import type { AuthoredSpec } from '@pluto/v2-core/core/team-context';
+import type { RunEvent } from '@pluto/v2-core/run-event';
 
 import type { AgenticMutation } from './agentic-mutation.js';
 

@@ -1,4 +1,5 @@
-import type { ActorRef, RunEvent } from '@pluto/v2-core';
+import type { ActorRef } from '@pluto/v2-core/actor-ref';
+import type { RunEvent } from '@pluto/v2-core/run-event';
 
 import type {
   ArtifactView,

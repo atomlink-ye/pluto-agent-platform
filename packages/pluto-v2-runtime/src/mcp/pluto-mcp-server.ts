@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 
-import { ActorRefSchema, type ActorRef } from '@pluto/v2-core';
+import { ActorRefSchema, type ActorRef } from '@pluto/v2-core/actor-ref';
 
 import type { WaitRegistry } from '../api/wait-registry.js';
 import type { PlutoToolResult, PlutoToolSession } from '../tools/pluto-tool-handlers.js';

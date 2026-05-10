@@ -1,4 +1,6 @@
-import type { RunCompletedStatus, ProtocolRequest, TeamContext } from '@pluto/v2-core';
+import type { TeamContext } from '@pluto/v2-core/core/team-context';
+import type { ProtocolRequest } from '@pluto/v2-core/protocol-request';
+import type { RunCompletedStatus } from '@pluto/v2-core/run-event';
 
 import type { KernelView } from './kernel-view.js';
 

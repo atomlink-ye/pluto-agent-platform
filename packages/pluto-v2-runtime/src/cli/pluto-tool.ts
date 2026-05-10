@@ -6,12 +6,14 @@ import { pathToFileURL } from 'node:url';
 import {
   ActorRoleSchema,
   ACTOR_ROLE_VALUES,
+  type ActorRef,
+} from '@pluto/v2-core/actor-ref';
+import {
   ARTIFACT_PUBLISHED_KIND_VALUES,
   MAILBOX_MESSAGE_KIND_VALUES,
   RUN_COMPLETED_STATUS_VALUES,
   TASK_STATE_VALUES,
-  type ActorRef,
-} from '@pluto/v2-core';
+} from '@pluto/v2-core/run-event';
 
 type OutputFormat = 'json' | 'text';
 

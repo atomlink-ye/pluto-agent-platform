@@ -6,22 +6,23 @@ import { pathToFileURL } from 'node:url';
 
 import {
   ActorRoleSchema,
-  CANONICAL_AUTHORITY_POLICY,
-  ArtifactPublishedPayloadSchema,
-  MailboxProjectionMessageSchema,
-  RunEventSchema,
-  TaskProjectionViewStateSchema,
-  actorKey,
-  initialState,
-  reduce,
-  replayAll,
   type ActorRef,
+} from '@pluto/v2-core/actor-ref';
+import { initialState, type RunState } from '@pluto/v2-core/core/run-state';
+import { reduce } from '@pluto/v2-core/core/run-state-reducer';
+import { CANONICAL_AUTHORITY_POLICY, actorKey, type TeamContext } from '@pluto/v2-core/core/team-context';
+import {
+  MailboxProjectionMessageSchema,
+  TaskProjectionViewStateSchema,
   type MailboxProjectionMessage,
-  type RunEvent,
-  type RunState,
   type TaskProjectionTask,
-  type TeamContext,
-} from '@pluto/v2-core';
+} from '@pluto/v2-core/projections';
+import { replayAll } from '@pluto/v2-core/projections/replay';
+import {
+  ArtifactPublishedPayloadSchema,
+  RunEventSchema,
+  type RunEvent,
+} from '@pluto/v2-core/run-event';
 import { z } from 'zod';
 
 import { EvidencePacketShape, type EvidencePacket, type RuntimeDiagnostics } from '../evidence/evidence-packet.js';

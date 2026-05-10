@@ -3,22 +3,19 @@ import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import {
-  SCHEMA_VERSION,
-  RunKernel,
-  actorKey,
-  compile as compileTeamContext,
-  initialState,
-  replayAll,
   type ActorRef,
-  type AuthoredSpec,
-  type ClockProvider,
-  type IdProvider,
-  type ProtocolRequest,
-  type ReplayViews,
-  type RunEvent,
-  type RunState,
-  type TeamContext,
-} from '@pluto/v2-core';
+} from '@pluto/v2-core/actor-ref';
+import { RunKernel } from '@pluto/v2-core/core/run-kernel';
+import type { ClockProvider, IdProvider } from '@pluto/v2-core/core/providers';
+import { initialState, type RunState } from '@pluto/v2-core/core/run-state';
+import { compile as compileTeamContext } from '@pluto/v2-core/core/spec-compiler';
+import { actorKey, type AuthoredSpec, type TeamContext } from '@pluto/v2-core/core/team-context';
+import { replayAll, type ReplayViews } from '@pluto/v2-core/projections/replay';
+import type { ProtocolRequest } from '@pluto/v2-core/protocol-request';
+import type { RunEvent } from '@pluto/v2-core/run-event';
+import {
+  SCHEMA_VERSION,
+} from '@pluto/v2-core/versioning';
 
 import { startPlutoLocalApi } from '../../api/pluto-local-api.js';
 import {

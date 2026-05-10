@@ -1,4 +1,4 @@
-import type { ActorRef } from '@pluto/v2-core';
+import type { ActorRef } from '@pluto/v2-core/actor-ref';
 
 export interface TurnLeaseStore {
   current(): ActorRef | null;

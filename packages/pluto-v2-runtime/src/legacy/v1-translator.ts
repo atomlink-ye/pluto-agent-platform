@@ -1,12 +1,8 @@
 import { createHash } from 'node:crypto';
 
-import {
-  SCHEMA_VERSION,
-  type ActorRef,
-  type MailboxMessageKind,
-  type RunEvent,
-  type TaskState,
-} from '@pluto/v2-core';
+import type { ActorRef } from '@pluto/v2-core/actor-ref';
+import type { MailboxMessageKind, RunEvent, TaskState } from '@pluto/v2-core/run-event';
+import { SCHEMA_VERSION } from '@pluto/v2-core/versioning';
 
 const UUID_V5_NAMESPACE = '6ba7b810-9dad-11d1-80b4-00c04fd430c8';
 

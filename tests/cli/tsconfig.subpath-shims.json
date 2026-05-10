@@ -1,0 +1,13 @@
+{
+  "extends": "../../tsconfig.json",
+  "compilerOptions": {
+    "paths": {
+      "@/*": ["src/*"],
+      "@pluto/v2-core": ["packages/pluto-v2-core/src/index.ts"],
+      "@pluto/v2-core/projections": ["packages/pluto-v2-core/src/projections.ts"],
+      "@pluto/v2-core/*": ["packages/pluto-v2-core/src/*"],
+      "@pluto/v2-runtime": ["packages/pluto-v2-runtime/src/index.ts"],
+      "@pluto/v2-runtime/*": ["packages/pluto-v2-runtime/src/*"]
+    }
+  }
+}

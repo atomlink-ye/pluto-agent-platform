@@ -124,21 +124,48 @@ async function writePackageShim(packageDir: string, targetPath: string, packageN
 
   await mkdir(packageDir, { recursive: true });
 
-  const importTarget = relative(packageDir, targetPath).replaceAll("\\", "/");
-  const normalizedImportTarget = importTarget.startsWith(".") ? importTarget : `./${importTarget}`;
+  const targetRoot = dirname(targetPath);
+  const targetExtension = extname(targetPath);
+  const coreSubpaths = [
+    "index",
+    "actor-ref",
+    "run-event",
+    "versioning",
+    "protocol-request",
+    "projections",
+    "projections/replay",
+    "core/team-context",
+    "core/providers",
+    "core/run-kernel",
+    "core/run-state",
+    "core/run-state-reducer",
+    "core/spec-compiler",
+  ];
+  const shimSubpaths = packageName === "@pluto/v2-core" ? coreSubpaths : ["index"];
+  const packageExports = Object.fromEntries(
+    shimSubpaths.map((subpath) => [subpath === "index" ? "." : `./${subpath}`, `./${subpath}.js`]),
+  );
   await writeFile(
     join(packageDir, "package.json"),
     `${JSON.stringify({
       name: packageName,
       private: true,
       type: "module",
-      exports: {
-        ".": "./index.js",
-      },
+      exports: packageExports,
     }, null, 2)}\n`,
     "utf8",
   );
-  await writeFile(join(packageDir, "index.js"), `export * from ${JSON.stringify(normalizedImportTarget)};\n`, "utf8");
+
+  for (const subpath of shimSubpaths) {
+    const parts = subpath.split("/");
+    if (parts.length > 1) {
+      await mkdir(join(packageDir, ...parts.slice(0, -1)), { recursive: true });
+    }
+    const target = join(targetRoot, `${subpath}${targetExtension}`);
+    const importTarget = relative(join(packageDir, ...parts.slice(0, -1)), target).replaceAll("\\", "/");
+    const normalizedImportTarget = importTarget.startsWith(".") ? importTarget : `./${importTarget}`;
+    await writeFile(join(packageDir, `${subpath}.js`), `export * from ${JSON.stringify(normalizedImportTarget)};\n`, "utf8");
+  }
 }
 
 async function ensureV2RuntimeShims(): Promise<void> {

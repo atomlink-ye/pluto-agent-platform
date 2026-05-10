@@ -1,4 +1,5 @@
-import type { ClockProvider, FakeScriptStep, IdProvider, TeamContext } from '@pluto/v2-core';
+import type { ClockProvider, IdProvider } from '@pluto/v2-core/core/providers';
+import type { FakeScriptStep, TeamContext } from '@pluto/v2-core/core/team-context';
 
 import type { KernelView } from '../../runtime/kernel-view.js';
 import type { RuntimeAdapter } from '../../runtime/runtime-adapter.js';

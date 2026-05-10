@@ -1,7 +1,8 @@
 import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
-import type { ActorRef, MailboxMessageKind, TaskState } from '@pluto/v2-core';
+import type { ActorRef } from '@pluto/v2-core/actor-ref';
+import type { MailboxMessageKind, TaskState } from '@pluto/v2-core/run-event';
 import { z } from 'zod';
 
 import type { PlutoToolHandlers } from '../mcp/pluto-mcp-server.js';
