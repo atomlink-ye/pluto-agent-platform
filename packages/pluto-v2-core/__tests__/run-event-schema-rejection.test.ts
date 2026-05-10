@@ -50,11 +50,11 @@ describe('RunEventSchema structural rejection', () => {
     expect(() => RunEventSchema.parse(withoutRunId)).toThrow();
   });
 
-  it('rejects out-of-enum actor roles', () => {
+  it('rejects invalid-format actor roles', () => {
     expect(() =>
       RunEventSchema.parse({
         ...validTaskCreated,
-        actor: { kind: 'role', role: 'admin' },
+        actor: { kind: 'role', role: 'Admin' },
       }),
     ).toThrow();
   });

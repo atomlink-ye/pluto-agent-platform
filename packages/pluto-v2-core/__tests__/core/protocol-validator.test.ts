@@ -56,6 +56,44 @@ function createKernel() {
 }
 
 describe('validate', () => {
+  it('authorizes custom roles through authored role matchers', () => {
+    const customTeamContext = TeamContextSchema.parse({
+      runId: 'run-2',
+      scenarioRef: 'scenario/custom-role',
+      runProfileRef: 'fake-smoke',
+      declaredActors: [{ kind: 'manager' }, { kind: 'role', role: 'researcher' }],
+      initialTasks: [
+        {
+          taskId: 'task-custom',
+          title: 'Research task',
+          ownerActor: { kind: 'role', role: 'researcher' },
+          dependsOn: [],
+        },
+      ],
+      policy: {
+        append_mailbox_message: [{ kind: 'manager' }, { kind: 'role', role: 'researcher' }],
+        create_task: [{ kind: 'manager' }],
+        change_task_state: [{ kind: 'manager' }, { kind: 'role', role: 'researcher' }],
+        publish_artifact: [{ kind: 'manager' }],
+        complete_run: [{ kind: 'manager' }],
+      },
+    });
+    const customState = initialState(customTeamContext);
+    const request = ProtocolRequestSchema.parse({
+      ...requestBase,
+      runId: 'run-2',
+      requestId: uuid('12'),
+      actor: { kind: 'role', role: 'researcher' },
+      intent: 'change_task_state',
+      payload: {
+        taskId: 'task-custom',
+        to: 'running',
+      },
+    });
+
+    expect(validate(customState, request)).toEqual({ ok: true });
+  });
+
   it('accepts append_mailbox_message requests', () => {
     const request = ProtocolRequestSchema.parse({
       ...requestBase,

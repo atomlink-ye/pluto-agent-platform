@@ -1,4 +1,4 @@
-import type { ActorRef } from '../actor-ref.js';
+import type { ActorRef, ActorRole } from '../actor-ref.js';
 import type { ProtocolRequest, ProtocolRequestIntent } from '../protocol-request.js';
 import type { TaskState } from '../run-event.js';
 import type { RunState } from './run-state.js';
@@ -29,7 +29,7 @@ function sameActor(left: ActorRef, right: ActorRef): boolean {
   return actorKey(left) === actorKey(right);
 }
 
-function actorMatchesRole(actor: ActorRef, role: 'lead' | 'planner' | 'generator' | 'evaluator'): boolean {
+function actorMatchesRole(actor: ActorRef, role: ActorRole): boolean {
   return actor.kind === 'role' && actor.role === role;
 }
 

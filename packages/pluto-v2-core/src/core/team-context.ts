@@ -1,7 +1,6 @@
 import { z } from 'zod';
 
 import {
-  ACTOR_ROLE_VALUES,
   ActorRefSchema,
   ActorRoleSchema,
   ManagerActorRefSchema,
@@ -43,7 +42,7 @@ export function actorKey(actor: ActorRef): string {
 }
 
 export function isActorRole(value: string): value is ActorRole {
-  return (ACTOR_ROLE_VALUES as readonly string[]).includes(value);
+  return ActorRoleSchema.safeParse(value).success;
 }
 
 export function isTaskState(value: string): value is TaskState {

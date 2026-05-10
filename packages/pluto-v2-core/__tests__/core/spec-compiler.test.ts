@@ -192,6 +192,50 @@ describe('compile', () => {
     expect(compiled.policy).toEqual(policy);
   });
 
+  it('accepts a custom role when authored policy authorizes it', () => {
+    const baseSpec = createBaseSpec();
+    const compiled = compile({
+      ...baseSpec,
+      actors: {
+        ...baseSpec.actors,
+        researcher: { kind: 'role', role: 'researcher' },
+      },
+      declaredActors: ['manager', 'lead', 'researcher'],
+      initialTasks: [
+        {
+          taskId: 'task-1',
+          title: 'Research the issue',
+          ownerActor: 'researcher',
+          dependsOn: [],
+        },
+      ],
+      policy: {
+        append_mailbox_message: [
+          { kind: 'manager' },
+          { kind: 'role', role: 'lead' },
+          { kind: 'role', role: 'researcher' },
+          { kind: 'system' },
+        ],
+        create_task: [{ kind: 'manager' }, { kind: 'role', role: 'lead' }],
+        change_task_state: [
+          { kind: 'manager' },
+          { kind: 'role', role: 'lead' },
+          { kind: 'role', role: 'researcher' },
+        ],
+        publish_artifact: [{ kind: 'manager' }, { kind: 'role', role: 'researcher' }],
+        complete_run: [{ kind: 'manager' }],
+      },
+    });
+
+    expect(compiled.declaredActors).toEqual([
+      { kind: 'manager' },
+      { kind: 'role', role: 'lead' },
+      { kind: 'role', role: 'researcher' },
+    ]);
+    expect(compiled.initialTasks?.[0]?.ownerActor).toEqual({ kind: 'role', role: 'researcher' });
+    expect(compiled.policy.change_task_state).toContainEqual({ kind: 'role', role: 'researcher' });
+  });
+
   it('throws unknown_actor for undeclared actor references', () => {
     expectCompileError(
       {
@@ -252,13 +296,15 @@ describe('compile', () => {
     );
   });
 
-  it('throws actor_role_unknown for authored role names outside the closed set', () => {
+  it('throws actor_role_unknown for invalid authored role strings', () => {
+    const baseSpec = createBaseSpec();
+
     expectCompileError(
       {
-        ...createBaseSpec(),
+        ...baseSpec,
         actors: {
-          ...createBaseSpec().actors,
-          reviewer: { kind: 'role', role: 'reviewer' },
+          ...baseSpec.actors,
+          reviewer: { kind: 'role', role: 'Reviewer' },
         },
         declaredActors: ['reviewer'],
       },

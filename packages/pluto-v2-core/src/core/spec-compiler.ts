@@ -61,15 +61,10 @@ function compileActorRef(name: string, actor: AuthoredActorRef): ActorRef {
     case 'system':
       return { kind: 'system' };
     case 'role':
-      if (!isActorRole(actor.role)) {
-        fail('actor_role_unknown', `Actor "${name}" uses unknown role "${actor.role}"`, [
-          'actors',
-          name,
-          'role',
-        ]);
-      }
-
-      return { kind: 'role', role: actor.role };
+      return {
+        kind: 'role',
+        role: compileRole(actor.role, ['actors', name, 'role']),
+      };
   }
 }
 
@@ -136,7 +131,7 @@ function compileInitialTasks(
 
 function compileRole(role: string, path: ReadonlyArray<string | number>): ActorRole {
   if (!isActorRole(role)) {
-    fail('actor_role_unknown', `Unknown role "${role}"`, path);
+    fail('actor_role_unknown', `Invalid role "${role}"`, path);
   }
 
   return role;
@@ -174,32 +169,18 @@ function assertTransitions(
 function matcherAllowedForIntent(intent: ProtocolRequestIntent, matcher: ActorMatcher): boolean {
   switch (intent) {
     case 'append_mailbox_message':
-      return (
-        matcher.kind === 'manager' ||
-        matcher.kind === 'system' ||
-        (matcher.kind === 'role' &&
-          (matcher.role === 'lead' ||
-            matcher.role === 'planner' ||
-            matcher.role === 'generator' ||
-            matcher.role === 'evaluator'))
-      );
+      return matcher.kind === 'manager' || matcher.kind === 'system' || matcher.kind === 'role';
     case 'create_task':
-      return (
-        matcher.kind === 'manager' ||
-        (matcher.kind === 'role' && (matcher.role === 'lead' || matcher.role === 'planner'))
-      );
+      return matcher.kind === 'manager' || matcher.kind === 'role';
     case 'change_task_state':
       return (
         matcher.kind === 'manager' ||
-        (matcher.kind === 'role' && matcher.role === 'lead') ||
+        matcher.kind === 'role' ||
         matcher.kind === 'role-owns-task' ||
         matcher.kind === 'role-bounded-transitions'
       );
     case 'publish_artifact':
-      return (
-        matcher.kind === 'manager' ||
-        (matcher.kind === 'role' && (matcher.role === 'lead' || matcher.role === 'generator'))
-      );
+      return matcher.kind === 'manager' || matcher.kind === 'role';
     case 'complete_run':
       return matcher.kind === 'manager';
   }

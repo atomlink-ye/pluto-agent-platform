@@ -1,6 +1,30 @@
 import { describe, expect, it } from 'vitest';
 
-import { AuthoredSpecSchema, FakeScriptStepSchema } from '../../src/index.js';
+import { ACTOR_ROLE_VALUES, ActorRoleSchema, AuthoredSpecSchema, BUILTIN_ROLES, FakeScriptStepSchema } from '../../src/index.js';
+import { isActorRole } from '../../src/core/team-context.js';
+
+describe('isActorRole', () => {
+  it('accepts built-in and custom role strings with the shared format', () => {
+    expect(isActorRole('lead')).toBe(true);
+    expect(isActorRole('researcher')).toBe(true);
+    expect(isActorRole('critic_2')).toBe(true);
+    expect(ActorRoleSchema.parse('designer-review')).toBe('designer-review');
+  });
+
+  it('rejects empty, whitespace, and regex-violating role strings', () => {
+    expect(isActorRole('')).toBe(false);
+    expect(isActorRole('   ')).toBe(false);
+    expect(isActorRole('Researcher')).toBe(false);
+    expect(isActorRole('researcher reviewer')).toBe(false);
+    expect(isActorRole('-reviewer')).toBe(false);
+    expect(ActorRoleSchema.safeParse(' reviewer ').success).toBe(false);
+  });
+
+  it('keeps the canonical role list available as a back-compat alias', () => {
+    expect(BUILTIN_ROLES).toEqual(['lead', 'planner', 'generator', 'evaluator']);
+    expect(ACTOR_ROLE_VALUES).toBe(BUILTIN_ROLES);
+  });
+});
 
 describe('FakeScriptStepSchema', () => {
   it('accepts fakeScript steps with event payload refs', () => {

@@ -214,6 +214,50 @@ describe('reduce', () => {
     });
   });
 
+  it('reduces task_state_changed events for custom role actors without changing state shape', () => {
+    const customTeamContext = TeamContextSchema.parse({
+      runId: 'run-2',
+      scenarioRef: 'scenario/custom-role',
+      runProfileRef: 'fake-smoke',
+      declaredActors: [{ kind: 'manager' }, { kind: 'role', role: 'researcher' }],
+      initialTasks: [
+        {
+          taskId: 'task-custom',
+          title: 'Research task',
+          ownerActor: { kind: 'role', role: 'researcher' },
+          dependsOn: [],
+        },
+      ],
+      policy: {
+        append_mailbox_message: [{ kind: 'manager' }, { kind: 'role', role: 'researcher' }],
+        create_task: [{ kind: 'manager' }],
+        change_task_state: [{ kind: 'manager' }, { kind: 'role', role: 'researcher' }],
+        publish_artifact: [{ kind: 'manager' }],
+        complete_run: [{ kind: 'manager' }],
+      },
+    });
+    const nextState = reduce(
+      initialState(customTeamContext),
+      RunEventSchema.parse({
+        ...makeBaseAcceptedEvent(),
+        runId: 'run-2',
+        actor: { kind: 'role', role: 'researcher' },
+        kind: 'task_state_changed',
+        entityRef: { kind: 'task', taskId: 'task-custom' },
+        payload: {
+          taskId: 'task-custom',
+          from: 'queued',
+          to: 'running',
+        },
+      }),
+    );
+
+    expect(nextState.tasks['task-custom']).toEqual({
+      state: 'running',
+      ownerActor: { kind: 'role', role: 'researcher' },
+    });
+  });
+
   it('reduces artifact_published events without widening run state shape', () => {
     const before = initialState(teamContext);
     const nextState = reduce(
