@@ -1,43 +1,87 @@
-import {
-  ACTOR_ROLE_VALUES,
-  ARTIFACT_PUBLISHED_KIND_VALUES,
-  AppendMailboxMessageRequestPayloadSchema,
-  CompleteRunRequestPayloadSchema,
-  CreateTaskRequestPayloadSchema,
-  ChangeTaskStateRequestPayloadSchema,
-  MAILBOX_MESSAGE_KIND_VALUES,
-  PublishArtifactRequestPayloadSchema,
-  RUN_COMPLETED_STATUS_VALUES,
-  TASK_STATE_VALUES,
-} from '@pluto/v2-core';
-import { z } from 'zod';
+import { createRequire } from 'node:module';
+import { dirname, join } from 'node:path';
 
-export const PlutoCreateTaskArgsSchema = CreateTaskRequestPayloadSchema.pick({
-  title: true,
-  ownerActor: true,
-  dependsOn: true,
+import type { infer as Infer, ZodTypeAny } from 'zod';
+
+const require = createRequire(import.meta.url);
+const zodPackageDir = dirname(require.resolve('zod'));
+const { z } = require(join(zodPackageDir, 'v3', 'index.cjs')) as {
+  z: typeof import('zod')['z'];
+};
+
+const ACTOR_ROLE_PATTERN = '^[a-z][a-z0-9_-]*$';
+const ACTOR_ROLE_VALUES = ['lead', 'planner', 'generator', 'evaluator'] as const;
+const ARTIFACT_PUBLISHED_KIND_VALUES = ['final', 'intermediate'] as const;
+const MAILBOX_MESSAGE_KIND_VALUES = [
+  'plan',
+  'task',
+  'completion',
+  'plan_approval_request',
+  'plan_approval_response',
+  'final',
+] as const;
+const RUN_COMPLETED_STATUS_VALUES = ['succeeded', 'failed', 'cancelled'] as const;
+const TASK_STATE_VALUES = ['queued', 'running', 'blocked', 'completed', 'failed', 'cancelled'] as const;
+
+const PlutoActorRoleSchema = z.string().max(64).regex(new RegExp(ACTOR_ROLE_PATTERN));
+
+const PlutoManagerActorRefSchema = z.object({
+  kind: z.literal('manager'),
 });
 
-export const PlutoChangeTaskStateArgsSchema = ChangeTaskStateRequestPayloadSchema.pick({
-  taskId: true,
-  to: true,
+const PlutoRoleActorRefSchema = z.object({
+  kind: z.literal('role'),
+  role: PlutoActorRoleSchema,
 });
 
-export const PlutoAppendMailboxMessageArgsSchema = AppendMailboxMessageRequestPayloadSchema.omit({
-  fromActor: true,
+const PlutoSystemActorRefSchema = z.object({
+  kind: z.literal('system'),
 });
 
-export const PlutoPublishArtifactArgsSchema = PublishArtifactRequestPayloadSchema.pick({
-  kind: true,
-  mediaType: true,
-  byteSize: true,
-}).extend({
+const PlutoBroadcastActorRefSchema = z.object({
+  kind: z.literal('broadcast'),
+});
+
+const PlutoActorRefSchema = z.discriminatedUnion('kind', [
+  PlutoManagerActorRefSchema,
+  PlutoRoleActorRefSchema,
+  PlutoSystemActorRefSchema,
+]);
+
+const PlutoActorOrBroadcastSchema = z.discriminatedUnion('kind', [
+  PlutoManagerActorRefSchema,
+  PlutoRoleActorRefSchema,
+  PlutoSystemActorRefSchema,
+  PlutoBroadcastActorRefSchema,
+]);
+
+export const PlutoCreateTaskArgsSchema = z.object({
+  title: z.string(),
+  ownerActor: PlutoActorRefSchema.nullable(),
+  dependsOn: z.array(z.string()),
+});
+
+export const PlutoChangeTaskStateArgsSchema = z.object({
+  taskId: z.string(),
+  to: z.enum(TASK_STATE_VALUES),
+});
+
+export const PlutoAppendMailboxMessageArgsSchema = z.object({
+  toActor: PlutoActorOrBroadcastSchema,
+  kind: z.enum(MAILBOX_MESSAGE_KIND_VALUES),
+  body: z.string(),
+});
+
+export const PlutoPublishArtifactArgsSchema = z.object({
+  kind: z.enum(ARTIFACT_PUBLISHED_KIND_VALUES),
+  mediaType: z.string(),
+  byteSize: z.number().int().nonnegative(),
   body: z.string().optional(),
 });
 
-export const PlutoCompleteRunArgsSchema = CompleteRunRequestPayloadSchema.pick({
-  status: true,
-  summary: true,
+export const PlutoCompleteRunArgsSchema = z.object({
+  status: z.enum(RUN_COMPLETED_STATUS_VALUES),
+  summary: z.string().nullable(),
 });
 
 export const PlutoReadStateArgsSchema = z.object({}).strict();
@@ -54,14 +98,14 @@ export const PlutoReadTranscriptArgsSchema = z
   })
   .strict();
 
-export type PlutoCreateTaskArgs = z.infer<typeof PlutoCreateTaskArgsSchema>;
-export type PlutoChangeTaskStateArgs = z.infer<typeof PlutoChangeTaskStateArgsSchema>;
-export type PlutoAppendMailboxMessageArgs = z.infer<typeof PlutoAppendMailboxMessageArgsSchema>;
-export type PlutoPublishArtifactArgs = z.infer<typeof PlutoPublishArtifactArgsSchema>;
-export type PlutoCompleteRunArgs = z.infer<typeof PlutoCompleteRunArgsSchema>;
-export type PlutoReadStateArgs = z.infer<typeof PlutoReadStateArgsSchema>;
-export type PlutoReadArtifactArgs = z.infer<typeof PlutoReadArtifactArgsSchema>;
-export type PlutoReadTranscriptArgs = z.infer<typeof PlutoReadTranscriptArgsSchema>;
+export type PlutoCreateTaskArgs = Infer<typeof PlutoCreateTaskArgsSchema>;
+export type PlutoChangeTaskStateArgs = Infer<typeof PlutoChangeTaskStateArgsSchema>;
+export type PlutoAppendMailboxMessageArgs = Infer<typeof PlutoAppendMailboxMessageArgsSchema>;
+export type PlutoPublishArtifactArgs = Infer<typeof PlutoPublishArtifactArgsSchema>;
+export type PlutoCompleteRunArgs = Infer<typeof PlutoCompleteRunArgsSchema>;
+export type PlutoReadStateArgs = Infer<typeof PlutoReadStateArgsSchema>;
+export type PlutoReadArtifactArgs = Infer<typeof PlutoReadArtifactArgsSchema>;
+export type PlutoReadTranscriptArgs = Infer<typeof PlutoReadTranscriptArgsSchema>;
 
 export const PLUTO_TOOL_NAMES = [
   'pluto_create_task',
@@ -85,7 +129,7 @@ export const PLUTO_TOOL_ARG_SCHEMAS = {
   pluto_read_state: PlutoReadStateArgsSchema,
   pluto_read_artifact: PlutoReadArtifactArgsSchema,
   pluto_read_transcript: PlutoReadTranscriptArgsSchema,
-} satisfies Record<PlutoToolName, z.ZodTypeAny>;
+} satisfies Record<PlutoToolName, ZodTypeAny>;
 
 type JsonSchema = {
   readonly type?: 'object' | 'array' | 'string' | 'number' | 'integer' | 'null';
@@ -98,15 +142,15 @@ type JsonSchema = {
   readonly items?: JsonSchema;
   readonly format?: string;
   readonly pattern?: string;
+  readonly maxLength?: number;
+  readonly minLength?: number;
   readonly minimum?: number;
 };
-
-const ACTOR_ROLE_PATTERN = '^[a-z][a-z0-9_-]*$';
 
 export interface PlutoToolDescriptor {
   readonly name: PlutoToolName;
   readonly description: string;
-  readonly argsSchema: z.ZodTypeAny;
+  readonly argsSchema: ZodTypeAny;
   readonly inputSchema: JsonSchema;
 }
 
@@ -133,6 +177,7 @@ const ACTOR_REF_JSON_SCHEMA: JsonSchema = {
         role: {
           type: 'string',
           pattern: ACTOR_ROLE_PATTERN,
+          maxLength: 64,
           description: `Built-in defaults: ${ACTOR_ROLE_VALUES.join(' | ')}. Custom authored roles are also accepted when the run policy declares them.`,
         },
       },
@@ -182,7 +227,7 @@ function objectSchema(properties: Record<string, JsonSchema>, required: readonly
 function toolDescriptor(
   name: PlutoToolName,
   description: string,
-  argsSchema: z.ZodTypeAny,
+  argsSchema: ZodTypeAny,
   inputSchema: JsonSchema,
 ): PlutoToolDescriptor {
   return {
@@ -286,7 +331,7 @@ export const PLUTO_TOOL_DESCRIPTORS = [
     PlutoReadTranscriptArgsSchema,
     objectSchema(
       {
-        actorKey: { type: 'string' },
+        actorKey: { type: 'string', minLength: 1 },
       },
       ['actorKey'],
     ),
