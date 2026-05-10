@@ -1,0 +1,163 @@
+[User] You are the critic actor for a Pluto v2 tool-driven run.
+
+## Role anchor
+
+You are the live critic actor for run run-poet-critic-open-role. Drive this run yourself by calling Pluto tool `/workspace/.worktrees/v2-open-role-mvp-s5/integration/.pluto/runs/run-poet-critic-open-role/bin/pluto-tool` from your shell with `--actor role:critic`.
+The actor-local shortcut `/workspace/.worktrees/v2-open-role-mvp-s5/integration/.pluto/runs/run-poet-critic-open-role/agents/role:critic/pluto-tool` still works and forwards to the same run-level binary.
+Do NOT use external control planes (for example `paseo send`, `daytona exec`, or `opencode-orchestrator`) to pilot another actor for this run.
+There is no other actor; you are the actor.
+
+Available Pluto tools:
+- pluto_create_task: Create a Pluto task in the active run.
+- pluto_change_task_state: Change the state of an existing Pluto task.
+- pluto_append_mailbox_message: Append a mailbox message for another Pluto actor.
+- pluto_publish_artifact: Publish an artifact for the active Pluto run.
+- pluto_complete_run: Mark the active Pluto run as completed.
+- pluto_read_state: Read the current PromptView for the active actor.
+- pluto_read_artifact: Read an artifact sidecar by artifact id.
+- pluto_read_transcript: Read a transcript sidecar by actor key.
+- pluto_wait_for_event: Suspend until a new actor-visible Pluto event arrives.
+
+## How to call Pluto tools
+
+Invoke the Pluto tool by running `/workspace/.worktrees/v2-open-role-mvp-s5/integration/.pluto/runs/run-poet-critic-open-role/bin/pluto-tool` from your bash shell.
+Always pass `--actor role:critic` explicitly.
+The per-actor wrapper `/workspace/.worktrees/v2-open-role-mvp-s5/integration/.pluto/runs/run-poet-critic-open-role/agents/role:critic/pluto-tool` is a backward-compat shortcut that forwards to the same run-level binary.
+Both forms already have the run API URL and bearer token in scope.
+
+Examples:
+
+  /workspace/.worktrees/v2-open-role-mvp-s5/integration/.pluto/runs/run-poet-critic-open-role/bin/pluto-tool --actor role:critic create-task --owner=generator --title="Draft haiku v1"
+  /workspace/.worktrees/v2-open-role-mvp-s5/integration/.pluto/runs/run-poet-critic-open-role/bin/pluto-tool --actor role:critic send-mailbox --to=lead --kind=completion --body="Draft attached: ..."
+  /workspace/.worktrees/v2-open-role-mvp-s5/integration/.pluto/runs/run-poet-critic-open-role/bin/pluto-tool --actor role:critic change-task-state --task-id=<id> --to=completed
+  /workspace/.worktrees/v2-open-role-mvp-s5/integration/.pluto/runs/run-poet-critic-open-role/bin/pluto-tool --actor role:critic publish-artifact --kind=final --media-type=text/plain --byte-size=64 --body="..."
+  /workspace/.worktrees/v2-open-role-mvp-s5/integration/.pluto/runs/run-poet-critic-open-role/bin/pluto-tool --actor role:critic worker-complete --task-id=<id> --summary="<one-sentence>"
+  /workspace/.worktrees/v2-open-role-mvp-s5/integration/.pluto/runs/run-poet-critic-open-role/bin/pluto-tool --actor role:critic wait --timeout-sec=300
+  /workspace/.worktrees/v2-open-role-mvp-s5/integration/.pluto/runs/run-poet-critic-open-role/bin/pluto-tool --actor role:critic read-state
+  /workspace/.worktrees/v2-open-role-mvp-s5/integration/.pluto/runs/run-poet-critic-open-role/bin/pluto-tool --actor role:critic read-artifact --artifact-id=<id>
+  /workspace/.worktrees/v2-open-role-mvp-s5/integration/.pluto/runs/run-poet-critic-open-role/bin/pluto-tool --actor role:critic read-transcript --actor-key=role:generator
+Legacy wrapper shortcut: /workspace/.worktrees/v2-open-role-mvp-s5/integration/.pluto/runs/run-poet-critic-open-role/agents/role:critic/pluto-tool create-task --owner=generator --title="Draft haiku v1"
+
+Run `/workspace/.worktrees/v2-open-role-mvp-s5/integration/.pluto/runs/run-poet-critic-open-role/bin/pluto-tool --help` or `/workspace/.worktrees/v2-open-role-mvp-s5/integration/.pluto/runs/run-poet-critic-open-role/bin/pluto-tool <subcommand> --help` for
+flag details. Output is JSON by default; pass --format=text for a
+short human summary.
+
+## Canonical composite verb
+
+When you finish your delegated task, call `/workspace/.worktrees/v2-open-role-mvp-s5/integration/.pluto/runs/run-poet-critic-open-role/bin/pluto-tool --actor role:critic worker-complete --task-id=<id> --summary="<one-sentence>" [--artifact=<id>...]`.
+This is the default close-out path for custom non-lead roles. It marks the task completed and sends a structured completion mailbox message to the lead in one coherent step.
+If your authored policy explicitly authorizes evaluator-style review close-out for your role, call `/workspace/.worktrees/v2-open-role-mvp-s5/integration/.pluto/runs/run-poet-critic-open-role/bin/pluto-tool --actor role:critic evaluator-verdict --task-id=<id> --verdict=pass|needs-revision|fail --summary="<one-sentence>"` instead.
+Do not split close-out across separate `change-task-state` and `append-mailbox-message` calls unless the run explicitly requires a non-standard flow.
+
+Turn rule:
+- Read tools are available whenever you need more context.
+- End your turn with EXACTLY ONE mutating Pluto tool call.
+- Mutating commands automatically wait for the next relevant event unless you pass --no-wait.
+- Do not poll with /workspace/.worktrees/v2-open-role-mvp-s5/integration/.pluto/runs/run-poet-critic-open-role/agents/role:critic/pluto-tool read-state between your own mutations; the runtime will resume you when an event for you arrives.
+- Usually that means the composite close-out path for your role: `worker-complete` for most delegated tasks, or `evaluator-verdict` when you are sending a review verdict.
+
+Playbook for critic:
+## critic
+
+Review the poet's draft against the task.
+Use `evaluator-verdict` to send a clear pass or revision verdict.
+If you request changes, explain the missing requirement in one sentence.
+
+PromptView JSON:
+{
+  "run": {
+    "runId": "run-poet-critic-open-role",
+    "scenarioRef": "scenario/poet-critic-open-role",
+    "runProfileRef": "paseo-agentic-mock"
+  },
+  "userTask": null,
+  "forActor": {
+    "kind": "role",
+    "role": "critic"
+  },
+  "playbook": {
+    "ref": "playbook.md",
+    "sha256": "05451216dfca4b2864d1e935a9adae853a76dd6c4dde0806e76ea3ee6f6bdf88"
+  },
+  "budgets": {
+    "turnIndex": 3,
+    "maxTurns": 12,
+    "parseFailuresThisTurn": 0,
+    "maxParseFailuresPerTurn": 0,
+    "kernelRejections": 0,
+    "maxKernelRejections": 2,
+    "noProgressTurns": 0,
+    "maxNoProgressTurns": 3
+  },
+  "tasks": [
+    {
+      "id": "3b2783e1-eb8f-4319-841a-ac6c3cf7966b",
+      "title": "Review the poet's draft",
+      "ownerActor": {
+        "kind": "role",
+        "role": "critic"
+      },
+      "state": "queued"
+    },
+    {
+      "id": "6f3970f6-9407-4894-b04c-57efcdf4b5b7",
+      "title": "Draft a short poem",
+      "ownerActor": {
+        "kind": "role",
+        "role": "poet"
+      },
+      "state": "completed"
+    }
+  ],
+  "mailbox": [],
+  "artifacts": [],
+  "activeDelegation": {
+    "kind": "role",
+    "role": "critic"
+  },
+  "lastRejection": null
+}
+Reading the poet’s output before issuing a verdict.The Pluto CLI is present, but the run env isn’t injected in this shell. I’m checking the run directory for the local wrapper or env shim.
+I found the worktree root. Next I’m checking the hidden Pluto run directory and the local actor wrapper.
+The backward-compat wrapper exists. I’m reading it to see whether it bootstraps the missing Pluto env.
+The poet task is complete, but there’s no poem artifact or verbatim poem to review. I’m sending a revision verdict with that requirement.Needs revision: no poem was published or cited verbatim, so please attach the final short poem and route it back through the lead.
+[Thought] **Troubleshooting file path**
+
+I’m wondering if the glob path I’m using is invalid. Maybe I need to use an absolute path? It looks like no files are found. I'm considering if there’s a worktree path I need to check. I could try using the `ls` command in bash. Although, I’ve read it’s better to avoid `ls` unless I verify the parent directory. I think checking with `pwd` could help me see if the path exists. I'll give it a try!**Troubleshooting directory access**
+
+I need to locate the run directory, possibly under tasks. Let me confirm the user path, which is /workspace/.worktrees/v2-open-role-mvp-s5/integration/.pluto/runs/… I think the reason I didn't see everything is that "ls" didn't show hidden directories because I forgot to use the -a flag. I’ll try running "ls -a" to reveal all files and directories. Hopefully, that will give me the information I need!
+**Exploring wrapper scripts**
+
+I'm thinking about whether a wrapper script can source the environment. It seems like using a wrapper path with the API URL in scope might work. However, the current shell doesn't have the environment setup. I wonder if there are agent wrappers within the worktree that set the environment variables. I’ll need to inspect the `.pluto run` directory and maybe list the contents of the agents directory to see what’s there.**Exploring file reading options**
+
+I need to consider how to read a wrapper script. Maybe using a bash command with `file` is a good start? But I also wonder if I could use the Read tool to access the contents directly. It’s important for me to figure out the best approach, so I’ll explore both options and see which one works best for my needs. Let's see what happens!
+**Accessing environment variables**
+
+I need to retrieve environment variables from the wrapper. It looks like I can use the wrapper script located at /agents/role:critic/pluto-tool directly, as it sets the environment from the handoff. This is a great way to proceed! I'll utilize this method and possibly read the state as well. I think I can call the wrapper with `read-transcript`. Let's go ahead and do that!
+[User] [wakeup turn 5]
+new event: mailbox_message_appended from critic
+
+delta:
+{"newTasks":[],"updatedTasks":[],"newMailbox":[[5,"role:critic","role:lead","task","{\"summary\":\"No poem was publ...[truncated]"]],"newArtifacts":[],"delegation":"role:critic","budgets":{"turnIndex":4,"maxTurns":12,"parseFailuresThisTurn":0,"maxParseFailuresPerTurn":0,"kernelRejections":0,"maxKernelRejections":2,"noProgressTurns":0,"maxNoProgressTurns":3},"lastRejection":null}
+
+end your turn with one mutating pluto-tool call.
+I’m checking whether the run expects a final close-out or another review action before I mutate again.Closing the critic task now that the revision verdict has been routed.Sent a needs-revision verdict because the final poem was not published or cited verbatim.
+[User] [wakeup turn 9]
+new event: mailbox_message_appended from lead
+
+delta:
+{"newTasks":[["70ab9c44-22f8-4459-a43e-b47857509b4c","completed","role:poet","Publish final poem verbatim"]],"updatedTasks":[["3b2783e1-eb8f-4319-841a-ac6c3cf7966b","completed","role:critic","Review the poet's draft"]],"newMailbox":[[7,"role:critic","role:lead","completion","{\"summary\":\"Sent a needs-rev...[truncated]"],[11,"role:lead","role:critic","task","Please review the published ...[truncated]"]],"newArtifacts":[],"delegation":"role:critic","budgets":{"turnIndex":8,"maxTurns":12,"parseFailuresThisTurn":0,"maxParseFailuresPerTurn":0,"kernelRejections":0,"maxKernelRejections":2,"noProgressTurns":0,"maxNoProgressTurns":3},"lastRejection":null}
+
+end your turn with one mutating pluto-tool call.
+I’m checking the updated PromptView for the published poem and the lead’s review request before I send the final actor mutation.
+The poem is now published verbatim, and it reads cleanly as a short draft. I’m sending a pass verdict with the poem quoted exactly as the acceptance evidence.Pass: "Dawn lifts the quiet page; ink wakes like birds, and the small heart of the run keeps singing."
+[Thought] **Determining review state**
+
+I need to act as a critic and check the user's submission regarding the wakeup event and mailbox from the lead. I should finalize with one mutating call. It’s essential to review the published poem. I wonder if there's an artifact in the state since the new task and the updated critic are completed. I think I'll need to inspect the read state to see what the current prompt view holds, possibly including the mailbox text.
+**Determining final verdict**
+
+I need to decide on the final mutation for the task. It seems I should send a verdict of "pass" since the poem is likely accepted in its verbatim form. The user requested a review of the poem as cited. I think I can confirm that the poem meets the task requirements. As a critic, I’ll submit an evaluator-verdict pass for task ID 3b, possibly mentioning the quoted poem. But it seems the task is already marked as completed.**Clarifying review process**
+
+So, I need to address the mailbox task about reviewing a published poem, but there's no new task created. It seems like I should send the review back through the lead. Task 3b has been marked as completed, but as a critic, my role requires using the evaluator-verdict to indicate whether it’s a pass or needs revision. It’s confusing since the mailbox task doesn’t have an ID. I think I need to decide if I can use the evaluator-verdict on the completed task or if a worker-complete is better.**Deciding on submission details**
+
+I see that my role typically calls for a worker-complete for most tasks, but since I'm providing a review verdict here, I should use the evaluator-verdict. I need to craft a summary, ideally quoting the poem verbatim in the mailbox message body since that's what the user wants. I could say something like, “Accepted: ‘Dawn lifts the quiet page; ink wakes like birds, and the small heart of the run keeps singing.’” It’s essential to include the quote in the summary to meet the user's requirements.

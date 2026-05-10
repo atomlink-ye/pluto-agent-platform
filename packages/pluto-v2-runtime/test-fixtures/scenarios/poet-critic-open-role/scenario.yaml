@@ -1,0 +1,57 @@
+runId: run-poet-critic-open-role
+scenarioRef: scenario/poet-critic-open-role
+runProfileRef: paseo-agentic-mock
+actors:
+  manager:
+    kind: manager
+  lead:
+    kind: role
+    role: lead
+  poet:
+    kind: role
+    role: poet
+  critic:
+    kind: role
+    role: critic
+declaredActors:
+  - manager
+  - lead
+  - poet
+  - critic
+policy:
+  append_mailbox_message:
+    - kind: manager
+    - kind: role
+      role: lead
+    - kind: role
+      role: poet
+    - kind: role
+      role: critic
+  create_task:
+    - kind: manager
+    - kind: role
+      role: lead
+  change_task_state:
+    - kind: manager
+    - kind: role
+      role: lead
+    - kind: role
+      role: poet
+    - kind: role
+      role: critic
+  publish_artifact:
+    - kind: manager
+    - kind: role
+      role: lead
+    - kind: role
+      role: poet
+  complete_run:
+    - kind: manager
+orchestration:
+  mode: agentic_tool
+  maxTurns: 12
+  maxParseFailuresPerTurn: 2
+  maxKernelRejections: 2
+  maxNoProgressTurns: 3
+userTask: Have the poet draft a short poem, route the critic's review back through the lead, and close only after the accepted poem is cited verbatim.
+playbookRef: playbook.md

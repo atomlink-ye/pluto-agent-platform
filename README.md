@@ -67,6 +67,9 @@ Composite verbs collapse common multi-step protocol patterns:
 - `pluto-tool --actor role:generator worker-complete --task-id=<id> --summary="..."` — worker → completed + completion mailbox to lead.
 - `pluto-tool --actor role:evaluator evaluator-verdict --task-id=<id> --verdict=pass --summary="..."` — evaluator → optional task close + final/task mailbox to lead.
 - `pluto-tool --actor role:lead final-reconciliation --completed-tasks=... --cited-messages=... --summary="..."` — lead → `complete_run` with structured citations.
+- `pluto-tool --actor role:poet worker-complete --task-id=<id> --summary="Drafted the accepted poem."` — custom role → the same worker close-out path when authored policy allows it.
+
+Open custom roles are supported in v2 when the role string matches the authored format and the spec's policy authorizes that role for the needed intents. `lead` and `manager` remain required for `agentic_tool` runs, and duplicate role identities that collapse to the same `actorKey` fail fast at load.
 
 ## Validation Surface
 

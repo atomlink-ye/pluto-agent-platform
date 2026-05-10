@@ -35,6 +35,25 @@ Pluto `main` accepts one authored v2 spec, runs it through the v2 runtime, and e
 
 Live `agentic_tool` smoke captures also retain `events.jsonl`, `usage-summary.json`, `final-report.md`, and the authored-spec/playbook audit files in the run directory.
 
+## Open-Role MVP (T14)
+
+T14 ships:
+
+- open custom non-lead roles via validated `ActorRole` strings
+- required literal `lead` and `manager` actors for `agentic_tool`
+- authored policy as the single authorization source-of-truth
+- runtime wiring that resolves custom roles through load, prompt slicing, tokens, and route enforcement
+- fail-fast duplicate `actorKey` detection for one-actor-per-role safety
+- shared Fake and Paseo adapter contract coverage
+
+Deferred to T15+:
+
+- `actor:<id>` identity and multi-same-role workers in one run
+- lead-profile generalization beyond the literal `lead` actor
+- a user-authored capability or policy DSL
+- actor-id-based playbook slicing
+- new composite verbs beyond `worker-complete`, `evaluator-verdict`, and `final-reconciliation`
+
 ## Acceptance Shape
 
 A run is acceptable when:

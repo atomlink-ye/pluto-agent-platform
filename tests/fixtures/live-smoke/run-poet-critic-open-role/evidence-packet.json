@@ -1,0 +1,402 @@
+{
+  "schemaVersion": "1.0",
+  "kind": "evidence_packet",
+  "runId": "run-poet-critic-open-role",
+  "status": "succeeded",
+  "summary": "{\"completedTasks\":[\"6f3970f6-9407-4894-b04c-57efcdf4b5b7\",\"3b2783e1-eb8f-4319-841a-ac6c3cf7966b\",\"70ab9c44-22f8-4459-a43e-b47857509b4c\"],\"citedMessages\":[\"3\",\"10\",\"12\"],\"citedArtifactRefs\":[],\"unresolvedIssues\":[],\"summary\":\"Accepted poem: \\\"Dawn lifts the quiet page; ink wakes like birds, and the small heart of the run keeps singing.\\\"\",\"audit\":{\"status\":\"pass\",\"failures\":[]}}",
+  "initiatingActor": {
+    "kind": "role",
+    "role": "lead"
+  },
+  "startedAt": "2026-05-10T15:31:15.994Z",
+  "completedAt": "2026-05-10T15:36:44.508Z",
+  "generatedAt": "2026-05-10T15:36:44.508Z",
+  "citations": [
+    {
+      "eventId": "0b8b840f-d340-45b0-a5f3-33315ca958b2",
+      "kind": "run_started",
+      "text": "Run started.",
+      "observedAt": "2026-05-10T15:31:16.003Z"
+    },
+    {
+      "eventId": "e3255501-1f08-47ee-853a-1e8a3175fd54",
+      "kind": "run_completed",
+      "text": "Run completed.",
+      "observedAt": "2026-05-10T15:36:44.508Z"
+    }
+  ],
+  "tasks": {
+    "6f3970f6-9407-4894-b04c-57efcdf4b5b7": {
+      "title": "Draft a short poem",
+      "ownerActor": {
+        "kind": "role",
+        "role": "poet"
+      },
+      "state": "completed",
+      "dependsOn": [],
+      "history": [
+        {
+          "from": "queued",
+          "to": "completed",
+          "eventId": "2e0595d3-b019-4b9d-84c4-8d9e712ee897"
+        }
+      ]
+    },
+    "3b2783e1-eb8f-4319-841a-ac6c3cf7966b": {
+      "title": "Review the poet's draft",
+      "ownerActor": {
+        "kind": "role",
+        "role": "critic"
+      },
+      "state": "completed",
+      "dependsOn": [],
+      "history": [
+        {
+          "from": "queued",
+          "to": "completed",
+          "eventId": "3a2424e0-9cc7-492d-8a5e-4d7acf25775c"
+        }
+      ]
+    },
+    "70ab9c44-22f8-4459-a43e-b47857509b4c": {
+      "title": "Publish final poem verbatim",
+      "ownerActor": {
+        "kind": "role",
+        "role": "poet"
+      },
+      "state": "completed",
+      "dependsOn": [],
+      "history": [
+        {
+          "from": "queued",
+          "to": "completed",
+          "eventId": "2afa13ad-56e3-48e5-a455-7a1fd3ab4575"
+        }
+      ]
+    }
+  },
+  "mailboxMessages": [
+    {
+      "messageId": "1257c1dd-74b0-4163-b1a0-942ef48162d8",
+      "fromActor": {
+        "kind": "role",
+        "role": "poet"
+      },
+      "toActor": {
+        "kind": "role",
+        "role": "lead"
+      },
+      "kind": "completion",
+      "body": "{\"summary\":\"Dawn lifts the quiet page; ink wakes like birds, and the small heart of the run keeps singing.\",\"taskId\":\"6f3970f6-9407-4894-b04c-57efcdf4b5b7\",\"artifacts\":[]}",
+      "sequence": 3
+    },
+    {
+      "messageId": "bd20309c-c7d9-473d-9ddb-ced00500fc86",
+      "fromActor": {
+        "kind": "role",
+        "role": "critic"
+      },
+      "toActor": {
+        "kind": "role",
+        "role": "lead"
+      },
+      "kind": "task",
+      "body": "{\"summary\":\"No poem was published or cited verbatim, so please attach the final short poem and route it back through the lead.\",\"taskId\":\"3b2783e1-eb8f-4319-841a-ac6c3cf7966b\",\"verdict\":\"needs-revision\"}",
+      "sequence": 5
+    },
+    {
+      "messageId": "b217a2fe-4b66-4bdc-9694-df4ca13e7b42",
+      "fromActor": {
+        "kind": "role",
+        "role": "critic"
+      },
+      "toActor": {
+        "kind": "role",
+        "role": "lead"
+      },
+      "kind": "completion",
+      "body": "{\"summary\":\"Sent a needs-revision verdict because the final poem was not published or cited verbatim.\",\"taskId\":\"3b2783e1-eb8f-4319-841a-ac6c3cf7966b\",\"artifacts\":[]}",
+      "sequence": 7
+    },
+    {
+      "messageId": "20b67749-df15-493c-95d5-3a62ba348a2f",
+      "fromActor": {
+        "kind": "role",
+        "role": "poet"
+      },
+      "toActor": {
+        "kind": "role",
+        "role": "lead"
+      },
+      "kind": "completion",
+      "body": "{\"summary\":\"Dawn lifts the quiet page; ink wakes like birds, and the small heart of the run keeps singing.\",\"taskId\":\"70ab9c44-22f8-4459-a43e-b47857509b4c\",\"artifacts\":[]}",
+      "sequence": 10
+    },
+    {
+      "messageId": "803f078b-10c9-4450-bcdd-2a96a2b3ee88",
+      "fromActor": {
+        "kind": "role",
+        "role": "lead"
+      },
+      "toActor": {
+        "kind": "role",
+        "role": "critic"
+      },
+      "kind": "task",
+      "body": "Please review the published poem verbatim:\\n\\nDawn lifts the quiet page; ink wakes like birds, and the small heart of the run keeps singing.",
+      "sequence": 11
+    },
+    {
+      "messageId": "65c02348-2d93-4cc5-8aea-507a49cc6198",
+      "fromActor": {
+        "kind": "role",
+        "role": "critic"
+      },
+      "toActor": {
+        "kind": "role",
+        "role": "lead"
+      },
+      "kind": "final",
+      "body": "{\"summary\":\"Accepted: \\\"Dawn lifts the quiet page; ink wakes like birds, and the small heart of the run keeps singing.\\\"\",\"taskId\":\"3b2783e1-eb8f-4319-841a-ac6c3cf7966b\",\"verdict\":\"pass\"}",
+      "sequence": 12
+    }
+  ],
+  "artifacts": [],
+  "runtimeDiagnostics": {
+    "bridgeUnavailable": [],
+    "taskCloseoutRejected": [],
+    "waitTraces": [
+      {
+        "kind": "wait_armed",
+        "actor": "role:lead",
+        "fromSequence": 1,
+        "armedAt": "2026-05-10T15:31:40.709Z"
+      },
+      {
+        "kind": "wait_cancelled",
+        "actor": "role:lead",
+        "reason": "client_idle_disconnect"
+      },
+      {
+        "kind": "wait_armed",
+        "actor": "role:lead",
+        "fromSequence": 1,
+        "armedAt": "2026-05-10T15:31:40.734Z"
+      },
+      {
+        "kind": "wait_cancelled",
+        "actor": "role:lead",
+        "reason": "client_idle_disconnect"
+      },
+      {
+        "kind": "wait_armed",
+        "actor": "role:lead",
+        "fromSequence": 1,
+        "armedAt": "2026-05-10T15:31:40.759Z"
+      },
+      {
+        "kind": "wait_cancelled",
+        "actor": "role:lead",
+        "reason": "client_idle_disconnect"
+      },
+      {
+        "kind": "wait_armed",
+        "actor": "role:lead",
+        "fromSequence": 1,
+        "armedAt": "2026-05-10T15:31:40.784Z"
+      },
+      {
+        "kind": "wait_cancelled",
+        "actor": "role:lead",
+        "reason": "client_idle_disconnect"
+      },
+      {
+        "kind": "wait_armed",
+        "actor": "role:lead",
+        "fromSequence": 1,
+        "armedAt": "2026-05-10T15:31:40.809Z"
+      },
+      {
+        "kind": "wait_cancelled",
+        "actor": "role:lead",
+        "reason": "client_idle_disconnect"
+      },
+      {
+        "kind": "wait_armed",
+        "actor": "role:poet",
+        "fromSequence": 3,
+        "armedAt": "2026-05-10T15:32:15.172Z"
+      },
+      {
+        "kind": "wait_cancelled",
+        "actor": "role:poet",
+        "reason": "client_idle_disconnect"
+      },
+      {
+        "kind": "wait_armed",
+        "actor": "role:poet",
+        "fromSequence": 3,
+        "armedAt": "2026-05-10T15:32:15.197Z"
+      },
+      {
+        "kind": "wait_cancelled",
+        "actor": "role:poet",
+        "reason": "client_idle_disconnect"
+      },
+      {
+        "kind": "wait_armed",
+        "actor": "role:poet",
+        "fromSequence": 3,
+        "armedAt": "2026-05-10T15:32:15.223Z"
+      },
+      {
+        "kind": "wait_cancelled",
+        "actor": "role:poet",
+        "reason": "client_idle_disconnect"
+      },
+      {
+        "kind": "wait_armed",
+        "actor": "role:poet",
+        "fromSequence": 3,
+        "armedAt": "2026-05-10T15:32:15.249Z"
+      },
+      {
+        "kind": "wait_cancelled",
+        "actor": "role:poet",
+        "reason": "client_idle_disconnect"
+      },
+      {
+        "kind": "wait_armed",
+        "actor": "role:poet",
+        "fromSequence": 3,
+        "armedAt": "2026-05-10T15:32:15.275Z"
+      },
+      {
+        "kind": "wait_cancelled",
+        "actor": "role:poet",
+        "reason": "client_idle_disconnect"
+      },
+      {
+        "kind": "wait_armed",
+        "actor": "role:lead",
+        "fromSequence": 4,
+        "armedAt": "2026-05-10T15:32:45.076Z"
+      },
+      {
+        "kind": "wait_cancelled",
+        "actor": "role:lead",
+        "reason": "client_idle_disconnect"
+      },
+      {
+        "kind": "wait_armed",
+        "actor": "role:critic",
+        "fromSequence": 5,
+        "armedAt": "2026-05-10T15:33:39.837Z"
+      },
+      {
+        "kind": "wait_cancelled",
+        "actor": "role:critic",
+        "reason": "client_idle_disconnect"
+      },
+      {
+        "kind": "wait_armed",
+        "actor": "role:critic",
+        "fromSequence": 5,
+        "armedAt": "2026-05-10T15:33:39.873Z"
+      },
+      {
+        "kind": "wait_cancelled",
+        "actor": "role:critic",
+        "reason": "client_idle_disconnect"
+      },
+      {
+        "kind": "wait_armed",
+        "actor": "role:critic",
+        "fromSequence": 5,
+        "armedAt": "2026-05-10T15:33:39.899Z"
+      },
+      {
+        "kind": "wait_cancelled",
+        "actor": "role:critic",
+        "reason": "client_idle_disconnect"
+      },
+      {
+        "kind": "wait_armed",
+        "actor": "role:critic",
+        "fromSequence": 5,
+        "armedAt": "2026-05-10T15:33:39.924Z"
+      },
+      {
+        "kind": "wait_cancelled",
+        "actor": "role:critic",
+        "reason": "client_idle_disconnect"
+      },
+      {
+        "kind": "wait_armed",
+        "actor": "role:critic",
+        "fromSequence": 5,
+        "armedAt": "2026-05-10T15:33:39.950Z"
+      },
+      {
+        "kind": "wait_cancelled",
+        "actor": "role:critic",
+        "reason": "client_idle_disconnect"
+      },
+      {
+        "kind": "wait_armed",
+        "actor": "role:critic",
+        "fromSequence": 7,
+        "armedAt": "2026-05-10T15:33:59.828Z"
+      },
+      {
+        "kind": "wait_cancelled",
+        "actor": "role:critic",
+        "reason": "client_idle_disconnect"
+      },
+      {
+        "kind": "wait_armed",
+        "actor": "role:lead",
+        "fromSequence": 8,
+        "armedAt": "2026-05-10T15:34:37.799Z"
+      },
+      {
+        "kind": "wait_cancelled",
+        "actor": "role:lead",
+        "reason": "client_idle_disconnect"
+      },
+      {
+        "kind": "wait_armed",
+        "actor": "role:poet",
+        "fromSequence": 10,
+        "armedAt": "2026-05-10T15:35:13.234Z"
+      },
+      {
+        "kind": "wait_cancelled",
+        "actor": "role:poet",
+        "reason": "client_idle_disconnect"
+      },
+      {
+        "kind": "wait_armed",
+        "actor": "role:lead",
+        "fromSequence": 11,
+        "armedAt": "2026-05-10T15:35:51.926Z"
+      },
+      {
+        "kind": "wait_cancelled",
+        "actor": "role:lead",
+        "reason": "client_idle_disconnect"
+      },
+      {
+        "kind": "wait_armed",
+        "actor": "role:critic",
+        "fromSequence": 12,
+        "armedAt": "2026-05-10T15:36:30.185Z"
+      },
+      {
+        "kind": "wait_cancelled",
+        "actor": "role:critic",
+        "reason": "client_idle_disconnect"
+      }
+    ]
+  }
+}

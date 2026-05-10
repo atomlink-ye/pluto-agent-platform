@@ -2,12 +2,17 @@ import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
+import { actorAuthorizedForIntent, compile, initialState } from '@pluto/v2-core';
 import { describe, expect, it } from 'vitest';
 
 import { loadAuthoredSpec } from '../../src/index.js';
 import { PlaybookResolutionError } from '../../src/loader/playbook-resolver.js';
 
 const FIXTURE_PATH = new URL('../../test-fixtures/scenarios/hello-team/scenario.yaml', import.meta.url).pathname;
+const OPEN_ROLE_FIXTURE_PATH = new URL(
+  '../../test-fixtures/scenarios/poet-critic-open-role/scenario.yaml',
+  import.meta.url,
+).pathname;
 
 describe('loadAuthoredSpec', () => {
   it('loads the hello-team fixture', () => {
@@ -15,6 +20,89 @@ describe('loadAuthoredSpec', () => {
 
     expect(authored.fakeScript).toHaveLength(5);
     expect(authored.declaredActors).toContain('manager');
+  });
+
+  it('loads, compiles, and authorizes the poet-critic open-role fixture', () => {
+    const authored = loadAuthoredSpec(OPEN_ROLE_FIXTURE_PATH);
+    const teamContext = compile({
+      ...authored,
+      orchestration: authored.orchestration == null
+        ? authored.orchestration
+        : {
+            ...authored.orchestration,
+            mode: authored.orchestration.mode === 'agentic_tool' ? 'agentic' : authored.orchestration.mode,
+          },
+    });
+    const state = initialState({
+      ...teamContext,
+      initialTasks: [
+        {
+          taskId: 'task-poet',
+          title: 'Draft the poem',
+          ownerActor: { kind: 'role', role: 'poet' },
+          dependsOn: [],
+        },
+        {
+          taskId: 'task-critic',
+          title: 'Review the poem',
+          ownerActor: { kind: 'role', role: 'critic' },
+          dependsOn: ['task-poet'],
+        },
+      ],
+    });
+
+    expect(teamContext.declaredActors).toContainEqual({ kind: 'role', role: 'poet' });
+    expect(teamContext.declaredActors).toContainEqual({ kind: 'role', role: 'critic' });
+    expect(teamContext.policy.append_mailbox_message).toContainEqual({ kind: 'role', role: 'poet' });
+    expect(teamContext.policy.append_mailbox_message).toContainEqual({ kind: 'role', role: 'critic' });
+    expect(teamContext.policy.change_task_state).toContainEqual({ kind: 'role', role: 'poet' });
+    expect(teamContext.policy.change_task_state).toContainEqual({ kind: 'role', role: 'critic' });
+
+    expect(
+      actorAuthorizedForIntent(state, {
+        requestId: '11111111-1111-4111-8111-111111111111',
+        runId: teamContext.runId,
+        actor: { kind: 'role', role: 'poet' },
+        intent: 'change_task_state',
+        payload: {
+          taskId: 'task-poet',
+          to: 'completed',
+        },
+        idempotencyKey: null,
+        clientTimestamp: '2026-05-10T00:00:00.000Z',
+        schemaVersion: '1.0',
+      }),
+    ).toBe(true);
+    expect(
+      actorAuthorizedForIntent(state, {
+        requestId: '22222222-2222-4222-8222-222222222222',
+        runId: teamContext.runId,
+        actor: { kind: 'role', role: 'critic' },
+        intent: 'change_task_state',
+        payload: {
+          taskId: 'task-critic',
+          to: 'completed',
+        },
+        idempotencyKey: null,
+        clientTimestamp: '2026-05-10T00:00:00.000Z',
+        schemaVersion: '1.0',
+      }),
+    ).toBe(true);
+    expect(
+      actorAuthorizedForIntent(state, {
+        requestId: '33333333-3333-4333-8333-333333333333',
+        runId: teamContext.runId,
+        actor: { kind: 'role', role: 'poet' },
+        intent: 'complete_run',
+        payload: {
+          status: 'succeeded',
+          summary: 'done',
+        },
+        idempotencyKey: null,
+        clientTimestamp: '2026-05-10T00:00:00.000Z',
+        schemaVersion: '1.0',
+      }),
+    ).toBe(false);
   });
 
   it('rejects multi-document yaml', () => {

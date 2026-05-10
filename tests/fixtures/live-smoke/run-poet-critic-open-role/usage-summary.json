@@ -1,0 +1,241 @@
+{
+  "runId": "run-poet-critic-open-role",
+  "scenarioRef": "scenario/poet-critic-open-role",
+  "runProfileRef": "paseo-agentic-mock",
+  "status": "succeeded",
+  "finalSummary": "{\"completedTasks\":[\"6f3970f6-9407-4894-b04c-57efcdf4b5b7\",\"3b2783e1-eb8f-4319-841a-ac6c3cf7966b\",\"70ab9c44-22f8-4459-a43e-b47857509b4c\"],\"citedMessages\":[\"3\",\"10\",\"12\"],\"citedArtifactRefs\":[],\"unresolvedIssues\":[],\"summary\":\"Accepted poem: \\\"Dawn lifts the quiet page; ink wakes like birds, and the small heart of the run keeps singing.\\\"\",\"audit\":{\"status\":\"pass\",\"failures\":[]}}",
+  "totalTurns": 10,
+  "totalInputTokens": null,
+  "totalOutputTokens": null,
+  "totalTokens": null,
+  "totalCostUsd": null,
+  "usageStatus": "unavailable",
+  "reportedBy": "paseo.usageEstimate",
+  "estimated": false,
+  "byActor": {
+    "role:lead": {
+      "turns": 5,
+      "inputTokens": null,
+      "outputTokens": null,
+      "totalTokens": null,
+      "costUsd": null,
+      "provider": "opencode",
+      "model": "openai/gpt-5.4-mini",
+      "mode": "build",
+      "thinking": null
+    },
+    "role:poet": {
+      "turns": 2,
+      "inputTokens": null,
+      "outputTokens": null,
+      "totalTokens": null,
+      "costUsd": null,
+      "provider": "opencode",
+      "model": "openai/gpt-5.4-mini",
+      "mode": "build",
+      "thinking": null
+    },
+    "role:critic": {
+      "turns": 3,
+      "inputTokens": null,
+      "outputTokens": null,
+      "totalTokens": null,
+      "costUsd": null,
+      "provider": "opencode",
+      "model": "openai/gpt-5.4-mini",
+      "mode": "build",
+      "thinking": null
+    }
+  },
+  "perTurn": [
+    {
+      "turnIndex": 0,
+      "actor": {
+        "kind": "role",
+        "role": "lead"
+      },
+      "actorKey": "role:lead",
+      "provider": "opencode",
+      "model": "openai/gpt-5.4-mini",
+      "mode": "build",
+      "thinking": null,
+      "inputTokens": null,
+      "outputTokens": null,
+      "totalTokens": null,
+      "costUsd": null,
+      "waitExitCode": 0
+    },
+    {
+      "turnIndex": 1,
+      "actor": {
+        "kind": "role",
+        "role": "poet"
+      },
+      "actorKey": "role:poet",
+      "provider": "opencode",
+      "model": "openai/gpt-5.4-mini",
+      "mode": "build",
+      "thinking": null,
+      "inputTokens": null,
+      "outputTokens": null,
+      "totalTokens": null,
+      "costUsd": null,
+      "waitExitCode": 0
+    },
+    {
+      "turnIndex": 2,
+      "actor": {
+        "kind": "role",
+        "role": "lead"
+      },
+      "actorKey": "role:lead",
+      "provider": "opencode",
+      "model": "openai/gpt-5.4-mini",
+      "mode": "build",
+      "thinking": null,
+      "inputTokens": null,
+      "outputTokens": null,
+      "totalTokens": null,
+      "costUsd": null,
+      "waitExitCode": 0
+    },
+    {
+      "turnIndex": 3,
+      "actor": {
+        "kind": "role",
+        "role": "critic"
+      },
+      "actorKey": "role:critic",
+      "provider": "opencode",
+      "model": "openai/gpt-5.4-mini",
+      "mode": "build",
+      "thinking": null,
+      "inputTokens": null,
+      "outputTokens": null,
+      "totalTokens": null,
+      "costUsd": null,
+      "waitExitCode": 0
+    },
+    {
+      "turnIndex": 4,
+      "actor": {
+        "kind": "role",
+        "role": "critic"
+      },
+      "actorKey": "role:critic",
+      "provider": "opencode",
+      "model": "openai/gpt-5.4-mini",
+      "mode": "build",
+      "thinking": null,
+      "inputTokens": null,
+      "outputTokens": null,
+      "totalTokens": null,
+      "costUsd": null,
+      "waitExitCode": 0
+    },
+    {
+      "turnIndex": 5,
+      "actor": {
+        "kind": "role",
+        "role": "lead"
+      },
+      "actorKey": "role:lead",
+      "provider": "opencode",
+      "model": "openai/gpt-5.4-mini",
+      "mode": "build",
+      "thinking": null,
+      "inputTokens": null,
+      "outputTokens": null,
+      "totalTokens": null,
+      "costUsd": null,
+      "waitExitCode": 0
+    },
+    {
+      "turnIndex": 6,
+      "actor": {
+        "kind": "role",
+        "role": "poet"
+      },
+      "actorKey": "role:poet",
+      "provider": "opencode",
+      "model": "openai/gpt-5.4-mini",
+      "mode": "build",
+      "thinking": null,
+      "inputTokens": null,
+      "outputTokens": null,
+      "totalTokens": null,
+      "costUsd": null,
+      "waitExitCode": 0
+    },
+    {
+      "turnIndex": 7,
+      "actor": {
+        "kind": "role",
+        "role": "lead"
+      },
+      "actorKey": "role:lead",
+      "provider": "opencode",
+      "model": "openai/gpt-5.4-mini",
+      "mode": "build",
+      "thinking": null,
+      "inputTokens": null,
+      "outputTokens": null,
+      "totalTokens": null,
+      "costUsd": null,
+      "waitExitCode": 0
+    },
+    {
+      "turnIndex": 8,
+      "actor": {
+        "kind": "role",
+        "role": "critic"
+      },
+      "actorKey": "role:critic",
+      "provider": "opencode",
+      "model": "openai/gpt-5.4-mini",
+      "mode": "build",
+      "thinking": null,
+      "inputTokens": null,
+      "outputTokens": null,
+      "totalTokens": null,
+      "costUsd": null,
+      "waitExitCode": 0
+    },
+    {
+      "turnIndex": 9,
+      "actor": {
+        "kind": "role",
+        "role": "lead"
+      },
+      "actorKey": "role:lead",
+      "provider": "opencode",
+      "model": "openai/gpt-5.4-mini",
+      "mode": "build",
+      "thinking": null,
+      "inputTokens": null,
+      "outputTokens": null,
+      "totalTokens": null,
+      "costUsd": null,
+      "waitExitCode": 0
+    }
+  ],
+  "byModel": {
+    "opencode:openai/gpt-5.4-mini": {
+      "provider": "opencode",
+      "model": "openai/gpt-5.4-mini",
+      "mode": "build",
+      "thinking": null,
+      "turns": 10,
+      "inputTokens": null,
+      "outputTokens": null,
+      "totalTokens": null,
+      "costUsd": null,
+      "actors": [
+        "role:lead",
+        "role:poet",
+        "role:critic"
+      ]
+    }
+  },
+  "evidencePacketPath": "tests/fixtures/live-smoke/run-poet-critic-open-role/evidence-packet.json"
+}

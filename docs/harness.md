@@ -32,6 +32,8 @@ pnpm pluto:runs audit <runId> [--run-dir=<path>] [--format=json]
 
 `agentic_tool` runs keep the kernel in-process and hand each actor the stable Pluto actor API via a run-level CLI binary.
 
+T14 opens `ActorRole` to validated authored strings (`^[a-z][a-z0-9_-]*$`) while keeping `lead` and `manager` as required system roles for `agentic_tool`. Authored policy is the single runtime authorization source-of-truth, so custom roles resolve end-to-end through load, prompt slicing, token binding, and route enforcement. Because role actors still key as `role:<role>`, duplicate declarations that collapse to the same `actorKey` fail fast at load.
+
 1. `runPaseo()` loads the authored spec and starts one Pluto control server for the lifetime of the run.
 2. The runtime materializes a single run-level binary at `<runDir>/bin/pluto-tool` and one per-actor wrapper that forwards to it; the wrapper's directory is on the actor's `PATH`.
 3. The runtime issues a per-actor bearer token; the wrapper carries it via stored handoff metadata. Server-side validation requires every mutating call to present `Pluto-Run-Actor: <actor>` AND a bearer whose bound actor matches; cross-actor reuse fails closed with `403 actor_mismatch`.
@@ -72,6 +74,8 @@ CLI surface (every mutating command requires `--actor <key>`):
 - `pluto-tool --actor <key> final-reconciliation --completed-tasks=<id>... --cited-messages=<id>... --summary=<text> [--cited-artifacts=<ref>...] [--unresolved-issues=<text>...]`
 
 Wait lifecycle: mutating commands return a `turnDisposition` and auto-wait by default when the disposition is `waiting`. Pass `--no-wait` to opt out, or `--wait-timeout-ms=<ms>` (or env `PLUTO_WAIT_TIMEOUT_MS`) to override. Do not poll with `read-state` between same-actor mutations — the runtime tracks `ActorTurnState` and surfaces driver traces (`turn_state_transition`, `wait_silent_rearm`).
+
+Custom roles use the same CLI surface as canonical roles. The difference is structural authorization: the authored policy decides whether a role can create tasks, change task state, publish artifacts, send mailbox messages, or use the evaluator-style review close-out path.
 
 `send-mailbox` is the CLI wrapper for the `append-mailbox-message` API tool. The CLI also exposes `read-artifact` and `read-transcript` for targeted evidence lookup.
 

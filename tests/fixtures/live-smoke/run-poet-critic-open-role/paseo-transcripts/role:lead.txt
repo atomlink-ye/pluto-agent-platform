@@ -1,0 +1,232 @@
+[User] You are the lead actor for a Pluto v2 tool-driven run.
+
+## Role anchor
+
+You are the live lead actor for run run-poet-critic-open-role. Drive this run yourself by calling Pluto tool `/workspace/.worktrees/v2-open-role-mvp-s5/integration/.pluto/runs/run-poet-critic-open-role/bin/pluto-tool` from your shell with `--actor role:lead`.
+The actor-local shortcut `/workspace/.worktrees/v2-open-role-mvp-s5/integration/.pluto/runs/run-poet-critic-open-role/agents/role:lead/pluto-tool` still works and forwards to the same run-level binary.
+Do NOT use external control planes (for example `paseo send`, `daytona exec`, or `opencode-orchestrator`) to pilot another actor for this run.
+There is no other actor; you are the actor.
+
+## Craft fidelity (lead-only)
+
+As lead, you orchestrate craft - you never produce craft.
+Sub-actors compose poems, write code, design things, evaluate
+work. You delegate, listen, route, and close.
+
+When you complete the run, your `pluto_complete_run` summary
+must quote the delegated actor's final accepted output VERBATIM
+in any place where you reference it. Do not rewrite, paraphrase,
+improve, or "polish" sub-actor output - your job is to deliver
+what the team produced, not to rewrite it.
+
+**Never delegate understanding.** You stay responsible for
+what success looks like and whether the run is meeting it.
+The PromptView is a snapshot — verify it via tool use
+(read / grep / bash / glob) when the situation is non-trivial.
+
+User task:
+Have the poet draft a short poem, route the critic's review back through the lead, and close only after the accepted poem is cited verbatim.
+
+Available Pluto tools:
+- pluto_create_task: Create a Pluto task in the active run.
+- pluto_change_task_state: Change the state of an existing Pluto task.
+- pluto_append_mailbox_message: Append a mailbox message for another Pluto actor.
+- pluto_publish_artifact: Publish an artifact for the active Pluto run.
+- pluto_complete_run: Mark the active Pluto run as completed.
+- pluto_read_state: Read the current PromptView for the active actor.
+- pluto_read_artifact: Read an artifact sidecar by artifact id.
+- pluto_read_transcript: Read a transcript sidecar by actor key.
+- pluto_wait_for_event: Suspend until a new actor-visible Pluto event arrives.
+
+## How to call Pluto tools
+
+Invoke the Pluto tool by running `/workspace/.worktrees/v2-open-role-mvp-s5/integration/.pluto/runs/run-poet-critic-open-role/bin/pluto-tool` from your bash shell.
+Always pass `--actor role:lead` explicitly.
+The per-actor wrapper `/workspace/.worktrees/v2-open-role-mvp-s5/integration/.pluto/runs/run-poet-critic-open-role/agents/role:lead/pluto-tool` is a backward-compat shortcut that forwards to the same run-level binary.
+Both forms already have the run API URL and bearer token in scope.
+
+Examples:
+
+  /workspace/.worktrees/v2-open-role-mvp-s5/integration/.pluto/runs/run-poet-critic-open-role/bin/pluto-tool --actor role:lead create-task --owner=generator --title="Draft haiku v1"
+  /workspace/.worktrees/v2-open-role-mvp-s5/integration/.pluto/runs/run-poet-critic-open-role/bin/pluto-tool --actor role:lead send-mailbox --to=lead --kind=completion --body="Draft attached: ..."
+  /workspace/.worktrees/v2-open-role-mvp-s5/integration/.pluto/runs/run-poet-critic-open-role/bin/pluto-tool --actor role:lead change-task-state --task-id=<id> --to=completed
+  /workspace/.worktrees/v2-open-role-mvp-s5/integration/.pluto/runs/run-poet-critic-open-role/bin/pluto-tool --actor role:lead publish-artifact --kind=final --media-type=text/plain --byte-size=64 --body="..."
+  /workspace/.worktrees/v2-open-role-mvp-s5/integration/.pluto/runs/run-poet-critic-open-role/bin/pluto-tool --actor role:lead final-reconciliation --completed-tasks=<id>[,<id>...] --cited-messages=<id>[,<id>...] --summary="<one-sentence>"
+  /workspace/.worktrees/v2-open-role-mvp-s5/integration/.pluto/runs/run-poet-critic-open-role/bin/pluto-tool --actor role:lead wait --timeout-sec=300
+  /workspace/.worktrees/v2-open-role-mvp-s5/integration/.pluto/runs/run-poet-critic-open-role/bin/pluto-tool --actor role:lead read-state
+  /workspace/.worktrees/v2-open-role-mvp-s5/integration/.pluto/runs/run-poet-critic-open-role/bin/pluto-tool --actor role:lead read-artifact --artifact-id=<id>
+  /workspace/.worktrees/v2-open-role-mvp-s5/integration/.pluto/runs/run-poet-critic-open-role/bin/pluto-tool --actor role:lead read-transcript --actor-key=role:generator
+Legacy wrapper shortcut: /workspace/.worktrees/v2-open-role-mvp-s5/integration/.pluto/runs/run-poet-critic-open-role/agents/role:lead/pluto-tool create-task --owner=generator --title="Draft haiku v1"
+
+Run `/workspace/.worktrees/v2-open-role-mvp-s5/integration/.pluto/runs/run-poet-critic-open-role/bin/pluto-tool --help` or `/workspace/.worktrees/v2-open-role-mvp-s5/integration/.pluto/runs/run-poet-critic-open-role/bin/pluto-tool <subcommand> --help` for
+flag details. Output is JSON by default; pass --format=text for a
+short human summary.
+
+## Canonical composite verb
+
+When the run is ready to terminate, call `/workspace/.worktrees/v2-open-role-mvp-s5/integration/.pluto/runs/run-poet-critic-open-role/bin/pluto-tool --actor role:lead final-reconciliation --completed-tasks=<id>[,<id>...] --cited-messages=<id>[,<id>...] --summary="<one-sentence>" [--cited-artifacts=<ref>...] [--unresolved-issues=<text>...]`.
+This is the canonical lead close-out path and the ONLY way to satisfy the audit gate. Do NOT call `complete-run` directly — the composite verb wraps `complete-run` and writes the structured reconciliation evidence (`<runDir>/evidence/final-reconciliation.json`) that downstream tooling (`pnpm pluto:runs audit`) consumes.
+When you pass `--summary`, it must quote the generator's last accepted completion output VERBATIM in any place where you reference it.
+Do not rewrite, paraphrase, improve, or "polish" that output - copy the generator's completion bullets exactly as written in your mailbox.
+Evaluator verdict mailbox messages may arrive with kind `final` for `pass`, or kind `task` for `needs-revision` and `fail`.
+Always inspect `body.verdict` to determine the outcome. Do not infer evaluator verdict outcome from mailbox `kind` alone.
+
+Turn rule:
+- Read tools are available whenever you need more context.
+- End your turn with EXACTLY ONE mutating Pluto tool call.
+- Mutating commands automatically wait for the next relevant event unless you pass --no-wait.
+- Do not poll with /workspace/.worktrees/v2-open-role-mvp-s5/integration/.pluto/runs/run-poet-critic-open-role/agents/role:lead/pluto-tool read-state between your own mutations; the runtime will resume you when an event for you arrives.
+- Usually that means delegating, publishing a state change, or calling pluto_complete_run when the run is truly finished.
+
+Playbook:
+# Poet Critic Open Role
+
+## lead
+
+Start by assigning the drafting task to the poet.
+After the poet reports back, assign a review task to the critic and wait for the verdict.
+Only close once the critic passes the draft.
+When you summarize the accepted poem, quote it verbatim.
+
+## poet
+
+Write a short poem that satisfies the task.
+If it helps, publish the poem as a small plain-text artifact.
+Report back with `worker-complete` once your task is done.
+
+## critic
+
+Review the poet's draft against the task.
+Use `evaluator-verdict` to send a clear pass or revision verdict.
+If you request changes, explain the missing requirement in one sentence.
+
+## manager
+
+Handle control-plane actions only if the runtime explicitly routes one to you.
+Do not draft or review the poem yourself.
+
+
+PromptView JSON:
+{
+  "run": {
+    "runId": "run-poet-critic-open-role",
+    "scenarioRef": "scenario/poet-critic-open-role",
+    "runProfileRef": "paseo-agentic-mock"
+  },
+  "userTask": "Have the poet draft a short poem, route the critic's review back through the lead, and close only after the accepted poem is cited verbatim.",
+  "forActor": {
+    "kind": "role",
+    "role": "lead"
+  },
+  "playbook": {
+    "ref": "playbook.md",
+    "sha256": "05451216dfca4b2864d1e935a9adae853a76dd6c4dde0806e76ea3ee6f6bdf88"
+  },
+  "budgets": {
+    "turnIndex": 0,
+    "maxTurns": 12,
+    "parseFailuresThisTurn": 0,
+    "maxParseFailuresPerTurn": 0,
+    "kernelRejections": 0,
+    "maxKernelRejections": 2,
+    "noProgressTurns": 0,
+    "maxNoProgressTurns": 3
+  },
+  "tasks": [],
+  "mailbox": [],
+  "artifacts": [],
+  "activeDelegation": null,
+  "lastRejection": null
+}
+Assigning the drafting task to the poet now, then I’ll wait for the report-back and route the critic review through me.The create-task flags differ from the example, so I’m checking the subcommand shape before I reissue the assignment.
+Assigning the draft to the poet actor with the supported task fields now.
+The run-level binary expects runtime env in this shell, so I’m using the actor-local wrapper that already forwards the run context.Assigned the poet task and the run is now waiting on the next event.
+[Thought] **Planning tool usage**
+
+I need to act as the lead and use the Pluto tool. My goal is to create a task for the poet and finish this with exactly one mutating Pluto tool call. Since there hasn’t been a mutation prior, I can start with creating the task.
+
+I think I should clarify the owner as “poet” since the prompt mentions assigning a drafting task. I might want to check the exact subcommands and flags available, but time is tight. Let’s keep it straightforward and use bash for that.
+**Creating a task**
+
+I need to create a task with the owner set as “generator.” The user mentioned “poet,” but the playbook usually associates “poet” with “actor.” It’s possible that the system allows custom roles and that “poet” might work as a role key. I should probably proceed by creating the task, focusing on the title, and assuming there may not be additional content needed. Let’s get started on that!
+**Exploring wrapper script options**
+
+I notice that I might need an environment variable that’s missing from the shell. Maybe I can use a wrapper script with env? The prompt mentioned that the shortcut still works and forwards the same run-level binary, which could include env. I'll check the wrapper help or create a task. If the previous tool call failed due to env, I might need to use the path, and the wrapper could export the necessary environment vars. Let’s create a task using the wrapper.
+[User] [wakeup turn 3]
+new event: mailbox_message_appended from poet
+
+delta:
+{"newTasks":[["6f3970f6-9407-4894-b04c-57efcdf4b5b7","completed","role:poet","Draft a short poem"]],"updatedTasks":[],"newMailbox":[[3,"role:poet","role:lead","completion","{\"summary\":\"Dawn lifts the q...[truncated]"]],"newArtifacts":[],"delegation":null,"budgets":{"turnIndex":2,"maxTurns":12,"parseFailuresThisTurn":0,"maxParseFailuresPerTurn":0,"kernelRejections":0,"maxKernelRejections":2,"noProgressTurns":0,"maxNoProgressTurns":3},"lastRejection":null}
+
+end your turn with one mutating pluto-tool call.
+I’ve got the poet’s completion event; I’m reading the transcript now so I can hand the critic the exact draft and preserve it verbatim later.
+I still need the exact poem text, so I’m reading the current state to recover the full completion mailbox before I hand it to the critic.
+I have the poem. I’m handing the critic a review task now so the verdict comes back through the lead channel, then I’ll close only after that pass.Created the critic review task and the run is now waiting for the verdict event.
+[Thought] **Planning task assignments**
+
+I should think about including a poem in the task. Maybe the task only needs a title, no body? It seems like the critic could read a transcript, so I might need to send a mailbox message to them with the poem. However, it’s possible the critic can review the task directly with access to transcripts. 
+
+I need to ensure the critic's review goes through the lead, likely involving mailbox messages. So first, I'll read the transcript, then create a task for the critic.
+**Analyzing output discrepancies**
+
+I'm noticing that the read-transcript output returned a poet's transcript, but it seems to include some of my internal reasoning too? It likely happened because the transcript has all actor messages, but I really need the actual poem text. The event might have been truncated, showing a message that starts with "Dawn lifts the q…" which could be the poem or its summary. I might have to wait for the next event to get the verbatim poem.**Creating a critic task**
+
+I see that the poet task is completed, but there isn’t a critic yet. I think I need to create a critic task. It could be helpful to ask the poet to include the poem in the mailbox. As a lead, I might be able to read the completion mailbox message through read-state. However, the prompt warns against polling with read-state between my own mutations. I’ll check the read-state now to see if it includes the mailbox message body.
+**Creating a critic task**
+
+I need to create a critic task, and maybe it would be helpful to send the mailbox to the critic. The task should route reviews back through the lead, so the critic can send their verdict. I wonder if the task title should include a summary of the poem. Maybe “Review poet's draft” is appropriate? The critic needs access to the draft, possibly via mailbox or transcript. However, we might be limited to one call per turn.**Creating the critic task**
+
+I’m thinking about whether I can append a mailbox message to the critic in the same mutation, but that seems like a no-go. Since the task might refer to the poet's draft by title, I guess the critic still needs access to the poem. Maybe the critic’s PromptView includes the mailbox when it's active, but probably not. It might be better to create a review task for the critic titled "Review the poet's draft." Let's go ahead and create that task!
+[User] [wakeup turn 6]
+new event: mailbox_message_appended from critic
+
+delta:
+{"newTasks":[["3b2783e1-eb8f-4319-841a-ac6c3cf7966b","completed","role:critic","Review the poet's draft"]],"updatedTasks":[],"newMailbox":[[5,"role:critic","role:lead","task","{\"summary\":\"No poem was publ...[truncated]"],[7,"role:critic","role:lead","completion","{\"summary\":\"Sent a needs-rev...[truncated]"]],"newArtifacts":[],"delegation":null,"budgets":{"turnIndex":5,"maxTurns":12,"parseFailuresThisTurn":0,"maxParseFailuresPerTurn":0,"kernelRejections":0,"maxKernelRejections":2,"noProgressTurns":0,"maxNoProgressTurns":3},"lastRejection":null}
+
+end your turn with one mutating pluto-tool call.
+The critic returned a needs-revision verdict, so I’m reading the lead state to capture the exact requirement before I route it back.
+The critic wants the poem published or cited verbatim, so I’m sending the poet a follow-up task to publish the final text exactly as drafted.Sent the poet a follow-up task to publish the final poem verbatim; I’ll wait for that event, then route it back through the critic and close only after the accepted poem is cited verbatim.
+[Thought] **Inspecting the mailbox state**
+
+I need to continue and inspect the mailbox since it might be full. The instructions say I can end with one mutating call, but I think I can use non-mutating reads first. I should understand the critic's verdict, and it seems I don't need to ask since the event delta shows completion and task messages. I'll check the state or mailbox and possibly use commentary. After that, I can proceed with a mutating call. Let's read the state!
+**Planning review process**
+
+I’m mapping out the review process. First, I need to loop the critic’s review back through the lead after the poet publishes the poem verbatim. I should create a minimal task for the poet titled "Publish final poem verbatim" since the poet's work is already done. Once they complete that, I can create a task for the critic to review. It’s essential to keep these steps clear without crafting extra details from the lead.**Creating task for poet**
+
+I need to create a task for the poet titled "Publish the final poem verbatim." This will wake later for their response. I’m wondering if I should indicate that the specific poem is from mailbox 3. The poet might understand the context, but I’m not sure if they can access the lead mailbox. It may be better to name the task "Publish the previously drafted poem verbatim," allowing the poet to reference their own transcript for clarity. I need to consider the delegation process too.**Considering mailbox approach**
+
+I’m thinking of creating a mailbox message for the poet with the exact poem text and asking them to publish it verbatim. Appending a mailbox message is acceptable since quoting verbatim doesn’t change the content. However, the user wants the critic's review routed back through the lead after the accepted poem is cited verbatim. It might be more effective to send the poem directly to the critic after they receive a task. This way, their response could be informed by the mailbox content.**Considering critic feedback process**
+
+When the critic received the initial task, they may have completed it and sent their verdict. A new mailbox could help them review again, but they might not have an active task anymore. It might be best to create a new task for them to review the published final poem. I think it’s safest to create a task for the poet to publish the exact poem so the critic can later review it accurately. But how will the poet know the text? That’s uncertain; I wonder if we can infer it from their previous work.**Developing publishing strategy**
+
+I think the lead could publish the artifact containing the poem without making changes, essentially citing it as-is. This might allow for creating a task for the critic later. Publishing the artifact could directly address the critic's concerns, but we still need their review after publication. 
+
+I wonder if I can re-task the critic by checking the status, but I can't create a task and publish at the same time. Maybe I should create a task titled "Re-review the published poem" and ensure the critic can see the artifact once it's available.**Considering poem publication steps**
+
+I'm thinking about the process for publishing a poem. First, the poet publishes the poem, then reports on it. Next, I want to create a task for a critic to review it. Once the critic passes, we can reconcile everything. It's important to ensure the poet has access to the poem's text. Sending a message via mailbox might be better than task creation since it could include the exact text, but the poet knows their own work well. There's a lot to weigh here!**Finalizing publication tasks**
+
+I think I've got a solid plan here for the poem publication. First, I'll create a task for the poet titled "Publish final poem verbatim." After the poet completes their work, I want to ensure there's a critique step again afterward. It feels important to keep the process thorough. I also need to remember to include a mutating call at the end to finalize everything. It's all coming together nicely!
+[User] [wakeup turn 8]
+new event: mailbox_message_appended from poet
+
+delta:
+{"newTasks":[["70ab9c44-22f8-4459-a43e-b47857509b4c","completed","role:poet","Publish final poem verbatim"]],"updatedTasks":[],"newMailbox":[[10,"role:poet","role:lead","completion","{\"summary\":\"Dawn lifts the q...[truncated]"]],"newArtifacts":[],"delegation":null,"budgets":{"turnIndex":7,"maxTurns":12,"parseFailuresThisTurn":0,"maxParseFailuresPerTurn":0,"kernelRejections":0,"maxKernelRejections":2,"noProgressTurns":0,"maxNoProgressTurns":3},"lastRejection":null}
+
+end your turn with one mutating pluto-tool call.
+I have the poet’s follow-up event; I’m reading the lead state once to recover the full poem text before I send it back through the critic.
+I have the exact poem text now. I’m checking the mailbox subcommand shape so I can route the verbatim poem back through the critic in one final mutation.The command is named differently in this runtime, so I’m checking the supported mailbox verb and then I’ll use that as my single mutating call.
+Routing the exact poem back through the critic now as a review request, using the verbatim text the poet sent.
+[Thought] **Verifying commands**
+
+I'm realizing that examples show a command for send-mailbox, but the tool list names may include append-mailbox-message as an alias. I need to determine the actual command being used. It could be helpful to check the `--help` documentation for both append-mailbox-message and send-mailbox. I think I should do that now to clarify which command is the right one. Let's proceed!
+**Considering message format**
+
+I'm pondering whether the body should be in JSON or just plain text. It seems like a string would work better for what I need. Maybe I should write something like: “Please review the published poem below: Dawn lifts the quiet page; ink wakes like birds, and the small heart of the run keeps singing.” If I'm sending it to a critic via mailbox with the kind set to “task,” that should be fine. I'll make sure to end with a single mutating call to send the mailbox.
+[User] [wakeup turn 10]
+new event: mailbox_message_appended from critic
+
+delta:
+{"newTasks":[],"updatedTasks":[],"newMailbox":[[11,"role:lead","role:critic","task","Please review the published ...[truncated]"],[12,"role:critic","role:lead","final","{\"summary\":\"Accepted: \\\"Dawn...[truncated]"]],"newArtifacts":[],"delegation":null,"budgets":{"turnIndex":9,"maxTurns":12,"parseFailuresThisTurn":0,"maxParseFailuresPerTurn":0,"kernelRejections":0,"maxKernelRejections":2,"noProgressTurns":0,"maxNoProgressTurns":3},"lastRejection":null}
+
+end your turn with one mutating pluto-tool call.
+The critic passed the poem, and I’m closing the run now with the accepted poem quoted verbatim in the reconciliation summary.Accepted poem: "Dawn lifts the quiet page; ink wakes like birds, and the small heart of the run keeps singing."

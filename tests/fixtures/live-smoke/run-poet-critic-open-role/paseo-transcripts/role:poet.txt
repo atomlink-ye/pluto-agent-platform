@@ -1,0 +1,143 @@
+[User] You are the poet actor for a Pluto v2 tool-driven run.
+
+## Role anchor
+
+You are the live poet actor for run run-poet-critic-open-role. Drive this run yourself by calling Pluto tool `/workspace/.worktrees/v2-open-role-mvp-s5/integration/.pluto/runs/run-poet-critic-open-role/bin/pluto-tool` from your shell with `--actor role:poet`.
+The actor-local shortcut `/workspace/.worktrees/v2-open-role-mvp-s5/integration/.pluto/runs/run-poet-critic-open-role/agents/role:poet/pluto-tool` still works and forwards to the same run-level binary.
+Do NOT use external control planes (for example `paseo send`, `daytona exec`, or `opencode-orchestrator`) to pilot another actor for this run.
+There is no other actor; you are the actor.
+
+Available Pluto tools:
+- pluto_create_task: Create a Pluto task in the active run.
+- pluto_change_task_state: Change the state of an existing Pluto task.
+- pluto_append_mailbox_message: Append a mailbox message for another Pluto actor.
+- pluto_publish_artifact: Publish an artifact for the active Pluto run.
+- pluto_complete_run: Mark the active Pluto run as completed.
+- pluto_read_state: Read the current PromptView for the active actor.
+- pluto_read_artifact: Read an artifact sidecar by artifact id.
+- pluto_read_transcript: Read a transcript sidecar by actor key.
+- pluto_wait_for_event: Suspend until a new actor-visible Pluto event arrives.
+
+## How to call Pluto tools
+
+Invoke the Pluto tool by running `/workspace/.worktrees/v2-open-role-mvp-s5/integration/.pluto/runs/run-poet-critic-open-role/bin/pluto-tool` from your bash shell.
+Always pass `--actor role:poet` explicitly.
+The per-actor wrapper `/workspace/.worktrees/v2-open-role-mvp-s5/integration/.pluto/runs/run-poet-critic-open-role/agents/role:poet/pluto-tool` is a backward-compat shortcut that forwards to the same run-level binary.
+Both forms already have the run API URL and bearer token in scope.
+
+Examples:
+
+  /workspace/.worktrees/v2-open-role-mvp-s5/integration/.pluto/runs/run-poet-critic-open-role/bin/pluto-tool --actor role:poet create-task --owner=generator --title="Draft haiku v1"
+  /workspace/.worktrees/v2-open-role-mvp-s5/integration/.pluto/runs/run-poet-critic-open-role/bin/pluto-tool --actor role:poet send-mailbox --to=lead --kind=completion --body="Draft attached: ..."
+  /workspace/.worktrees/v2-open-role-mvp-s5/integration/.pluto/runs/run-poet-critic-open-role/bin/pluto-tool --actor role:poet change-task-state --task-id=<id> --to=completed
+  /workspace/.worktrees/v2-open-role-mvp-s5/integration/.pluto/runs/run-poet-critic-open-role/bin/pluto-tool --actor role:poet publish-artifact --kind=final --media-type=text/plain --byte-size=64 --body="..."
+  /workspace/.worktrees/v2-open-role-mvp-s5/integration/.pluto/runs/run-poet-critic-open-role/bin/pluto-tool --actor role:poet worker-complete --task-id=<id> --summary="<one-sentence>"
+  /workspace/.worktrees/v2-open-role-mvp-s5/integration/.pluto/runs/run-poet-critic-open-role/bin/pluto-tool --actor role:poet wait --timeout-sec=300
+  /workspace/.worktrees/v2-open-role-mvp-s5/integration/.pluto/runs/run-poet-critic-open-role/bin/pluto-tool --actor role:poet read-state
+  /workspace/.worktrees/v2-open-role-mvp-s5/integration/.pluto/runs/run-poet-critic-open-role/bin/pluto-tool --actor role:poet read-artifact --artifact-id=<id>
+  /workspace/.worktrees/v2-open-role-mvp-s5/integration/.pluto/runs/run-poet-critic-open-role/bin/pluto-tool --actor role:poet read-transcript --actor-key=role:generator
+Legacy wrapper shortcut: /workspace/.worktrees/v2-open-role-mvp-s5/integration/.pluto/runs/run-poet-critic-open-role/agents/role:poet/pluto-tool create-task --owner=generator --title="Draft haiku v1"
+
+Run `/workspace/.worktrees/v2-open-role-mvp-s5/integration/.pluto/runs/run-poet-critic-open-role/bin/pluto-tool --help` or `/workspace/.worktrees/v2-open-role-mvp-s5/integration/.pluto/runs/run-poet-critic-open-role/bin/pluto-tool <subcommand> --help` for
+flag details. Output is JSON by default; pass --format=text for a
+short human summary.
+
+## Canonical composite verb
+
+When you finish your delegated task, call `/workspace/.worktrees/v2-open-role-mvp-s5/integration/.pluto/runs/run-poet-critic-open-role/bin/pluto-tool --actor role:poet worker-complete --task-id=<id> --summary="<one-sentence>" [--artifact=<id>...]`.
+This is the default close-out path for custom non-lead roles. It marks the task completed and sends a structured completion mailbox message to the lead in one coherent step.
+If your authored policy explicitly authorizes evaluator-style review close-out for your role, call `/workspace/.worktrees/v2-open-role-mvp-s5/integration/.pluto/runs/run-poet-critic-open-role/bin/pluto-tool --actor role:poet evaluator-verdict --task-id=<id> --verdict=pass|needs-revision|fail --summary="<one-sentence>"` instead.
+Do not split close-out across separate `change-task-state` and `append-mailbox-message` calls unless the run explicitly requires a non-standard flow.
+
+Turn rule:
+- Read tools are available whenever you need more context.
+- End your turn with EXACTLY ONE mutating Pluto tool call.
+- Mutating commands automatically wait for the next relevant event unless you pass --no-wait.
+- Do not poll with /workspace/.worktrees/v2-open-role-mvp-s5/integration/.pluto/runs/run-poet-critic-open-role/agents/role:poet/pluto-tool read-state between your own mutations; the runtime will resume you when an event for you arrives.
+- Usually that means the composite close-out path for your role: `worker-complete` for most delegated tasks, or `evaluator-verdict` when you are sending a review verdict.
+
+Playbook for poet:
+## poet
+
+Write a short poem that satisfies the task.
+If it helps, publish the poem as a small plain-text artifact.
+Report back with `worker-complete` once your task is done.
+
+PromptView JSON:
+{
+  "run": {
+    "runId": "run-poet-critic-open-role",
+    "scenarioRef": "scenario/poet-critic-open-role",
+    "runProfileRef": "paseo-agentic-mock"
+  },
+  "userTask": null,
+  "forActor": {
+    "kind": "role",
+    "role": "poet"
+  },
+  "playbook": {
+    "ref": "playbook.md",
+    "sha256": "05451216dfca4b2864d1e935a9adae853a76dd6c4dde0806e76ea3ee6f6bdf88"
+  },
+  "budgets": {
+    "turnIndex": 1,
+    "maxTurns": 12,
+    "parseFailuresThisTurn": 0,
+    "maxParseFailuresPerTurn": 0,
+    "kernelRejections": 0,
+    "maxKernelRejections": 2,
+    "noProgressTurns": 0,
+    "maxNoProgressTurns": 3
+  },
+  "tasks": [
+    {
+      "id": "6f3970f6-9407-4894-b04c-57efcdf4b5b7",
+      "title": "Draft a short poem",
+      "ownerActor": {
+        "kind": "role",
+        "role": "poet"
+      },
+      "state": "queued"
+    }
+  ],
+  "mailbox": [],
+  "artifacts": [],
+  "activeDelegation": {
+    "kind": "role",
+    "role": "poet"
+  },
+  "lastRejection": null
+}
+Writing the poem now and closing the task in one Pluto call.
+The Pluto binary needs its run env in this shell, so I’m checking the run wrapper for how it injects those variables.
+I found the actor-local wrapper that injects the run token, so I’m using that to finish the task now.Done.
+[Thought] **Evaluating tool call approach**
+
+I see I need to comply with one mutating tool call at the end. It seems I might create an artifact—maybe optional—then worker-complete. The task asks for a short poem, which I could include in the summary. However, I can only make one mutating call per turn, so I have to be strategic. I’d better publish the artifact and then worker-complete, but I’m realizing that might lead to trouble since I can’t do two mutations in one turn. Let's focus on crafting that short poem in the summary instead.**Creating concise summary**
+
+I should use the bin/pluto-tool with the correct parameters to worker-complete the task. The summary could include a short poem, possibly kept to three lines. I’m thinking it might be best to craft a concise, poem-like sentence. I could use semicolons for clarity, allowing it to flow while still being concise. It seems important to keep the summary to one sentence for clarity and simplicity while including those poem fragments. Let's make it happen!
+**Inspecting environment files**
+
+I’m considering whether we need non-mutating reads through the Read tool, but maybe it's not essential here. Since the task is to write a poem, I might use a shell command to load environment variables from a file. I should search for the env file in the running directory. Using Glob to find a .env file sounds like a good approach, and I’ll need to inspect the contents of the run directory too.
+**Executing script call**
+
+I think I need to call the wrapper script directly from the shell instead of the bin. Using the actor-local shortcut should set the environment correctly. I’ll proceed with the mutating call through the wrapper. It's important to ensure that there's only one mutation during this turn, so I'll keep that in mind. I want to make sure everything is in order before moving forward!
+[User] [wakeup turn 7]
+new event: task_created from lead
+
+delta:
+{"newTasks":[["3b2783e1-eb8f-4319-841a-ac6c3cf7966b","completed","role:critic","Review the poet's draft"],["70ab9c44-22f8-4459-a43e-b47857509b4c","queued","role:poet","Publish final poem verbatim"]],"updatedTasks":[["6f3970f6-9407-4894-b04c-57efcdf4b5b7","completed","role:poet","Draft a short poem"]],"newMailbox":[[3,"role:poet","role:lead","completion","{\"summary\":\"Dawn lifts the q...[truncated]"]],"newArtifacts":[],"delegation":"role:poet","budgets":{"turnIndex":6,"maxTurns":12,"parseFailuresThisTurn":0,"maxParseFailuresPerTurn":0,"kernelRejections":0,"maxKernelRejections":2,"noProgressTurns":0,"maxNoProgressTurns":3},"lastRejection":null}
+
+end your turn with one mutating pluto-tool call.
+I have one shot this turn, so I’m checking the composite close-out flags before I send the final poem.
+Publishing the poem through the required close-out call now.Retrying the close-out with the wrapper’s built-in actor setting.Completed.
+[Thought] **Publishing final poem**
+
+I need to respond as a poet actor and read the current state. The user provided some changes. It looks like I need to make just one call to finalize the task. I'll likely need to publish the final poem verbatim, as it's required. I noticed the content from the draft might not be saved. I have the summary, which may represent the poem. Since it mentions publishing the exact poem, I can include it as the body of my response.**Determining artifact requirement**
+
+I need to figure out if an artifact is necessary. The typical way to finish is by using a worker-complete call with the artifact ID. However, I can only make one mutating call. Since the task requires me to publish the final poem verbatim, maybe I can use publish-artifact as that single call? But I also need to follow the instruction to finalize with worker-complete. So, perhaps I should focus on publishing the artifact now and complete the task later while ensuring that I make only one mutating call.**Clarifying mutating calls**
+
+I need to make one mutating call. I'm thinking I could use worker-complete with an artifact ID from the publish step, but I can’t do that without publishing first. Unless worker-complete can accept a body, but that seems unlikely based on examples. Maybe I can publish the final poem through a mailbox or in the message summary? They mentioned a new task specifically, so including the poem verbatim as part of the summary might work. However, I still feel the task anticipates an artifact.
+**Finalizing task details**
+
+Alright, I need to make one mutating call now, but it seems like I need an artifact ID if I'm using the --artifact option. Since I don't have one at the moment, maybe I can just use the summary only. It looks like I might need task ID 70ab... and I’m wondering if the worker-complete summary should include the poem verbatim. Let's go ahead and figure that out!
