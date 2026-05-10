@@ -141,6 +141,20 @@ function readInjectedApi(spec: PaseoAgentSpec): { url: string; token: string; ac
   return { url, token, actor };
 }
 
+function apiUrlForPath(apiUrl: string, path: string): string {
+  return path.startsWith('/v2/')
+    ? `${apiUrl.replace(/\/v1$/, '')}${path}`
+    : `${apiUrl}${path}`;
+}
+
+function failedAuditFinalReconciliationArgs(summary: string) {
+  return {
+    completedTasks: ['missing-task'],
+    citedMessages: ['999'],
+    summary,
+  };
+}
+
 function isAutoWaitableMutation(toolName: string, body: unknown): body is { turnDisposition: 'waiting' } {
   return toolName !== 'pluto_complete_run'
     && body != null
@@ -179,12 +193,14 @@ function makeAutoWaitClient(script: readonly ToolScriptEntry[], options?: { auto
           return { method: 'POST' as const, path: '/tools/wait-for-event', body: args };
         case 'pluto_complete_run':
           return { method: 'POST' as const, path: '/tools/complete-run', body: args };
+        case 'pluto_final_reconciliation':
+          return { method: 'POST' as const, path: '/v2/composite/final-reconciliation', body: args };
         default:
           throw new Error(`unsupported tool ${toolName}`);
       }
     })();
 
-    const response = await fetch(`${url}${route.path}`, {
+    const response = await fetch(apiUrlForPath(url, route.path), {
       method: route.method,
       headers: {
         authorization: `Bearer ${token}`,
@@ -287,10 +303,7 @@ describe('agentic_tool turn-state tracing', () => {
                   mutation: { turnDisposition: 'waiting' },
                   wait: { outcome: 'event' },
                 });
-                await callTool('pluto_complete_run', {
-                  status: 'succeeded',
-                  summary: 'done',
-                });
+                await callTool('pluto_final_reconciliation', failedAuditFinalReconciliationArgs('done'));
                 return { transcriptText: 'lead complete\n' };
               },
             },
@@ -400,10 +413,7 @@ describe('agentic_tool turn-state tracing', () => {
             {
               actor: LEAD,
               run: async ({ callTool }) => {
-                await callTool('pluto_complete_run', {
-                  status: 'cancelled',
-                  summary: 'wait rearm exhausted',
-                });
+                await callTool('pluto_final_reconciliation', failedAuditFinalReconciliationArgs('wait rearm exhausted'));
                 return { transcriptText: 'lead closed after wait cap\n' };
               },
             },

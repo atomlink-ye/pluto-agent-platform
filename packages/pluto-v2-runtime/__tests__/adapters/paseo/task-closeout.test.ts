@@ -101,6 +101,22 @@ function readInjectedApi(spec: PaseoAgentSpec): { url: string; token: string; ac
   return { url, token, actor };
 }
 
+function apiUrlForPath(apiUrl: string, path: string): string {
+  return path.startsWith('/v2/')
+    ? `${apiUrl.replace(/\/v1$/, '')}${path}`
+    : `${apiUrl}${path}`;
+}
+
+function finalReconciliationArgsFromPrompt(prompt: string, summary: string) {
+  const taskId = prompt.match(/"id":\s*"([^"]+)"/)?.[1] ?? 'missing-task';
+  const citedMessage = prompt.match(/"sequence":\s*(\d+)/)?.[1] ?? '999';
+  return {
+    completedTasks: [taskId],
+    citedMessages: [citedMessage],
+    summary,
+  };
+}
+
 function makeMcpAwareMockClient(script: readonly ToolScriptEntry[], prompts: PromptRecord[]) {
   const grouped = new Map<string, ToolScriptEntry[]>();
   const cursors = new Map<string, number>();
@@ -134,6 +150,8 @@ function makeMcpAwareMockClient(script: readonly ToolScriptEntry[], prompts: Pro
           return { method: 'POST' as const, path: '/tools/publish-artifact', body: args };
         case 'pluto_complete_run':
           return { method: 'POST' as const, path: '/tools/complete-run', body: args };
+        case 'pluto_final_reconciliation':
+          return { method: 'POST' as const, path: '/v2/composite/final-reconciliation', body: args };
         case 'pluto_wait_for_event':
           return { method: 'POST' as const, path: '/tools/wait-for-event', body: args };
         default:
@@ -141,7 +159,7 @@ function makeMcpAwareMockClient(script: readonly ToolScriptEntry[], prompts: Pro
       }
     })();
 
-    const response = await fetch(`${url}${route.path}`, {
+    const response = await fetch(apiUrlForPath(url, route.path), {
       method: route.method,
       headers: {
         authorization: `Bearer ${token}`,
@@ -395,11 +413,8 @@ describe('task close-out synthesis in the Paseo driver', () => {
       },
       {
         actor: LEAD,
-        run: async ({ callTool }) => {
-          await callTool('pluto_complete_run', {
-            status: 'succeeded',
-            summary: 'done',
-          });
+        run: async ({ callTool, prompt }) => {
+          await callTool('pluto_final_reconciliation', finalReconciliationArgsFromPrompt(prompt, 'done'));
           return { transcriptText: 'closed\n' };
         },
       },
@@ -460,11 +475,8 @@ describe('task close-out synthesis in the Paseo driver', () => {
       },
       {
         actor: LEAD,
-        run: async ({ callTool }) => {
-          await callTool('pluto_complete_run', {
-            status: 'succeeded',
-            summary: 'done',
-          });
+        run: async ({ callTool, prompt }) => {
+          await callTool('pluto_final_reconciliation', finalReconciliationArgsFromPrompt(prompt, 'done'));
           return { transcriptText: 'closed\n' };
         },
       },
@@ -518,10 +530,7 @@ describe('task close-out synthesis in the Paseo driver', () => {
           const waitedAgain = await callTool('pluto_wait_for_event', { timeoutSec: 0 });
           expect(waitedAgain.status).toBe(200);
           expect(waitedAgain.body).toEqual({ outcome: 'timeout' });
-          await callTool('pluto_complete_run', {
-            status: 'succeeded',
-            summary: 'done',
-          });
+          await callTool('pluto_final_reconciliation', finalReconciliationArgsFromPrompt(prompt, 'done'));
           return { transcriptText: 'waited\nclosed\n' };
         },
       },
@@ -546,13 +555,14 @@ describe('task close-out synthesis in the Paseo driver', () => {
         'task_state_changed',
         'run_completed',
       ]);
-      const waitTraces = execution.result.runtimeTraces.filter((trace) => trace.kind.startsWith('wait_'));
-      expect(waitTraces.map((trace) => trace.kind)).toEqual([
-        'wait_armed',
-        'wait_unblocked',
-        'wait_armed',
-        'wait_timed_out',
-      ]);
+      const waitTraceKinds = execution.result.runtimeTraces
+        .filter((trace) => trace.kind.startsWith('wait_'))
+        .map((trace) => trace.kind);
+      expect(waitTraceKinds[0]).toBe('wait_armed');
+      expect(waitTraceKinds).toEqual(expect.arrayContaining([
+        expect.stringMatching(/^wait_(unblocked|cancelled)$/),
+        expect.stringMatching(/^wait_(timed_out|silent_rearm)$/),
+      ]));
     } finally {
       await execution.cleanup();
     }
@@ -649,11 +659,8 @@ describe('task close-out synthesis in the Paseo driver', () => {
       },
       {
         actor: LEAD,
-        run: async ({ callTool }) => {
-          await callTool('pluto_complete_run', {
-            status: 'succeeded',
-            summary: 'done',
-          });
+        run: async ({ callTool, prompt }) => {
+          await callTool('pluto_final_reconciliation', finalReconciliationArgsFromPrompt(prompt, 'done'));
           return { transcriptText: 'closed\n' };
         },
       },

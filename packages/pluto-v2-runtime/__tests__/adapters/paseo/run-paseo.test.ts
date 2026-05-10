@@ -568,14 +568,14 @@ describe('runPaseo', () => {
         }
 
         const { url, token, actor } = readInjectedApi(agentSpec);
-        const response = await fetch(`${url}/tools/complete-run`, {
+        const response = await fetch(`${url.replace(/\/v1$/, '/v2')}/composite/final-reconciliation`, {
           method: 'POST',
           headers: {
             authorization: `Bearer ${token}`,
             'Pluto-Run-Actor': actor,
             'content-type': 'application/json',
           },
-          body: JSON.stringify({ status: 'succeeded', summary: 'done' }),
+          body: JSON.stringify({ completedTasks: ['missing-task'], citedMessages: ['999'], summary: 'done' }),
         });
         expect(response.status).toBe(200);
         transcriptByAgentId.set(agentId, 'lead completed the run\n');

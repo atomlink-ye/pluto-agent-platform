@@ -177,6 +177,22 @@ function wakeupDeltaFromPrompt(prompt: string): Record<string, unknown> {
   return JSON.parse(match[1]) as Record<string, unknown>;
 }
 
+function apiUrlForPath(apiUrl: string, path: string): string {
+  return path.startsWith('/v2/')
+    ? `${apiUrl.replace(/\/v1$/, '')}${path}`
+    : `${apiUrl}${path}`;
+}
+
+function finalReconciliationArgsFromPrompt(prompt: string, summary: string) {
+  const taskId = prompt.match(/"id":\s*"([^"]+)"/)?.[1] ?? 'missing-task';
+  const citedMessage = prompt.match(/"sequence":\s*(\d+)/)?.[1] ?? '999';
+  return {
+    completedTasks: [taskId],
+    citedMessages: [citedMessage],
+    summary,
+  };
+}
+
 function readInjectedApi(spec: PaseoAgentSpec): { url: string; token: string; actor: string } {
   const url = spec.env?.PLUTO_RUN_API_URL;
   const token = spec.env?.PLUTO_RUN_TOKEN;
@@ -241,6 +257,8 @@ function makeMcpAwareMockClient(
           return { method: 'POST' as const, path: '/tools/publish-artifact', body: args };
         case 'pluto_complete_run':
           return { method: 'POST' as const, path: '/tools/complete-run', body: args };
+        case 'pluto_final_reconciliation':
+          return { method: 'POST' as const, path: '/v2/composite/final-reconciliation', body: args };
         case 'pluto_wait_for_event':
           return { method: 'POST' as const, path: '/tools/wait-for-event', body: args };
         case 'pluto_read_state':
@@ -254,7 +272,7 @@ function makeMcpAwareMockClient(
       }
     })();
 
-    const response = await fetch(`${url}${route.path}`, {
+    const response = await fetch(apiUrlForPath(url, route.path), {
       method: route.method,
       headers: {
         authorization: `Bearer ${token}`,
@@ -440,12 +458,9 @@ describe('agentic_tool Paseo loop', () => {
       },
       {
         actor: LEAD,
-        run: async ({ callTool }) => {
-          await callTool('pluto_complete_run', {
-            status: 'succeeded',
-            summary: 'done',
-          });
-          return { transcriptText: 'pluto-tool complete-run --status=succeeded --summary="done"\n' };
+        run: async ({ callTool, prompt }) => {
+          await callTool('pluto_final_reconciliation', finalReconciliationArgsFromPrompt(prompt, 'done'));
+          return { transcriptText: 'pluto-tool final-reconciliation --summary="done"\n' };
         },
       },
     ]);
@@ -560,11 +575,8 @@ describe('agentic_tool Paseo loop', () => {
       },
       {
         actor: LEAD,
-        run: async ({ callTool }) => {
-          await callTool('pluto_complete_run', {
-            status: 'succeeded',
-            summary: 'done',
-          });
+        run: async ({ callTool, prompt }) => {
+          await callTool('pluto_final_reconciliation', finalReconciliationArgsFromPrompt(prompt, 'done'));
           return { transcriptText: 'closed\n' };
         },
       },
@@ -610,11 +622,8 @@ describe('agentic_tool Paseo loop', () => {
       },
       {
         actor: LEAD,
-        run: async ({ callTool }) => {
-          await callTool('pluto_complete_run', {
-            status: 'succeeded',
-            summary: 'done',
-          });
+        run: async ({ callTool, prompt }) => {
+          await callTool('pluto_final_reconciliation', finalReconciliationArgsFromPrompt(prompt, 'done'));
           return { transcriptText: 'closed\n' };
         },
       },
@@ -660,15 +669,12 @@ describe('agentic_tool Paseo loop', () => {
               ],
             },
           });
-          await callTool('pluto_complete_run', {
-            status: 'succeeded',
-            summary: 'done',
-          });
+          await callTool('pluto_final_reconciliation', finalReconciliationArgsFromPrompt(prompt, 'done'));
           return {
             transcriptText: [
               'pluto-tool create-task --owner=generator --title="Draft the change"',
               'pluto-tool wait --timeout-sec=300',
-              'pluto-tool complete-run --status=succeeded --summary="done"',
+              'pluto-tool final-reconciliation --summary="done"',
             ].join('\n'),
           };
         },
@@ -761,10 +767,7 @@ describe('agentic_tool Paseo loop', () => {
               },
             ],
           });
-          await callTool('pluto_complete_run', {
-            status: 'succeeded',
-            summary: 'done',
-          });
+          await callTool('pluto_final_reconciliation', finalReconciliationArgsFromPrompt(prompt, 'done'));
           return { transcriptText: 'lead closed after rearm\n' };
         },
       },
@@ -849,10 +852,7 @@ describe('agentic_tool Paseo loop', () => {
               },
             ],
           });
-          await callTool('pluto_complete_run', {
-            status: 'succeeded',
-            summary: 'done',
-          });
+          await callTool('pluto_final_reconciliation', finalReconciliationArgsFromPrompt(prompt, 'done'));
           return { transcriptText: 'lead closed after three rearms\n' };
         },
       },
@@ -902,14 +902,11 @@ describe('agentic_tool Paseo loop', () => {
               },
             },
           });
-          await callTool('pluto_complete_run', {
-            status: 'succeeded',
-            summary: 'done',
-          });
+          await callTool('pluto_final_reconciliation', finalReconciliationArgsFromPrompt(prompt, 'done'));
           return {
             transcriptText: [
               'pluto-tool create-task --owner=generator --title="Draft the change"',
-              'pluto-tool complete-run --status=succeeded --summary="done"',
+              'pluto-tool final-reconciliation --summary="done"',
             ].join('\n'),
           };
         },
@@ -958,15 +955,12 @@ describe('agentic_tool Paseo loop', () => {
     }
   });
 
-  it('completes the run when the lead emits pluto_complete_run', async () => {
+  it('completes the run when the lead emits pluto_final_reconciliation', async () => {
     const execution = await runAgenticTool([
       {
         actor: LEAD,
-        run: async ({ callTool }) => {
-          await callTool('pluto_complete_run', {
-            status: 'succeeded',
-            summary: 'done',
-          });
+        run: async ({ callTool, prompt }) => {
+          await callTool('pluto_final_reconciliation', finalReconciliationArgsFromPrompt(prompt, 'done'));
           return { transcriptText: 'lead closed\n' };
         },
       },
@@ -975,7 +969,10 @@ describe('agentic_tool Paseo loop', () => {
     try {
       expect(execution.result.events.at(-1)?.kind).toBe('run_completed');
       expect(execution.result.events.at(-1)?.actor).toEqual({ kind: 'manager' });
-      expect(execution.result.events.at(-1)?.payload).toMatchObject({ status: 'succeeded', summary: 'done' });
+      expect(execution.result.events.at(-1)?.payload).toMatchObject({
+        status: 'failed',
+        summary: expect.stringContaining('FAILED_AUDIT:'),
+      });
       expect(execution.result.evidencePacket.initiatingActor).toEqual(LEAD);
     } finally {
       await execution.cleanup();
@@ -1005,11 +1002,8 @@ describe('agentic_tool Paseo loop', () => {
       },
       {
         actor: LEAD,
-        run: async ({ callTool }) => {
-          await callTool('pluto_complete_run', {
-            status: 'succeeded',
-            summary: 'closed after single write',
-          });
+        run: async ({ callTool, prompt }) => {
+          await callTool('pluto_final_reconciliation', finalReconciliationArgsFromPrompt(prompt, 'closed after single write'));
           return { transcriptText: 'closed\n' };
         },
       },
@@ -1064,11 +1058,8 @@ describe('agentic_tool Paseo loop', () => {
       },
       {
         actor: LEAD,
-        run: async ({ callTool }) => {
-          await callTool('pluto_complete_run', {
-            status: 'succeeded',
-            summary: 'lead closed the run',
-          });
+        run: async ({ callTool, prompt }) => {
+          await callTool('pluto_final_reconciliation', finalReconciliationArgsFromPrompt(prompt, 'lead closed the run'));
           return { transcriptText: 'lead closed\n' };
         },
       },
@@ -1079,7 +1070,10 @@ describe('agentic_tool Paseo loop', () => {
       expect(execution.prompts[2]?.prompt).toContain('"lastRejection"');
       expect(execution.prompts[2]?.prompt).toContain('PLUTO_TOOL_LEAD_ONLY');
       expect(execution.result.events.map((event) => event.kind)).toEqual(['run_started', 'mailbox_message_appended', 'run_completed']);
-      expect(execution.result.events.at(-1)?.payload).toMatchObject({ status: 'succeeded', summary: 'lead closed the run' });
+      expect(execution.result.events.at(-1)?.payload).toMatchObject({
+        status: 'failed',
+        summary: expect.stringContaining('FAILED_AUDIT:'),
+      });
     } finally {
       await execution.cleanup();
     }
@@ -1130,11 +1124,8 @@ describe('agentic_tool Paseo loop', () => {
       },
       {
         actor: LEAD,
-        run: async ({ callTool }) => {
-          await callTool('pluto_complete_run', {
-            status: 'succeeded',
-            summary: 'recovered',
-          });
+        run: async ({ callTool, prompt }) => {
+          await callTool('pluto_final_reconciliation', finalReconciliationArgsFromPrompt(prompt, 'recovered'));
           return { transcriptText: 'recovered\n' };
         },
       },
@@ -1198,11 +1189,8 @@ describe('agentic_tool Paseo loop', () => {
       },
       {
         actor: LEAD,
-        run: async ({ callTool }) => {
-          await callTool('pluto_complete_run', {
-            status: 'succeeded',
-            summary: 'done',
-          });
+        run: async ({ callTool, prompt }) => {
+          await callTool('pluto_final_reconciliation', finalReconciliationArgsFromPrompt(prompt, 'done'));
           return { transcriptText: 'closed\n' };
         },
       },
@@ -1272,11 +1260,8 @@ describe('agentic_tool Paseo loop', () => {
       },
       {
         actor: LEAD,
-        run: async ({ callTool }) => {
-          await callTool('pluto_complete_run', {
-            status: 'succeeded',
-            summary: 'done',
-          });
+        run: async ({ callTool, prompt }) => {
+          await callTool('pluto_final_reconciliation', finalReconciliationArgsFromPrompt(prompt, 'done'));
           return { transcriptText: 'closed\n' };
         },
       },
