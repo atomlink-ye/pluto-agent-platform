@@ -2,12 +2,13 @@ import { describe, expect, it } from 'vitest';
 
 import { ProtocolRequestSchema } from '../../src/protocol-request.js';
 import {
-  AUTHORITY_MATRIX,
+  CANONICAL_AUTHORITY_POLICY,
   TeamContextSchema,
   actorAuthorizedForIntent,
   composeRequestKey,
   initialState,
   validate,
+  type TeamContext,
 } from '../../src/core/index.js';
 
 const uuid = (suffix: string) => `00000000-0000-4000-8000-${suffix.padStart(12, '0')}`;
@@ -29,7 +30,7 @@ const teamContext = TeamContextSchema.parse({
     { taskId: 'evaluator-task', title: 'Evaluator task', ownerActor: { kind: 'role', role: 'evaluator' }, dependsOn: [] },
     { taskId: 'unowned-task', title: 'Unowned task', ownerActor: null, dependsOn: [] },
   ],
-  policy: AUTHORITY_MATRIX,
+  policy: CANONICAL_AUTHORITY_POLICY,
 });
 
 const state = initialState(teamContext);
@@ -206,9 +207,9 @@ function requestFor(caseDef: (typeof allowedCases)[number] | (typeof disallowedC
   });
 }
 
-describe('AUTHORITY_MATRIX', () => {
+describe('CANONICAL_AUTHORITY_POLICY', () => {
   it('matches the frozen v2 authority matrix verbatim', () => {
-    expect(AUTHORITY_MATRIX).toEqual({
+    expect(CANONICAL_AUTHORITY_POLICY).toEqual({
       append_mailbox_message: [
         { kind: 'manager' },
         { kind: 'role', role: 'lead' },
@@ -228,6 +229,37 @@ describe('AUTHORITY_MATRIX', () => {
       publish_artifact: [{ kind: 'role', role: 'generator' }, { kind: 'role', role: 'lead' }, { kind: 'manager' }],
       complete_run: [{ kind: 'manager' }],
     });
+  });
+
+  it('authorizes against state.policy for custom runs', () => {
+    const customState = {
+      ...state,
+      policy: {
+        ...state.policy,
+        change_task_state: state.policy.change_task_state.filter(
+          (matcher: TeamContext['policy']['change_task_state'][number]) =>
+            !(matcher.kind === 'role-owns-task' && matcher.role === 'evaluator'),
+        ),
+      },
+    };
+
+    const evaluatorRequest = ProtocolRequestSchema.parse({
+      ...baseRequest,
+      requestId: uuid('201'),
+      actor: { kind: 'role', role: 'evaluator' },
+      intent: 'change_task_state',
+      payload: { taskId: 'evaluator-task', to: 'running' },
+    });
+    const generatorRequest = ProtocolRequestSchema.parse({
+      ...baseRequest,
+      requestId: uuid('202'),
+      actor: { kind: 'role', role: 'generator' },
+      intent: 'change_task_state',
+      payload: { taskId: 'generator-task', to: 'running' },
+    });
+
+    expect(actorAuthorizedForIntent(customState, evaluatorRequest)).toBe(false);
+    expect(actorAuthorizedForIntent(customState, generatorRequest)).toBe(true);
   });
 
   it('returns null request keys when idempotencyKey is null', () => {

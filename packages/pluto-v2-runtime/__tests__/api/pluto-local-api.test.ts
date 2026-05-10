@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import {
-  AUTHORITY_MATRIX,
+  CANONICAL_AUTHORITY_POLICY,
   InMemoryEventLogStore,
   RunKernel,
   SCHEMA_VERSION,
@@ -81,7 +81,7 @@ function createKernel() {
         { kind: 'system' },
       ],
       initialTasks: [],
-      policy: AUTHORITY_MATRIX,
+      policy: CANONICAL_AUTHORITY_POLICY,
     })),
     eventLog: new InMemoryEventLogStore(),
     idProvider: counterIdProvider(1),
@@ -343,14 +343,17 @@ describe('startPlutoLocalApi', () => {
           summary: 'done',
         },
       });
-      expect(completeRun.status).toBe(200);
-      expect(completeRun.body).toMatchObject({ accepted: true, sequence: 4, turnDisposition: 'terminal' });
+      expect(completeRun.status).toBe(403);
+      expect(completeRun.body).toMatchObject({
+        error: {
+          code: 'lead_must_use_final_reconciliation',
+        },
+      });
       expect(kernel.eventLog.read().map((event) => event.kind)).toEqual([
         'task_created',
         'task_state_changed',
         'mailbox_message_appended',
         'artifact_published',
-        'run_completed',
       ]);
 
       leaseStore.setCurrent(generatorActor());

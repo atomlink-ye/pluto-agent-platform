@@ -1,5 +1,11 @@
 export { compile } from './spec-compiler.js';
-export { AuthoredSpecSchema, TeamContextSchema, type AuthoredSpec, type TeamContext } from './team-context.js';
+export {
+  AuthoredSpecSchema,
+  CANONICAL_AUTHORITY_POLICY,
+  TeamContextSchema,
+  type AuthoredSpec,
+  type TeamContext,
+} from './team-context.js';
 export { RunStateSchema, initialState, type RunState } from './run-state.js';
 export { reduce } from './run-state-reducer.js';
 export {

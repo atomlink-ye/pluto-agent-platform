@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import { RunEventSchema } from '../../src/run-event.js';
 import {
-  AUTHORITY_MATRIX,
+  CANONICAL_AUTHORITY_POLICY,
   DuplicateAppendError,
   InMemoryEventLogStore,
   SequenceGapError,
@@ -18,7 +18,7 @@ const teamContext = TeamContextSchema.parse({
   scenarioRef: 'scenario/hello-team',
   runProfileRef: 'fake-smoke',
   declaredActors: [{ kind: 'manager' }, { kind: 'system' }],
-  policy: AUTHORITY_MATRIX,
+  policy: CANONICAL_AUTHORITY_POLICY,
 });
 
 function makeEvent(sequence: number, eventIdSuffix: string) {

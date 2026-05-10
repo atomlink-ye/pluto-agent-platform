@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { ProtocolRequestSchema } from '../../src/protocol-request.js';
 import { TASK_STATE_VALUES, type TaskState } from '../../src/run-event.js';
 import {
-  AUTHORITY_MATRIX,
+  CANONICAL_AUTHORITY_POLICY,
   TRANSITION_GRAPH,
   TeamContextSchema,
   initialState,
@@ -35,7 +35,7 @@ describe('TRANSITION_GRAPH', () => {
       runProfileRef: 'fake-smoke',
       declaredActors: [{ kind: 'manager' }],
       initialTasks: [{ taskId: 'task-1', title: 'Task', ownerActor: null, dependsOn: [] }],
-      policy: AUTHORITY_MATRIX,
+      policy: CANONICAL_AUTHORITY_POLICY,
     });
     const state = initialState(teamContext);
     state.tasks['task-1'] = { state: from, ownerActor: null };

@@ -2,7 +2,7 @@ import { z } from 'zod';
 
 import { ActorRefSchema, type ActorRef } from '../actor-ref.js';
 import { TaskStateSchema, type TaskState } from '../run-event.js';
-import { actorKey, type TeamContext } from './team-context.js';
+import { AuthorityPolicySchema, actorKey, type TeamContext } from './team-context.js';
 
 const StringSetSchema = z.custom<Set<string>>(
   (value): value is Set<string> =>
@@ -33,6 +33,7 @@ export const RunStateSchema = z
     tasks: z.record(RunStateTaskSchema),
     acceptedRequestKeys: StringSetSchema,
     declaredActors: StringSetSchema,
+    policy: AuthorityPolicySchema,
   })
   .strict();
 
@@ -53,6 +54,7 @@ export function initialState(teamContext: TeamContext): RunState {
     tasks,
     acceptedRequestKeys: new Set<string>(),
     declaredActors: new Set(teamContext.declaredActors.map((actor) => actorKey(actor))),
+    policy: AuthorityPolicySchema.parse(teamContext.policy),
   });
 }
 

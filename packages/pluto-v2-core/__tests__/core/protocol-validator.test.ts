@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { ProtocolRequestSchema } from '../../src/protocol-request.js';
 import { SCHEMA_VERSION } from '../../src/versioning.js';
 import {
-  AUTHORITY_MATRIX,
+  CANONICAL_AUTHORITY_POLICY,
   RunKernel,
   TeamContextSchema,
   composeRequestKey,
@@ -31,7 +31,7 @@ const baseTeamContext = TeamContextSchema.parse({
     { taskId: 'task-owned-generator', title: 'Generator task', ownerActor: { kind: 'role', role: 'generator' }, dependsOn: [] },
     { taskId: 'task-completed', title: 'Completed task', ownerActor: { kind: 'role', role: 'generator' }, dependsOn: [] },
   ],
-  policy: AUTHORITY_MATRIX,
+  policy: CANONICAL_AUTHORITY_POLICY,
 });
 
 const baseState = (() => {

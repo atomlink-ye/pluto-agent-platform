@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { RunEventSchema } from '../../src/run-event.js';
-import { AUTHORITY_MATRIX, TeamContextSchema, initialState, reduce } from '../../src/core/index.js';
+import { CANONICAL_AUTHORITY_POLICY, TeamContextSchema, initialState, reduce } from '../../src/core/index.js';
 
 const uuid = (suffix: string) => `00000000-0000-4000-8000-${suffix.padStart(12, '0')}`;
 
@@ -13,7 +13,7 @@ const teamContext = TeamContextSchema.parse({
   initialTasks: [
     { taskId: 'task-1', title: 'Existing task', ownerActor: { kind: 'role', role: 'generator' }, dependsOn: [] },
   ],
-  policy: AUTHORITY_MATRIX,
+  policy: CANONICAL_AUTHORITY_POLICY,
 });
 
 function makeBaseAcceptedEvent() {

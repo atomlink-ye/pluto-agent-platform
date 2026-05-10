@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest';
 
 import type { ReplayFixture, RequestRejectedEvent, RunEvent } from '../../src/index.js';
 import {
-  AUTHORITY_MATRIX,
+  CANONICAL_AUTHORITY_POLICY,
   InMemoryEventLogStore,
   RunKernel,
   RunStateSchema,
@@ -37,10 +37,10 @@ function createTeamContext(
       { kind: 'role', role: 'generator' },
       { kind: 'role', role: 'evaluator' },
       { kind: 'system' },
-    ],
-    initialTasks,
-    policy: AUTHORITY_MATRIX,
-  });
+      ],
+      initialTasks,
+      policy: CANONICAL_AUTHORITY_POLICY,
+    });
 }
 
 function createKernel(initial = initialState(createTeamContext())) {
@@ -410,6 +410,7 @@ describe('RunKernel', () => {
       tasks: { 'task-1': { state: 'completed', ownerActor: { kind: 'role', role: 'generator' } } },
       acceptedRequestKeys: new Set<string>(),
       declaredActors: new Set(['manager', 'role:generator']),
+      policy: CANONICAL_AUTHORITY_POLICY,
     });
     const kernel = createKernel(state);
     const { event } = kernel.submit({
@@ -436,6 +437,7 @@ describe('RunKernel', () => {
       tasks: {},
       acceptedRequestKeys: new Set(['run-1|manager|append_mailbox_message|idem-1']),
       declaredActors: new Set(['manager']),
+      policy: CANONICAL_AUTHORITY_POLICY,
     });
     const kernel = createKernel(state);
     const { event } = kernel.submit({

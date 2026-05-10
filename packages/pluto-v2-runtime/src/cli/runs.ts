@@ -6,7 +6,7 @@ import { pathToFileURL } from 'node:url';
 
 import {
   ACTOR_ROLE_VALUES,
-  AUTHORITY_MATRIX,
+  CANONICAL_AUTHORITY_POLICY,
   ArtifactPublishedPayloadSchema,
   MailboxProjectionMessageSchema,
   RunEventSchema,
@@ -215,11 +215,11 @@ function cloneAuthorityPolicy(): TeamContext['policy'] {
   };
 
   return {
-    append_mailbox_message: AUTHORITY_MATRIX.append_mailbox_message.map(cloneMatcher),
-    create_task: AUTHORITY_MATRIX.create_task.map(cloneMatcher),
-    change_task_state: AUTHORITY_MATRIX.change_task_state.map(cloneMatcher),
-    publish_artifact: AUTHORITY_MATRIX.publish_artifact.map(cloneMatcher),
-    complete_run: AUTHORITY_MATRIX.complete_run.map(cloneMatcher),
+    append_mailbox_message: CANONICAL_AUTHORITY_POLICY.append_mailbox_message.map(cloneMatcher),
+    create_task: CANONICAL_AUTHORITY_POLICY.create_task.map(cloneMatcher),
+    change_task_state: CANONICAL_AUTHORITY_POLICY.change_task_state.map(cloneMatcher),
+    publish_artifact: CANONICAL_AUTHORITY_POLICY.publish_artifact.map(cloneMatcher),
+    complete_run: CANONICAL_AUTHORITY_POLICY.complete_run.map(cloneMatcher),
   };
 }
 

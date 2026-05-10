@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import {
-  AUTHORITY_MATRIX,
+  CANONICAL_AUTHORITY_POLICY,
   InMemoryEventLogStore,
   RunKernel,
   SCHEMA_VERSION,
@@ -46,10 +46,10 @@ function createTeamContext(
       { kind: 'role', role: 'generator' },
       { kind: 'role', role: 'evaluator' },
       { kind: 'system' },
-    ],
-    initialTasks,
-    policy: AUTHORITY_MATRIX,
-  });
+      ],
+      initialTasks,
+      policy: CANONICAL_AUTHORITY_POLICY,
+    });
 }
 
 function createKernel(

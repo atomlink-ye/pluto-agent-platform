@@ -4,43 +4,13 @@ import type { TaskState } from '../run-event.js';
 import type { RunState } from './run-state.js';
 import { actorKey, type ActorMatcher } from './team-context.js';
 
-type AuthorityState = Pick<RunState, 'declaredActors' | 'tasks'>;
+type AuthorityState = Pick<RunState, 'declaredActors' | 'policy' | 'tasks'>;
 type EntityResolutionState = Pick<RunState, 'tasks'>;
 type ChangeTaskStateRequest = Extract<ProtocolRequest, { intent: 'change_task_state' }>;
 type CreateTaskRequest = Extract<ProtocolRequest, { intent: 'create_task' }>;
 
-export const AUTHORITY_MATRIX = {
-  append_mailbox_message: [
-    { kind: 'manager' },
-    { kind: 'role', role: 'lead' },
-    { kind: 'role', role: 'planner' },
-    { kind: 'role', role: 'generator' },
-    { kind: 'role', role: 'evaluator' },
-    { kind: 'system' },
-  ],
-  create_task: [
-    { kind: 'manager' },
-    { kind: 'role', role: 'lead' },
-    { kind: 'role', role: 'planner' },
-  ],
-  change_task_state: [
-    { kind: 'manager' },
-    { kind: 'role', role: 'lead' },
-    { kind: 'role-owns-task', role: 'generator' },
-    { kind: 'role-owns-task', role: 'evaluator' },
-    {
-      kind: 'role-bounded-transitions',
-      role: 'planner',
-      transitions: ['blocked', 'cancelled'],
-    },
-  ],
-  publish_artifact: [
-    { kind: 'role', role: 'generator' },
-    { kind: 'role', role: 'lead' },
-    { kind: 'manager' },
-  ],
-  complete_run: [{ kind: 'manager' }],
-} as const satisfies Readonly<Record<ProtocolRequestIntent, readonly ActorMatcher[]>>;
+// Deprecated alias retained for downstream imports during the T14 transition.
+export { CANONICAL_AUTHORITY_POLICY as AUTHORITY_MATRIX } from './team-context.js';
 
 export const TRANSITION_GRAPH = {
   queued: ['running', 'blocked', 'completed', 'failed', 'cancelled'],
@@ -119,7 +89,7 @@ export function actorAuthorizedForIntent(state: AuthorityState, request: Protoco
     return false;
   }
 
-  return AUTHORITY_MATRIX[request.intent].some((matcher) => matcherMatches(state, request, matcher));
+  return state.policy[request.intent].some((matcher) => matcherMatches(state, request, matcher));
 }
 
 export function transitionLegal(from: TaskState, to: TaskState): boolean {

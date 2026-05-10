@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it, vi } from 'vitest';
 
 import {
-  AUTHORITY_MATRIX,
+  CANONICAL_AUTHORITY_POLICY,
   InMemoryEventLogStore,
   RunKernel,
   SCHEMA_VERSION,
@@ -56,7 +56,7 @@ function createKernel() {
         { kind: 'system' },
       ],
       initialTasks: [],
-      policy: AUTHORITY_MATRIX,
+      policy: CANONICAL_AUTHORITY_POLICY,
     })),
     eventLog: new InMemoryEventLogStore(),
     idProvider: counterIdProvider(1),

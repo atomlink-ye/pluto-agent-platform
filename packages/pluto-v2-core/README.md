@@ -34,7 +34,7 @@ Public core surface:
 - `reduce`
 - `EventLogStore`, `InMemoryEventLogStore`, `SequenceGapError`, `DuplicateAppendError`
 - `validate`
-- `AUTHORITY_MATRIX`, `TRANSITION_GRAPH`, `actorAuthorizedForIntent`, `transitionLegal`
+- `CANONICAL_AUTHORITY_POLICY` (`AUTHORITY_MATRIX` remains as a deprecated alias), `TRANSITION_GRAPH`, `actorAuthorizedForIntent`, `transitionLegal`
 - `RunKernel`, `defaultIdProvider`, `defaultClockProvider`, `counterIdProvider`, `fixedClockProvider`
 
 S2 boundaries:

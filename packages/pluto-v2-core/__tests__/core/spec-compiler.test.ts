@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import * as packageRoot from '../../src/index.js';
-import { AUTHORITY_MATRIX, compile, type AuthoredSpec } from '../../src/core/index.js';
+import { CANONICAL_AUTHORITY_POLICY, compile, type AuthoredSpec } from '../../src/core/index.js';
 import { SpecCompileError, type SpecCompileErrorCode } from '../../src/core/spec-compiler.js';
 
 function createBaseSpec(): AuthoredSpec {
@@ -76,6 +76,36 @@ function createAuthoredCanonicalPolicy() {
   } as const;
 }
 
+function createNonCanonicalPolicy(): NonNullable<AuthoredSpec['policy']> {
+  return {
+    append_mailbox_message: [
+      { kind: 'manager' },
+      { kind: 'role', role: 'lead' },
+      { kind: 'role', role: 'planner' },
+      { kind: 'role', role: 'generator' },
+      { kind: 'role', role: 'evaluator' },
+      { kind: 'system' },
+    ],
+    create_task: [
+      { kind: 'manager' },
+      { kind: 'role', role: 'lead' },
+      { kind: 'role', role: 'planner' },
+    ],
+    change_task_state: [
+      { kind: 'manager' },
+      { kind: 'role', role: 'lead' },
+      { kind: 'role-owns-task', role: 'generator' },
+      { kind: 'role-bounded-transitions', role: 'planner', transitions: ['blocked', 'cancelled'] },
+    ],
+    publish_artifact: [
+      { kind: 'role', role: 'generator' },
+      { kind: 'role', role: 'lead' },
+      { kind: 'manager' },
+    ],
+    complete_run: [{ kind: 'manager' }],
+  };
+}
+
 function expectCompileError(spec: unknown, code: SpecCompileErrorCode) {
   expect(() => compile(spec as never)).toThrowError(SpecCompileError);
 
@@ -112,7 +142,7 @@ describe('compile', () => {
           dependsOn: [],
         },
       ],
-      policy: AUTHORITY_MATRIX,
+      policy: CANONICAL_AUTHORITY_POLICY,
     });
   });
 
@@ -139,16 +169,27 @@ describe('compile', () => {
           dependsOn: [],
         },
       ],
-      policy: AUTHORITY_MATRIX,
+      policy: CANONICAL_AUTHORITY_POLICY,
     });
   });
 
   it('re-exports the core surface from the package root index', () => {
     expect(packageRoot.compile).toBe(compile);
-    expect(packageRoot.AUTHORITY_MATRIX).toBe(AUTHORITY_MATRIX);
+    expect(packageRoot.CANONICAL_AUTHORITY_POLICY).toBe(CANONICAL_AUTHORITY_POLICY);
     expect(packageRoot.RunKernel).toBeTypeOf('function');
     expect(packageRoot.reduce).toBeTypeOf('function');
     expect(packageRoot.composeRequestKey).toBeTypeOf('function');
+  });
+
+  it('accepts a non-canonical but valid authored policy', () => {
+    const policy = createNonCanonicalPolicy();
+
+    const compiled = compile({
+      ...createBaseSpec(),
+      policy,
+    });
+
+    expect(compiled.policy).toEqual(policy);
   });
 
   it('throws unknown_actor for undeclared actor references', () => {

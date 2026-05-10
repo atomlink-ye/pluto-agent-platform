@@ -272,10 +272,6 @@ function compileMatcher(
   return normalized;
 }
 
-function policiesEqual(left: AuthorityPolicy, right: AuthorityPolicy): boolean {
-  return JSON.stringify(left) === JSON.stringify(right);
-}
-
 function compilePolicy(policy: AuthoredSpec['policy']): AuthorityPolicy {
   if (!policy) {
     return TeamContextSchema.shape.policy.parse(CANONICAL_AUTHORITY_POLICY);
@@ -307,10 +303,6 @@ function compilePolicy(policy: AuthoredSpec['policy']): AuthorityPolicy {
       ];
     }),
   ) as AuthorityPolicy;
-
-  if (!policiesEqual(normalized, CANONICAL_AUTHORITY_POLICY)) {
-    fail('policy_invalid', 'Policy does not match the canonical closed authority matrix', ['policy']);
-  }
 
   return TeamContextSchema.shape.policy.parse(normalized);
 }
